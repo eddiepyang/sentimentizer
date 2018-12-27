@@ -1,0 +1,12 @@
+*.csv
+*.zip
+*.tsv
+*.json
+*.tar
+*.h5
+*.npy
+*.txt
+
+*/.ipynb_checkpoints/*
+src/__pycache__/
+/data/*
