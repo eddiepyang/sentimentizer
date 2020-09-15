@@ -3,42 +3,28 @@ import scipy.sparse
 import json
 import zipfile
 
-import spacy
 from gensim import corpora
-from gensim.models import tfidfmodel
 from gensim.matutils import corpus2csc
 from gensim.corpora.dictionary import Dictionary
 
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-import sys
-from collections import Counter, OrderedDict
 from os.path import expanduser
 import re, time
-from sklearn.model_selection import train_test_split
 
 from itertools import zip_longest
 from operator import itemgetter
 
-def update_dict(line, dc):
 
-        for i in range(len(line)):
-            dc.setdefault(line[i], len(dc))
-        
-def make_labels(lsls):
-    now = time.time()
-    dc={}
-    
-    for ls in lsls:
-        make_dict(ls, dc=dc)
-    print(time.time() - now)
-    return dc
+def tokenize(x): 
+    """regex tokenizer"""
+    return re.findall(r'\w+', x)
 
-# regex tokenize, less accurate
-def tokenize(x): return re.findall('\w+', x)
-
-def create_labels(num_documents, num_labels, restaurants):
+def create_dataset(
+    reviews, 
+    categories, 
+    num_documents, 
+    num_labels, 
+    restaurants
+) -> np.array:
     
     sparse = np.zeros((num_documents, num_labels))
     for i in range(len(reviews)):
@@ -64,11 +50,17 @@ def text_sequencer(dictionary, text, max_len=200):
     
     return processed
 
-def load_embeddings(emb_path = '/projects/embeddings/data/'):
-    # load glove vectors
+def load_embeddings(
+    glove_data='glove.6B.100d.txt', 
+    emb_path = '/projects/embeddings/data/',
+    fname='glove.6B.100d.txt'
+):
+    
+    """loads glove vectors"""
+
     embeddings_index={}
-    with zipfile.ZipFile(expanduser("~")+ emb_path +'glove.6B.zip', 'r') as f:
-        with f.open('glove.6B.100d.txt', 'r') as z:
+    with zipfile.ZipFile(expanduser("~")+ emb_path + fname, 'r') as f:
+        with f.open(glove_data, 'r') as z:
             for line in z:
                 values = line.split()
                 word = values[0]
@@ -77,10 +69,13 @@ def load_embeddings(emb_path = '/projects/embeddings/data/'):
     
     return embeddings_index
 
-def id_to_glove(dict_yelp):
+def id_to_glove(dict_yelp: Dictionary) -> np.array:
     
+    """creates embeddings_matrix to be loaded for initial weights"""
+
     embeddings_index = load_embeddings()
     conversion_table = {}
+
     for word in dict_yelp.values():
         if bytes(word, 'utf-8') in embeddings_index.keys():
             conversion_table[dict_yelp.token2id[word]+1] = embeddings_index[bytes(word, 'utf-8')]
@@ -103,13 +98,13 @@ def get_rating_set(corpus, stars):
     
     mids = set()
     
-    def get_mids():
+    def _get_mids():
 
         for i, rating in enumerate(stars):
             if rating is None:
                 mids.add(i)
     
-    get_mids()
+    _get_mids()
     filtered_corpus, filtered_stars = [], []
     
     for i in range(len(corpus)):
