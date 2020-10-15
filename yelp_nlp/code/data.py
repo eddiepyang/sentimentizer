@@ -26,12 +26,12 @@ def create_dataset(
     restaurants
 ) -> np.array:
     
-    sparse = np.zeros((num_documents, num_labels))
+    sparse_m = np.zeros((num_documents, num_labels))
     for i in range(len(reviews)):
         for item in restaurants[i]['category']:
-            sparse[i, categories[item]] = 1
+            sparse_m[i, categories[item]] = 1
     
-    return sparse
+    return sparse_m
 
 def text_sequencer(dictionary, text, max_len=200):
     
