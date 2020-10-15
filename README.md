@@ -1,5 +1,5 @@
 # Introduction
-This repo contains implementations of RNN models with pytorch and keras for sentiment analysis on labeled data from Yelp. Run setup as described:  
+This repo contains implementations of RNN models with pytorch and keras for sentiment analysis on labeled data from Yelp. Run setup as described to setup environment:  
 
 *conda create env -n yelp_nlp  
 conda install pip  
