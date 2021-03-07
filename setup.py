@@ -8,7 +8,7 @@ setup(
 
     install_requires=[
         "numpy", "pandas", "torch", 
-        "seaborn", "spacy"
+        "seaborn", "spacy", "scikit-learn", 'jsonlines'
     ],
 
     package_data={
