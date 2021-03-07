@@ -21,4 +21,4 @@ Load docker image -> serving instance (elastic beanstalk or sagemaker inference)
 # Notebook view
 The torch implmentation can be viewed by the jupyter viewer below: 
 
-[view_notebook](https://nbviewer.jupyter.org/github/eddiepyang/yelp_nlp/blob/master/src/notebook/torch-sentiment.ipynb)
+[view_notebook](https://nbviewer.jupyter.org/github/eddiepyang/yelp_nlp/blob/master/notebook/torch-sentiment.ipynb)
