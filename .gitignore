@@ -7,8 +7,11 @@
 *.npy
 *.txt
 
+yelp_nlp/code/.ipynb_checkpoints/*
 /.ipynb_checkpoints/*
 */.ipynb_checkpoints/*
+**/.ipynb_checkpoints
+**/.ipynb_checkpoints/
 src/__pycache__/*
 */src/__pycache__/*
 
