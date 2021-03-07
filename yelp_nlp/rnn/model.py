@@ -19,7 +19,7 @@ class RNN(nn.Module):
             emb_weights.shape[1]
         )
         self.emb_weights = emb_weights
-        # input of shape (seq_len, batch, input_size) 
+        # input of shape (seq_len, batch, input_size)
         # https://pytorch.org/docs/stable/nn.html
         self.lstm = nn.LSTM(input_len, input_len)
         self.fc1 = nn.Linear(input_len, 1)

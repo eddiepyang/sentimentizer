@@ -1,14 +1,16 @@
 
-
 from setuptools import setup, find_packages
+
 setup(
     name="yelp_nlp",
-    version="0.1",
+    version="0.2",
     packages=find_packages(),
 
     install_requires=[
-        "numpy", "pandas", "torch", 
-        "seaborn", "spacy", "scikit-learn", 'jsonlines'
+        "numpy", "pandas",
+        "torch", "seaborn",
+        "spacy", "scikit-learn",
+        "jsonlines", "pytest"
     ],
 
     package_data={
@@ -28,4 +30,3 @@ setup(
     ]
 
 )
-
