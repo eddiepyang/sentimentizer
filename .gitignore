@@ -6,6 +6,7 @@
 *.h5
 *.npy
 *.txt
+*.pyc
 
 yelp_nlp/code/.ipynb_checkpoints/*
 /.ipynb_checkpoints/*
