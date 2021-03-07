@@ -15,7 +15,7 @@ def load_embeddings(emb_path: str) -> dict:
     embeddings_index = {}
 
     with zipfile.ZipFile(
-        expanduser("~") + emb_path + 'glove.6B.zip', 
+        expanduser("~") + emb_path + 'glove.6B.zip',
         'r'
     ) as f:
         with f.open('glove.6B.100d.txt', 'r') as z:
@@ -77,7 +77,7 @@ def text_sequencer(dictionary, text, max_len=200):
         if i >= max_len:
             return processed
         if word in dictionary.token2id.keys():
-            # the ids have an offset of 1 for this because 
+            # the ids have an offset of 1 for this because
             # 0 represents a padded value
             processed[i] = dictionary.token2id[word] + 1
         else:

@@ -65,8 +65,8 @@ def fit(
         train_epoch()
 
         epoch_count += 1
-        print(f'epoch {epoch_count} complete')
-    print(f'fit complete {time.time()-start:.0f} seconds passed')
+        print(f'epoch {epoch_count} completed')
+    print(f'model fitting completed, {time.time()-start:.0f} seconds passed')
     return losses
 
 
@@ -84,7 +84,7 @@ if __name__ == '__main__':
     dataset = CorpusData(
         fpath=fpath,
         fname=fname,
-        stop=100000
+        stop=10000
     )
     embedding_matrix = id_to_glove(dataset.dict_yelp, abs_path)
 
@@ -118,3 +118,4 @@ if __name__ == '__main__':
         packed=False
     )
     torch.save(model.state_dict(), state_path)
+    print(f'model weights saved to : {state_path}')
