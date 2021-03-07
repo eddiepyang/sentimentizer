@@ -1,5 +1,5 @@
 import pytest  # noqa: F401
-from yelp_nlp.code.data import convert_rating
+from yelp_nlp.rnn.data import convert_rating
 
 
 def test_convert_rating():
