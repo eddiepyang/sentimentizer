@@ -5,7 +5,7 @@ A package for a LSTM based torch model can be found in the rnn folder.
 
 To setup environments and run see instructions below:  
 
-*conda create env -n yelp  
+*conda create -n yelp  
 conda install pip  
 pip install -e .  
 cd yelp_nlp/rnn  
