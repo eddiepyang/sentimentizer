@@ -10,7 +10,8 @@ setup(
         "numpy", "pandas",
         "torch", "seaborn",
         "spacy", "scikit-learn",
-        "jsonlines", "pytest"
+        "jsonlines", "pytest",
+        "gensim"
     ],
 
     package_data={
