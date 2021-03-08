@@ -9,7 +9,7 @@ To setup environments and run see instructions below:
 conda install pip  
 pip install -e .  
 cd yelp_nlp/rnn  
-train.py*
+python train.py*
 
 # Proposed AWS implementation
 
