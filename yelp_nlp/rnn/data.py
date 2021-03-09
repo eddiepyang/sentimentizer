@@ -94,7 +94,7 @@ def load_data(path: str, fname: str, stop: int = None) -> list:
     "reads from zipped yelp data file"
     ls = []
     with zipfile.ZipFile(path) as zfile:
-        print(zfile.namelist())
+        print(f'archive contains the following: {zfile.namelist()}')
         inf = zfile.open(fname)
         with jsonl.Reader(inf) as file:
             for i, line in enumerate(file):
