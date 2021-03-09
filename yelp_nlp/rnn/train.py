@@ -15,8 +15,7 @@ def fit(
     dataclass: CorpusData,
     batch_size: int,
     epochs: int,
-    device: str,
-    packed: bool = False
+    device: str
 ):
 
     start = time.time()
@@ -28,7 +27,7 @@ def fit(
 
     def train_epoch():
 
-        nonlocal dataclass, train_loader, losses
+        nonlocal train_loader, losses
 
         i = 0
         n = len(dataclass)
@@ -76,15 +75,16 @@ if __name__ == '__main__':
     fname = 'yelp_academic_dataset_review.json'
     abs_path = '/projects/yelp_nlp/data/'
     state_path = '../../data/model_weight.pt'
-    device = 'cuda'
+    device = 'cpu'
     batch_size = 200
     input_len = 200
     n_epochs = 2
+    stop = 1000
 
     dataset = CorpusData(
         fpath=fpath,
         fname=fname,
-        stop=10000
+        stop=stop
     )
     embedding_matrix = id_to_glove(dataset.dict_yelp, abs_path)
 
@@ -114,8 +114,7 @@ if __name__ == '__main__':
         dataset,
         batch_size,
         n_epochs,
-        device=device,
-        packed=False
+        device=device
     )
     torch.save(model.state_dict(), state_path)
     print(f'model weights saved to : {state_path}')
