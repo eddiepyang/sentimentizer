@@ -9,16 +9,18 @@ from torch.utils.data import Dataset
 from sklearn.model_selection import train_test_split
 
 
-def load_embeddings(emb_path: str) -> dict:
+def load_embeddings(
+    emb_path: str,
+    emb_file: str = 'glove.6B.zip',
+    emb_subfile: str = 'glove.6B.100d.txt'
+) -> dict:
+
     """load glove vectors"""
 
     embeddings_index = {}
 
-    with zipfile.ZipFile(
-        expanduser("~") + emb_path + 'glove.6B.zip',
-        'r'
-    ) as f:
-        with f.open('glove.6B.100d.txt', 'r') as z:
+    with zipfile.ZipFile(expanduser("~") + emb_path + emb_file, 'r') as f:
+        with f.open(emb_subfile, 'r') as z:
             for line in z:
                 values = line.split()
                 word = values[0]
