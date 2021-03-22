@@ -2,9 +2,11 @@ import numpy as np
 import pandas as pd
 import jsonlines as jsonl
 import zipfile
+
 from gensim import corpora
-from os.path import expanduser
+import os
 import re
+
 from torch.utils.data import Dataset
 from sklearn.model_selection import train_test_split
 
@@ -19,7 +21,14 @@ def load_embeddings(
 
     embeddings_index = {}
 
-    with zipfile.ZipFile(expanduser("~") + emb_path + emb_file, 'r') as f:
+    with zipfile.ZipFile(
+        os.path.join(
+            os.path.expanduser("~"),
+            emb_path,
+            emb_file
+        ),
+        'r'
+    ) as f:
         with f.open(emb_subfile, 'r') as z:
             for line in z:
                 values = line.split()
@@ -30,22 +39,22 @@ def load_embeddings(
     return embeddings_index
 
 
-def id_to_glove(dict_yelp: corpora.Dictionary, emb_path: str):
+def id_to_glove(dictionary: corpora.Dictionary, emb_path: str):
 
     """converts local dictionary to embeddings from glove"""
 
     embeddings_index = load_embeddings(emb_path)
     conversion_table = {}
 
-    for word in dict_yelp.values():
+    for word in dictionary.values():
         if bytes(word, 'utf-8') in embeddings_index.keys():
-            conversion_table[dict_yelp.token2id[word]+1]\
+            conversion_table[dictionary.token2id[word]+1]\
                 = embeddings_index[bytes(word, 'utf-8')]
         else:
-            conversion_table[dict_yelp.token2id[word]+1]\
+            conversion_table[dictionary.token2id[word]+1]\
                 = np.random.normal(0, .32, 100)
 
-    embedding_matrix = np.vstack(
+    return np.vstack(
         (
             np.zeros(100),
             list(conversion_table.values()),
@@ -53,20 +62,18 @@ def id_to_glove(dict_yelp: corpora.Dictionary, emb_path: str):
         )
     )
 
-    return embedding_matrix
 
-
-def convert_rating(rating):
+def convert_rating(rating: int):
 
     """moving ratings from 0 to 1"""
 
     if rating in [4, 5]:
-        return 1
+        return 1.0
     elif rating in [1, 2]:
-        return 0
+        return 0.0
 
 
-def text_sequencer(dictionary, text, max_len=200):
+def text_sequencer(dictionary: corpora.Dictionary, text, max_len=200):
 
     """converts tokens to numeric representation by dictionary"""
 
@@ -95,7 +102,13 @@ def tokenize(x): return re.findall(r'\w+', x.lower())
 def load_data(path: str, fname: str, stop: int = None) -> list:
     "reads from zipped yelp data file"
     ls = []
-    with zipfile.ZipFile(path) as zfile:
+
+    with zipfile.ZipFile(
+        os.path.join(
+            os.path.expanduser('~'),
+            path
+        )
+    ) as zfile:
         print(f'archive contains the following: {zfile.namelist()}')
         inf = zfile.open(fname)
         with jsonl.Reader(inf) as file:
@@ -115,6 +128,7 @@ class CorpusData(Dataset):
         self,
         fpath: str,
         fname: str,
+        dictionary: corpora.Dictionary = None,
         stop: int = None,
         data: str = 'data',
         labels: str = 'target',
@@ -122,14 +136,18 @@ class CorpusData(Dataset):
     ):
 
         super().__init__()
-        self.fpath: str
-        self.fname: str
-        self.stop: int = None
+        self.fpath = fpath
+        self.fname = fname
+        self.stop = stop
         self.data = data
         self.labels = labels
-        self.dict_yelp: corpora.Dictionary = None
+        self.mode = 'training'
+        if dictionary:
+            self.dict_yelp = dictionary
+        else:
+            self.dict_yelp = None
         self.df: pd.DataFrame = self.parse_data(fpath, fname, stop)
-        self.test_size: float = test_size
+        self.test_size = test_size
         self.tr_idx: list = None
         self.val_idx: list = None
         self.split_df()
@@ -137,14 +155,21 @@ class CorpusData(Dataset):
     def parse_data(self, fpath, fname, stop):
 
         df = pd.DataFrame(load_data(fpath, fname, stop))
+
         print('df loaded..')
-        self.dict_yelp = corpora.Dictionary(df.text)
-        self.dict_yelp.filter_extremes(no_below=10, no_above=.95, keep_n=30000)
+
+        if self.dict_yelp is None:
+            self.dict_yelp = corpora.Dictionary(df.text)
+            self.dict_yelp.filter_extremes(no_below=10, no_above=.99, keep_n=10000)
+
         print('dictionary created...')
+
         df[self.data] = df.text.apply(
             lambda x: text_sequencer(self.dict_yelp, x)
             )
         df[self.labels] = df.stars.apply(convert_rating)
+
+        print('converted tokens to numbers...')
 
         return df.loc[df[self.labels].dropna()].reset_index(drop=True)
 
