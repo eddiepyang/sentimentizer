@@ -2,10 +2,12 @@ import torch
 from torch import optim
 from torch import nn
 from torch.utils.data import DataLoader
-from dataclasses import dataclass
 
+import os
+from dataclasses import dataclass
 import time
 import numpy as np
+
 from data import id_to_glove, CorpusData
 from model import RNN
 
@@ -16,6 +18,7 @@ class Trainer:
     tracking the torch optimizer and model fitting"""
     loss_function: object
     optimizer: optim.Adam
+    scheduler: optim.lr_scheduler
     dataclass: CorpusData
     batch_size: int
     epochs: int
@@ -50,7 +53,9 @@ class Trainer:
             i += len(labels)
             self.losses.append(loss.item())
             if i % (self.batch_size*100) == 0:
-                print(f"""{i/n:.2f} of rows completed in {j+1} cycles, current loss at {np.mean(self.losses[-30:]):.4f}""")  # noqa: E501
+                print(f"{i/n:.2f} of rows completed in {j+1} cycles, current loss at {np.mean(self.losses[-30:]):.4f}")  # noqa: E501
+                self.scheduler.step()
+                print(f"current learning rate at {self.optimizer.param_groups[0]['lr']:.6f}")  # noqa: E501
 
     def fit(self, model):
 
@@ -83,10 +88,10 @@ def main():
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--fpath', default='../../data/archive.zip')
+    parser.add_argument('--archive_name', default='archive.zip')
     parser.add_argument('--fname', default='yelp_academic_dataset_review.json')
-    parser.add_argument('--abs_path', default='/projects/yelp_nlp/data/')
-    parser.add_argument('--state_path', default='../../data/model_weight.pt')
+    parser.add_argument('--abs_path', default='projects/yelp_nlp/data/')
+    parser.add_argument('--state_path', default='model_weight.pt')
     parser.add_argument('--device', default='cpu', help='run model on cuda or cpu')  # noqa: E501
     parser.add_argument('--batch_size', type=int, default=200)
     parser.add_argument('--input_len', type=int, default=200)
@@ -98,14 +103,14 @@ def main():
     parser.add_argument(
         '--stop',
         type=int,
-        default=1000,
+        default=10000,
         help='how many lines to load'
     )
 
     args = parser.parse_args()
 
     dataset = CorpusData(
-        fpath=args.fpath,
+        fpath=os.path.join(args.abs_path, args.archive_name),
         fname=args.fname,
         stop=args.stop
     )
@@ -139,6 +144,7 @@ def main():
     trainer = Trainer(
         loss_function=loss_function,
         optimizer=optimizer,
+        scheduler=scheduler,
         dataclass=dataset,
         batch_size=args.batch_size,
         epochs=args.n_epochs,
@@ -147,8 +153,8 @@ def main():
     )
 
     trainer.fit(model)
-
-    torch.save(model.state_dict(), args.state_path)
+    weight_path = os.path.join(os.path.expanduser('~'), args.abs_path, args.state_path)
+    torch.save(model.state_dict(), weight_path)
     print(f'model weights saved to: {args.state_path}')
 
 
