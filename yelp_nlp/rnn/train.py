@@ -9,7 +9,7 @@ import time
 import numpy as np
 
 from data import id_to_glove, CorpusData
-from model import RNN
+from model import RNN, RNN2
 
 
 @dataclass
@@ -33,7 +33,7 @@ class Trainer:
         for j, (sent, target) in enumerate(self.train_loader):
 
             self.optimizer.zero_grad()
-            sent, labels = sent.long().to(self.device), target.float().to(self.device)
+            sent, labels = sent.long().to(self.device), target.float().to(self.device)  # noqa: E501
             log_probs = model(sent)
             loss = self.loss_function(log_probs, labels.to(self.device))
 
@@ -128,7 +128,7 @@ def main():
     optimizer = optim.Adam(
         model.parameters(),
         lr=0.0001,
-        betas=(0.7, 0.99),
+        # betas=(0.7, 0.99),
         weight_decay=1e-5
     )
 
@@ -153,7 +153,11 @@ def main():
     )
 
     trainer.fit(model)
-    weight_path = os.path.join(os.path.expanduser('~'), args.abs_path, args.state_path)
+    weight_path = os.path.join(
+        os.path.expanduser('~'),
+        args.abs_path,
+        args.state_path
+    )
     torch.save(model.state_dict(), weight_path)
     print(f'model weights saved to: {args.state_path}')
 

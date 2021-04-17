@@ -160,7 +160,11 @@ class CorpusData(Dataset):
 
         if self.dict_yelp is None:
             self.dict_yelp = corpora.Dictionary(df.text)
-            self.dict_yelp.filter_extremes(no_below=10, no_above=.99, keep_n=10000)
+            self.dict_yelp.filter_extremes(
+                no_below=10,
+                no_above=.99,
+                keep_n=10000
+            )
 
         print('dictionary created...')
 
@@ -174,11 +178,20 @@ class CorpusData(Dataset):
         return df.loc[df[self.labels].dropna()].reset_index(drop=True)
 
     def __len__(self):
-        return self.df.__len__()
-
+        if self.mode == 'fitting':
+            return self.df.__len__()
+        if self.mode == 'training':
+            return self.train.__len__()
+        if self.mode == 'eval':
+            return self.val.__len__()
+            
     def __getitem__(self, i):
-
-        return self.df[self.data][i], self.df[self.labels][i]
+        if self.mode == 'fitting':
+            return self.df[self.data].iat[i], self.df[self.labels][i]
+        elif self.mode == 'training':
+            return self.train[self.data].iat[i], self.train[self.labels].iat[i]
+        elif self.mode == 'eval':
+            return self.val[self.data].iat[i], self.val[self.labels].iat[i]
 
     def split_df(self):
 
