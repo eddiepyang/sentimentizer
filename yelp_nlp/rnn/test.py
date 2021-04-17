@@ -14,11 +14,11 @@ from model import RNN
 class Trainer:
     """Trainer class helps with creating the data loader,
     tracking the torch optimizer and model fitting"""
-    optimizer: list,
-    dataclass: list,
-    batch_size: int,
-    epochs: int,
-    workers: int,
+    optimizer: list
+    dataclass: list
+    batch_size: int
+    epochs: int
+    workers: int
     device: str
 
     def train_epoch(self, model):
