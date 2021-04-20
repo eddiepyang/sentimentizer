@@ -15,7 +15,7 @@ python train.py*
 
 Ingestion pipe -> Data pipe -> Model pipe -> Serving instance
 
-1. Ingestion pipe
+1. Ingestion pipe  
 Datastream -> ingestion engine -> data store -> bulk download api
 
 3. Data pipe  
