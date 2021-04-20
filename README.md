@@ -11,16 +11,18 @@ pip install -e .
 cd yelp_nlp/rnn  
 python train.py*
 
-# Proposed AWS implementation
+# Proposed implementation
 
-Data pipe -> Model pipe -> Serving instance
+Ingestion pipe -> Data pipe -> Model pipe -> Serving instance
 
-1. Data pipe  
-Yelp api -> data -> data processing -> storage (s3)
+1. Ingestion pipe
+Datastream -> ingestion engine -> data store -> bulk download api
 
-2. Model pipe  
-storage -> data loader -> training instance -> saved model and image (ECR) 
+3. Data pipe  
+Yelp api -> data -> data processing -> storage 
 
-3. Serving instance   
-load docker image -> serving instance (elastic beanstalk or sagemaker inference)
+3. Model pipe  
+storage -> data loader -> training instance -> docker image
 
+4. Serving instance   
+load docker image -> serving instance 
