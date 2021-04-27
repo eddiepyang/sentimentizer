@@ -8,6 +8,7 @@ class RNN(nn.Module):
     """
     RNN model class
     """
+
     # weights are vocabsize x embedding length
     def __init__(self, emb_weights, batch_size, input_len):
 
@@ -107,4 +108,3 @@ class RNN2(nn.Module):
             print('final %s' % (fout.shape,))
 
         return torch.squeeze(fout)
-       
