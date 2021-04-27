@@ -39,7 +39,7 @@ def load_embeddings(
     return embeddings_index
 
 
-def id_to_glove(dictionary: corpora.Dictionary, emb_path: str):
+def id_to_glove(dictionary: corpora.Dictionary, emb_path: str, emb_n: int = 100):
 
     """converts local dictionary to embeddings from glove"""
 
@@ -52,13 +52,13 @@ def id_to_glove(dictionary: corpora.Dictionary, emb_path: str):
                 = embeddings_index[bytes(word, 'utf-8')]
         else:
             conversion_table[dictionary.token2id[word]+1]\
-                = np.random.normal(0, .32, 100)
+                = np.random.normal(0, .32, emb_n)
 
     return np.vstack(
         (
-            np.zeros(100),
+            np.zeros(emb_n),
             list(conversion_table.values()),
-            np.random.randn(100)
+            np.random.randn(emb_n)
         )
     )
 
@@ -77,7 +77,7 @@ def text_sequencer(dictionary: corpora.Dictionary, text, max_len=200):
 
     """converts tokens to numeric representation by dictionary"""
 
-    processed = np.zeros(200, dtype=int)
+    processed = np.zeros(max_len, dtype=int)
     # in case the word is not in the dictionary because it was
     # filtered out use this number to represent an out of set id
     dict_final = len(dictionary.keys()) + 1
@@ -96,7 +96,7 @@ def text_sequencer(dictionary: corpora.Dictionary, text, max_len=200):
 
 
 # regex tokenize, less accurate
-def tokenize(x): return re.findall(r'\w+', x.lower())
+def tokenize(x: str) -> list: return re.findall(r'\w+', x.lower())
 
 
 def load_data(path: str, fname: str, stop: int = None) -> list:
@@ -120,7 +120,7 @@ def load_data(path: str, fname: str, stop: int = None) -> list:
     return ls
 
 
-class CorpusData(Dataset):
+class CorpusData(Dataset, object):
 
     """Dataset class required for pytorch to output items by index"""
 
@@ -128,10 +128,12 @@ class CorpusData(Dataset):
         self,
         fpath: str,
         fname: str,
+        max_len: int,
         dictionary: corpora.Dictionary = None,
         stop: int = None,
         data: str = 'data',
         labels: str = 'target',
+        mode: str = 'training',
         test_size=0.25
     ):
 
@@ -141,18 +143,20 @@ class CorpusData(Dataset):
         self.stop = stop
         self.data = data
         self.labels = labels
-        self.mode = 'training'
+        self.mode = mode
         if dictionary:
             self.dict_yelp = dictionary
         else:
             self.dict_yelp = None
-        self.df: pd.DataFrame = self.parse_data(fpath, fname, stop)
+        self.df: pd.DataFrame = self.parse_data(fpath, fname, stop, max_len)
         self.test_size = test_size
         self.tr_idx: list = None
         self.val_idx: list = None
         self.split_df()
+        self.train = None
+        self.val = None
 
-    def parse_data(self, fpath, fname, stop):
+    def parse_data(self, fpath, fname, stop, max_len):
 
         df = pd.DataFrame(load_data(fpath, fname, stop))
 
@@ -169,22 +173,33 @@ class CorpusData(Dataset):
         print('dictionary created...')
 
         df[self.data] = df.text.apply(
-            lambda x: text_sequencer(self.dict_yelp, x)
+            lambda x: text_sequencer(self.dict_yelp, x, max_len)
             )
         df[self.labels] = df.stars.apply(convert_rating)
 
         print('converted tokens to numbers...')
 
-        return df.loc[df[self.labels].dropna()].reset_index(drop=True)
+        return df.loc[
+            df[self.labels].dropna(),
+            [self.data, self.labels]
+        ].reset_index(drop=True)
+
+    def set_mode(self, mode: str):
+
+        if mode not in ['fitting', 'training', 'eval']:
+            raise ValueError('not an available mode')
+
+        self.mode = mode
 
     def __len__(self):
+
         if self.mode == 'fitting':
             return self.df.__len__()
         if self.mode == 'training':
             return self.train.__len__()
         if self.mode == 'eval':
             return self.val.__len__()
-            
+
     def __getitem__(self, i):
         if self.mode == 'fitting':
             return self.df[self.data].iat[i], self.df[self.labels][i]
@@ -203,8 +218,16 @@ class CorpusData(Dataset):
 
     @property
     def train(self):
-        return self.df.iloc[self.tr_idx]
+        return self._train
+
+    @train.setter
+    def train(self, value):
+        self._train = self.df.iloc[self.tr_idx]
 
     @property
     def val(self):
-        return self.df.iloc[self.val_idx]
+        return self._val
+
+    @val.setter
+    def val(self, value):
+        self._val = self.df.iloc[self.val_idx]
