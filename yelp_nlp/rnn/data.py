@@ -39,7 +39,11 @@ def load_embeddings(
     return embeddings_index
 
 
-def id_to_glove(dictionary: corpora.Dictionary, emb_path: str, emb_n: int = 100):
+def id_to_glove(
+    dictionary: corpora.Dictionary,
+    emb_path: str,
+    emb_n: int = 100
+):
 
     """converts local dictionary to embeddings from glove"""
 
@@ -63,14 +67,22 @@ def id_to_glove(dictionary: corpora.Dictionary, emb_path: str, emb_n: int = 100)
     )
 
 
-def convert_rating(rating: int):
+def convert_rating(rating: int) -> float:
 
-    """moving ratings from 0 to 1"""
+    """scaling ratings from 0 to 1"""
 
     if rating in [4, 5]:
         return 1.0
     elif rating in [1, 2]:
         return 0.0
+    else:
+        return
+
+
+def convert_rating_linear(rating: int, max_rating: int) -> float:
+
+    """scaling ratings from 0 to 1 linearly"""
+    return rating/max_rating
 
 
 def text_sequencer(dictionary: corpora.Dictionary, text, max_len=200):
@@ -120,7 +132,7 @@ def load_data(path: str, fname: str, stop: int = None) -> list:
     return ls
 
 
-class CorpusData(Dataset, object):
+class CorpusData(Dataset):
 
     """Dataset class required for pytorch to output items by index"""
 
@@ -174,13 +186,13 @@ class CorpusData(Dataset, object):
 
         df[self.data] = df.text.apply(
             lambda x: text_sequencer(self.dict_yelp, x, max_len)
-            )
+        )
         df[self.labels] = df.stars.apply(convert_rating)
 
         print('converted tokens to numbers...')
 
         return df.loc[
-            df[self.labels].dropna(),
+            df[self.labels].dropna().index,
             [self.data, self.labels]
         ].reset_index(drop=True)
 
