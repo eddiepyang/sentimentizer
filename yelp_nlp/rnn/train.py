@@ -222,7 +222,7 @@ def main():
     )
 
     trainer.fit(model)
-    
+
     weight_path = os.path.join(
         os.path.expanduser('~'),
         args.abs_path,
