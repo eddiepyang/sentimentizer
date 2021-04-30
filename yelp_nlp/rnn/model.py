@@ -28,6 +28,7 @@ class RNN(nn.Module):
         self.emb_weights = emb_weights
         # input of shape (seq_len, batch, input_size)
         # https://pytorch.org/docs/stable/nn.html
+        self.fc0 = nn.Linear(emb_weights.shape[1], emb_weights.shape[1])
         self.lstm = nn.LSTM(input_len, input_len)
         self.fc1 = nn.Linear(input_len, 1)
         self.fc2 = nn.Linear(emb_weights.shape[1], 1)
@@ -50,12 +51,16 @@ class RNN(nn.Module):
         if self.verbose:
             print('embedding shape %s' % (embeds.shape,))
 
+        embeds = F.relu(
+            self.fc0(embeds)
+        )
+
         out, (hidden, cell) = self.lstm(embeds.permute(0, 2, 1))
 
         if self.verbose:
             print('lstm out shape %s' % (out.shape,))
 
-        out = F.relu(self.fc1(out))
+        out = self.fc1(out)
         if self.verbose:
             print('fc1 out shape %s' % (out.shape,))
 
@@ -64,6 +69,4 @@ class RNN(nn.Module):
         if self.verbose:
             print('final %s' % (fout.shape,))
 
-        return torch.sigmoid(
-            torch.squeeze(fout)
-        )
+        return torch.squeeze(fout)

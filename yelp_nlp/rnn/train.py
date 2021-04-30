@@ -6,6 +6,7 @@ from torch.utils.data import DataLoader
 import os
 import time
 import numpy as np
+import pandas as pd
 
 from data import id_to_glove, CorpusData
 from model import RNN
@@ -20,12 +21,12 @@ class Trainer:
         self,
         loss_function: object,
         optimizer: optim.Adam,
-        scheduler: optim.lr_scheduler,
         dataclass: CorpusData,
         batch_size: int,
         epochs: int,
         workers: int,
         device: str,
+        scheduler: optim.lr_scheduler = None,
         memory: bool = True,
         mode: str = 'training'
     ):
@@ -68,14 +69,15 @@ class Trainer:
         self.dataclass.set_mode(self.mode)
         i = 0
         n = len(self.dataclass)
+        model.train()
 
         for j, (sent, target) in enumerate(self.train_loader):
 
             self.optimizer.zero_grad()
 
             # noqa: E501
-            log_probs = model(sent.long().to(self.device))
-            loss = self.loss_function(log_probs, target.float().to(self.device))  # noqa: E501
+            log_probs = model(sent.to(self.device))
+            loss = self.loss_function(log_probs, target.to(self.device))  # noqa: E501
 
             # gets graident
             loss.backward()
@@ -93,16 +95,15 @@ class Trainer:
             i += len(target)
             self.losses.append(loss.item())
             if i % (self.batch_size*100) == 0:
+                if self.scheduler:
+                    self.scheduler.step()
                 print(f"{i/n:.2f} of rows completed in {j + 1} cycles, current loss at {np.mean(self.losses[-60:]):.6f}")  # noqa: E501
-                self.scheduler.step()
                 print(f"current learning rate at {self.optimizer.param_groups[0]['lr']:.6f}")  # noqa: E501
 
     def fit(self, model: object, mode: str = 'fitting'):
 
         model.to(self.device)
         start = time.time()
-        model.train()
-
         epoch_count = 0
         self.losses = []
 
@@ -113,6 +114,10 @@ class Trainer:
             self.train_epoch(model)
             self.eval(model)
             epoch_count += 1
+
+            if self.scheduler:
+                self.scheduler.step()
+
             print(f'epoch {epoch_count} completed')
         print(f'model fitting completed, {time.time()-start:.0f} seconds passed')  # noqa: E501
 
@@ -137,7 +142,7 @@ class Trainer:
                     np.mean(
                         self.loss_function(
                             preds,
-                            target.float().to(self.device)
+                            target.to(self.device)
                         ).item()
                     )
                 )
@@ -149,7 +154,7 @@ class Trainer:
             print(f'validation loss at: {self.val_loss: .6f}')
 
 
-def main():
+def main(df_path=None, dictionary_path=None):
 
     import argparse
 
@@ -161,11 +166,11 @@ def main():
     parser.add_argument('--state_path', default='model_weight.pt')
     parser.add_argument('--device', default='cpu', help='run model on cuda or cpu')  # noqa: E501
     parser.add_argument('--batch_size', type=int, default=50)
-    parser.add_argument('--input_len', type=int, default=100, help='width of lstm layer')  # noqa: E501
+    parser.add_argument('--input_len', type=int, default=200, help='width of lstm layer')  # noqa: E501
     parser.add_argument(
         '--n_epochs',
         type=int,
-        default=2
+        default=8
     )
     parser.add_argument(
         '--stop',
@@ -176,12 +181,25 @@ def main():
 
     args = parser.parse_args()
 
-    dataset = CorpusData(
-        fpath=os.path.join(args.abs_path, args.archive_name),
-        fname=args.fname,
-        stop=args.stop,
-        max_len=args.input_len
-    )
+    if df_path:
+
+        df = pd.read_parquet(df_path)  # noqa: E501
+
+        dataset = CorpusData(
+            fpath=os.path.join(args.abs_path, args.archive_name),
+            fname=args.fname,
+            df=df,
+            stop=args.stop,
+            max_len=args.input_len
+        )
+    else:
+
+        dataset = CorpusData(
+            fpath=os.path.join(args.abs_path, args.archive_name),
+            fname=args.fname,
+            stop=args.stop,
+            max_len=args.input_len
+        )
 
     embedding_matrix = id_to_glove(dataset.dict_yelp, args.abs_path)
     emb_t = torch.from_numpy(embedding_matrix)
@@ -195,9 +213,9 @@ def main():
 
     optimizer = optim.Adam(
         model.parameters(),
-        lr=0.001,
-        # betas=(0.7, 0.99),
-        weight_decay=1e-5
+        lr=0.005,
+        betas=(0.7, 0.99),
+        weight_decay=1e-4
     )
 
     loss_function = nn.BCEWithLogitsLoss()
@@ -233,4 +251,5 @@ def main():
 
 
 if __name__ == '__main__':
+
     main()
