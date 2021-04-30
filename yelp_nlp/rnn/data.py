@@ -32,9 +32,7 @@ def load_embeddings(
         with f.open(emb_subfile, 'r') as z:
             for line in z:
                 values = line.split()
-                word = values[0]
-                coefs = np.asarray(values[1:], dtype='float16')
-                embeddings_index[word] = coefs
+                embeddings_index[values[0].decode()] = np.asarray(values[1:], dtype='float32')  # noqa: E501
 
     return embeddings_index
 
@@ -43,7 +41,7 @@ def id_to_glove(
     dictionary: corpora.Dictionary,
     emb_path: str,
     emb_n: int = 100
-):
+) -> np.array:
 
     """converts local dictionary to embeddings from glove"""
 
@@ -51,9 +49,10 @@ def id_to_glove(
     conversion_table = {}
 
     for word in dictionary.values():
-        if bytes(word, 'utf-8') in embeddings_index.keys():
+
+        if word in embeddings_index:
             conversion_table[dictionary.token2id[word]+1]\
-                = embeddings_index[bytes(word, 'utf-8')]
+                = embeddings_index[word]
         else:
             conversion_table[dictionary.token2id[word]+1]\
                 = np.random.normal(0, .32, emb_n)
@@ -75,8 +74,6 @@ def convert_rating(rating: int) -> float:
         return 1.0
     elif rating in [1, 2]:
         return 0.0
-    else:
-        return
 
 
 def convert_rating_linear(rating: int, max_rating: int) -> float:
@@ -85,7 +82,11 @@ def convert_rating_linear(rating: int, max_rating: int) -> float:
     return rating/max_rating
 
 
-def text_sequencer(dictionary: corpora.Dictionary, text, max_len=200):
+def text_sequencer(
+    dictionary: corpora.Dictionary,
+    text: list,
+    max_len: int = 200
+) -> np.array:
 
     """converts tokens to numeric representation by dictionary"""
 
@@ -107,8 +108,9 @@ def text_sequencer(dictionary: corpora.Dictionary, text, max_len=200):
     return processed
 
 
-# regex tokenize, less accurate
-def tokenize(x: str) -> list: return re.findall(r'\w+', x.lower())
+# regex tokenize, less accurate than spacy
+def tokenize(x: str) -> list:
+    return re.findall(r'\w+', x.lower())
 
 
 def load_data(path: str, fname: str, stop: int = None) -> list:
@@ -138,15 +140,16 @@ class CorpusData(Dataset):
 
     def __init__(
         self,
-        fpath: str,
-        fname: str,
         max_len: int,
         dictionary: corpora.Dictionary = None,
         stop: int = None,
         data: str = 'data',
         labels: str = 'target',
         mode: str = 'training',
-        test_size=0.25
+        fpath: str = None,
+        fname: str = None,
+        df: pd.DataFrame = None,
+        test_size=0.20
     ):
 
         super().__init__()
@@ -160,7 +163,13 @@ class CorpusData(Dataset):
             self.dict_yelp = dictionary
         else:
             self.dict_yelp = None
-        self.df: pd.DataFrame = self.parse_data(fpath, fname, stop, max_len)
+        self.df: pd.DataFrame = self.parse_data(
+            fpath=fpath,
+            fname=fname,
+            df=df,
+            stop=stop,
+            max_len=max_len
+        )
         self.test_size = test_size
         self.tr_idx: list = None
         self.val_idx: list = None
@@ -168,28 +177,52 @@ class CorpusData(Dataset):
         self.train = None
         self.val = None
 
-    def parse_data(self, fpath, fname, stop, max_len):
+    def parse_data(
+        self,
+        stop: int,
+        max_len: int,
+        df: pd.DataFrame = None,
+        fpath: str = None,
+        fname: str = None,
+        text_col: str = 'text',
+        label_col: str = 'stars',
+        spath: str = 'projects/yelp_nlp/data/yelp_data'
 
-        df = pd.DataFrame(load_data(fpath, fname, stop))
+    ) -> pd.DataFrame:
 
-        print('df loaded..')
+        if fpath and fname:
+
+            df = pd.DataFrame(load_data(fpath, fname, stop))
+            print('df loaded..')
 
         if self.dict_yelp is None:
-            self.dict_yelp = corpora.Dictionary(df.text)
+
+            self.dict_yelp = corpora.Dictionary(df[text_col])
             self.dict_yelp.filter_extremes(
                 no_below=10,
-                no_above=.99,
-                keep_n=10000
+                no_above=0.97,
+                keep_n=5000
             )
 
-        print('dictionary created...')
+            self.dict_yelp.save(f"{os.path.expanduser('~')}/{spath}.dict")
+            print('dictionary created...')
 
-        df[self.data] = df.text.apply(
-            lambda x: text_sequencer(self.dict_yelp, x, max_len)
-        )
-        df[self.labels] = df.stars.apply(convert_rating)
+        if fpath and fname:
 
-        print('converted tokens to numbers...')
+            df[self.data] = df[text_col].apply(
+                lambda x: text_sequencer(self.dict_yelp, x, max_len)
+            )
+
+            df[self.labels] = df[label_col].apply(convert_rating)
+
+            print('converted tokens to numbers...')
+
+            df.to_parquet(
+                f"{os.path.expanduser('~')}/{spath}.parquet",
+                index=False
+            )
+
+            print(f"file saved to {os.path.expanduser('~')}/{spath}.parquet")
 
         return df.loc[
             df[self.labels].dropna().index,
