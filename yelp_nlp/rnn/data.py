@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import jsonlines as jsonl
 import zipfile
+import logging
 
 from gensim import corpora
 import os
@@ -9,6 +10,9 @@ import re
 
 from torch.utils.data import Dataset
 from sklearn.model_selection import train_test_split
+
+logging.getLogger().setLevel(logging.DEBUG)
+logging.basicConfig(filename='data.log')
 
 
 def load_embeddings(
@@ -123,7 +127,7 @@ def load_data(path: str, fname: str, stop: int = None) -> list:
             path
         )
     ) as zfile:
-        print(f'archive contains the following: {zfile.namelist()}')
+        logging.info(f'archive contains the following: {zfile.namelist()}')
         inf = zfile.open(fname)
         with jsonl.Reader(inf) as file:
             for i, line in enumerate(file):
@@ -193,7 +197,7 @@ class CorpusData(Dataset):
         if fpath and fname:
 
             df = pd.DataFrame(load_data(fpath, fname, stop))
-            print('df loaded..')
+            logging.info('df loaded..')
 
         if self.dict_yelp is None:
 
@@ -205,7 +209,7 @@ class CorpusData(Dataset):
             )
 
             self.dict_yelp.save(f"{os.path.expanduser('~')}/{spath}.dict")
-            print('dictionary created...')
+            logging.info('dictionary created...')
 
         if fpath and fname:
 
@@ -215,14 +219,14 @@ class CorpusData(Dataset):
 
             df[self.labels] = df[label_col].apply(convert_rating)
 
-            print('converted tokens to numbers...')
+            logging.info('converted tokens to numbers...')
 
             df.to_parquet(
                 f"{os.path.expanduser('~')}/{spath}.parquet",
                 index=False
             )
 
-            print(f"file saved to {os.path.expanduser('~')}/{spath}.parquet")
+            logging.info(f"file saved to {os.path.expanduser('~')}/{spath}.parquet")  # noqa: E501
 
         return df.loc[
             df[self.labels].dropna().index,

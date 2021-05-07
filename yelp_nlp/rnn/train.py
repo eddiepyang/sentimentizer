@@ -1,6 +1,5 @@
 import torch
 from torch import optim
-from torch import nn
 from torch.utils.data import DataLoader
 
 import os
@@ -100,7 +99,7 @@ class Trainer:
                 print(f"{i/n:.2f} of rows completed in {j + 1} cycles, current loss at {np.mean(self.losses[-60:]):.6f}")  # noqa: E501
                 print(f"current learning rate at {self.optimizer.param_groups[0]['lr']:.6f}")  # noqa: E501
 
-    def fit(self, model: object, mode: str = 'fitting'):
+    def fit(self, model: object):
 
         model.to(self.device)
         start = time.time()
@@ -154,19 +153,50 @@ class Trainer:
             print(f'validation loss at: {self.val_loss: .6f}')
 
 
-def main(df_path=None, dictionary_path=None):
+def main(
+    df_path=None,
+    dictionary_path=None,
+):
 
     import argparse
-
+    from trainer_config import OptParams, SchedulerParams, loss_function
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--archive_name', default='archive.zip')
-    parser.add_argument('--fname', default='yelp_academic_dataset_review.json')
-    parser.add_argument('--abs_path', default='projects/yelp_nlp/data/')
-    parser.add_argument('--state_path', default='model_weight.pt')
-    parser.add_argument('--device', default='cpu', help='run model on cuda or cpu')  # noqa: E501
-    parser.add_argument('--batch_size', type=int, default=50)
-    parser.add_argument('--input_len', type=int, default=200, help='width of lstm layer')  # noqa: E501
+    parser.add_argument(
+        '--archive_name',
+        default='archive.zip',
+        help='file where yelp data is saved, expects an archive of json files'
+    )
+    parser.add_argument(
+        '--fname',
+        default='yelp_academic_dataset_review.json'
+    )
+    parser.add_argument(
+        '--abs_path',
+        default='projects/yelp_nlp/data/',
+        help='folder where data is stored, path after /home/{user}/'
+    )
+    parser.add_argument(
+        '--state_path',
+        default='model_weight.pt',
+        help='file name for saved pytorch model weights'
+    )
+    parser.add_argument(
+        '--device',
+        default='cpu',
+        help='run model on cuda or cpu'
+    )  # noqa: E501
+    parser.add_argument(
+        '--batch_size',
+        type=int,
+        default=50
+    )
+    parser.add_argument(
+        '--input_len',
+        type=int,
+        default=200,
+        help='width of lstm layer'
+    )  # noqa: E501
     parser.add_argument(
         '--n_epochs',
         type=int,
@@ -211,20 +241,22 @@ def main(df_path=None, dictionary_path=None):
 
     model.load_weights()
 
-    optimizer = optim.Adam(
-        model.parameters(),
-        lr=0.005,
-        betas=(0.7, 0.99),
-        weight_decay=1e-4
-    )
+    params = OptParams()
 
-    loss_function = nn.BCEWithLogitsLoss()
+    optimizer = optim.Adam(
+            model.parameters(),
+            lr=params.lr,
+            betas=params.betas,
+            weight_decay=params.weight_decay
+        )
+
+    sp = SchedulerParams()
 
     scheduler = optim.lr_scheduler.CosineAnnealingLR(
         optimizer,
-        100,
-        eta_min=0,
-        last_epoch=-1
+        T_max=sp.T_max,
+        eta_min=sp.eta_min,
+        last_epoch=sp.last_epoch
     )
 
     trainer = Trainer(
