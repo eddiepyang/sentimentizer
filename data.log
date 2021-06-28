@@ -52,3 +52,42 @@ INFO:gensim.utils:saved /home/eddiepyang/projects/yelp_nlp/data/yelp_data.dict
 INFO:root:dictionary created...
 INFO:root:converted tokens to numbers...
 INFO:root:file saved to /home/eddiepyang/projects/yelp_nlp/data/yelp_data.parquet
+INFO:root:archive contains the following: ['Dataset_User_Agreement.pdf', 'yelp_academic_dataset_business.json', 'yelp_academic_dataset_checkin.json', 'yelp_academic_dataset_review.json', 'yelp_academic_dataset_tip.json', 'yelp_academic_dataset_user.json']
+INFO:root:df loaded..
+INFO:gensim.corpora.dictionary:adding document #0 to Dictionary(0 unique tokens: [])
+INFO:gensim.corpora.dictionary:built Dictionary(26558 unique tokens: ['30', '40', '6', '8', 'a']...) from 10000 documents (total 1096316 corpus positions)
+INFO:gensim.corpora.dictionary:discarding 21558 tokens: [('berkshire', 2), ('beverly', 5), ('burrata', 6), ('capable', 9), ('evidenced', 2), ('frita', 8), ('glory', 5), ('grana', 2), ('incorrectly', 8), ('intervened', 1)]...
+INFO:gensim.corpora.dictionary:keeping 5000 tokens which were in no less than 10 and no more than 9700 (=97.0%) documents
+INFO:gensim.corpora.dictionary:resulting dictionary: Dictionary(5000 unique tokens: ['30', '40', '6', '8', 'a']...)
+INFO:gensim.utils:saving Dictionary object under /home/eddiepyang/projects/yelp_nlp/data/yelp_data.dict, separately None
+INFO:gensim.utils:saved /home/eddiepyang/projects/yelp_nlp/data/yelp_data.dict
+INFO:root:dictionary created...
+INFO:root:converted tokens to numbers...
+INFO:root:file saved to /home/eddiepyang/projects/yelp_nlp/data/yelp_data.parquet
+INFO:root:archive contains the following: ['Dataset_User_Agreement.pdf', 'yelp_academic_dataset_business.json', 'yelp_academic_dataset_checkin.json', 'yelp_academic_dataset_review.json', 'yelp_academic_dataset_tip.json', 'yelp_academic_dataset_user.json']
+INFO:root:df loaded..
+INFO:gensim.corpora.dictionary:adding document #0 to Dictionary(0 unique tokens: [])
+INFO:gensim.corpora.dictionary:built Dictionary(26558 unique tokens: ['30', '40', '6', '8', 'a']...) from 10000 documents (total 1096316 corpus positions)
+INFO:gensim.corpora.dictionary:discarding 21558 tokens: [('berkshire', 2), ('beverly', 5), ('burrata', 6), ('capable', 9), ('evidenced', 2), ('frita', 8), ('glory', 5), ('grana', 2), ('incorrectly', 8), ('intervened', 1)]...
+INFO:gensim.corpora.dictionary:keeping 5000 tokens which were in no less than 10 and no more than 9700 (=97.0%) documents
+INFO:gensim.corpora.dictionary:resulting dictionary: Dictionary(5000 unique tokens: ['30', '40', '6', '8', 'a']...)
+INFO:gensim.utils:saving Dictionary object under /home/eddiepyang/projects/yelp_nlp/data/yelp_data.dict, separately None
+INFO:gensim.utils:saved /home/eddiepyang/projects/yelp_nlp/data/yelp_data.dict
+INFO:root:dictionary created...
+INFO:root:converted tokens to numbers...
+INFO:root:file saved to /home/eddiepyang/projects/yelp_nlp/data/yelp_data.parquet
+INFO:root:archive contains the following: ['Dataset_User_Agreement.pdf', 'yelp_academic_dataset_business.json', 'yelp_academic_dataset_checkin.json', 'yelp_academic_dataset_review.json', 'yelp_academic_dataset_tip.json', 'yelp_academic_dataset_user.json']
+INFO:root:df loaded..
+INFO:gensim.corpora.dictionary:adding document #0 to Dictionary(0 unique tokens: [])
+INFO:gensim.corpora.dictionary:built Dictionary(26558 unique tokens: ['30', '40', '6', '8', 'a']...) from 10000 documents (total 1096316 corpus positions)
+INFO:gensim.corpora.dictionary:discarding 21558 tokens: [('berkshire', 2), ('beverly', 5), ('burrata', 6), ('capable', 9), ('evidenced', 2), ('frita', 8), ('glory', 5), ('grana', 2), ('incorrectly', 8), ('intervened', 1)]...
+INFO:gensim.corpora.dictionary:keeping 5000 tokens which were in no less than 10 and no more than 9700 (=97.0%) documents
+INFO:gensim.corpora.dictionary:resulting dictionary: Dictionary(5000 unique tokens: ['30', '40', '6', '8', 'a']...)
+INFO:gensim.utils:saving Dictionary object under /home/eddiepyang/projects/yelp_nlp/data/yelp_data.dict, separately None
+INFO:gensim.utils:saved /home/eddiepyang/projects/yelp_nlp/data/yelp_data.dict
+INFO:root:dictionary created...
+INFO:root:converted tokens to numbers...
+INFO:root:file saved to /home/eddiepyang/projects/yelp_nlp/data/yelp_data.parquet
+INFO:root:archive contains the following: ['Dataset_User_Agreement.pdf', 'yelp_academic_dataset_business.json', 'yelp_academic_dataset_checkin.json', 'yelp_academic_dataset_review.json', 'yelp_academic_dataset_tip.json', 'yelp_academic_dataset_user.json']
+INFO:root:df loaded..
+INFO:gensim.corpora.dictionary:adding document #0 to Dictionary(0 unique tokens: [])
