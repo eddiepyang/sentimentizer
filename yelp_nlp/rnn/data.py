@@ -12,13 +12,13 @@ from torch.utils.data import Dataset
 from sklearn.model_selection import train_test_split
 
 logging.getLogger().setLevel(logging.INFO)
-logging.basicConfig(filename='data.log')
+logging.basicConfig(filename="data.log")
 
 
 def load_embeddings(
     emb_path: str,
-    emb_file: str = 'glove.6B.zip',
-    emb_subfile: str = 'glove.6B.100d.txt'
+    emb_file: str = "glove.6B.zip",
+    emb_subfile: str = "glove.6B.100d.txt",
 ) -> dict:
 
     """load glove vectors"""
@@ -26,25 +26,20 @@ def load_embeddings(
     embeddings_index = {}
 
     with zipfile.ZipFile(
-        os.path.join(
-            os.path.expanduser("~"),
-            emb_path,
-            emb_file
-        ),
-        'r'
+        os.path.join(os.path.expanduser("~"), emb_path, emb_file), "r"
     ) as f:
-        with f.open(emb_subfile, 'r') as z:
+        with f.open(emb_subfile, "r") as z:
             for line in z:
                 values = line.split()
-                embeddings_index[values[0].decode()] = np.asarray(values[1:], dtype='float32')  # noqa: E501
+                embeddings_index[values[0].decode()] = np.asarray(
+                    values[1:], dtype="float32"
+                )  # noqa: E501
 
     return embeddings_index
 
 
 def id_to_glove(
-    dictionary: corpora.Dictionary,
-    emb_path: str,
-    emb_n: int = 100
+    dictionary: corpora.Dictionary, emb_path: str, emb_n: int = 100
 ) -> np.array:
 
     """converts local dictionary to embeddings from glove"""
@@ -55,18 +50,14 @@ def id_to_glove(
     for word in dictionary.values():
 
         if word in embeddings_index:
-            conversion_table[dictionary.token2id[word]+1]\
-                = embeddings_index[word]
+            conversion_table[dictionary.token2id[word] + 1] = embeddings_index[word]
         else:
-            conversion_table[dictionary.token2id[word]+1]\
-                = np.random.normal(0, .32, emb_n)
+            conversion_table[dictionary.token2id[word] + 1] = np.random.normal(
+                0, 0.32, emb_n
+            )
 
     return np.vstack(
-        (
-            np.zeros(emb_n),
-            list(conversion_table.values()),
-            np.random.randn(emb_n)
-        )
+        (np.zeros(emb_n), list(conversion_table.values()), np.random.randn(emb_n))
     )
 
 
@@ -83,13 +74,11 @@ def convert_rating(rating: int) -> float:
 def convert_rating_linear(rating: int, max_rating: int) -> float:
 
     """scaling ratings from 0 to 1 linearly"""
-    return rating/max_rating
+    return rating / max_rating
 
 
 def text_sequencer(
-    dictionary: corpora.Dictionary,
-    text: list,
-    max_len: int = 200
+    dictionary: corpora.Dictionary, text: list, max_len: int = 200
 ) -> np.array:
 
     """converts tokens to numeric representation by dictionary"""
@@ -114,26 +103,21 @@ def text_sequencer(
 
 # regex tokenize, less accurate than spacy
 def tokenize(x: str) -> list:
-    return re.findall(r'\w+', x.lower())
+    return re.findall(r"\w+", x.lower())
 
 
 def load_data(path: str, fname: str, stop: int = None) -> list:
     "reads from zipped yelp data file"
     ls = []
 
-    with zipfile.ZipFile(
-        os.path.join(
-            os.path.expanduser('~'),
-            path
-        )
-    ) as zfile:
-        logging.info(f'archive contains the following: {zfile.namelist()}')
+    with zipfile.ZipFile(os.path.join(os.path.expanduser("~"), path)) as zfile:
+        logging.info(f"archive contains the following: {zfile.namelist()}")
         inf = zfile.open(fname)
         with jsonl.Reader(inf) as file:
             for i, line in enumerate(file):
-                line['text'] = tokenize(line.get('text'))
+                line["text"] = tokenize(line.get("text"))
                 ls.append(line)
-                if stop and i == stop-1:
+                if stop and i == stop - 1:
                     break
     return ls
 
@@ -147,13 +131,13 @@ class CorpusData(Dataset):
         max_len: int,
         dictionary: corpora.Dictionary = None,
         stop: int = None,
-        data: str = 'data',
-        labels: str = 'target',
-        mode: str = 'training',
+        data: str = "data",
+        labels: str = "target",
+        mode: str = "training",
         fpath: str = None,
         fname: str = None,
         df: pd.DataFrame = None,
-        test_size=0.20
+        test_size=0.20,
     ):
 
         super().__init__()
@@ -168,11 +152,7 @@ class CorpusData(Dataset):
         else:
             self.dict_yelp = None
         self.df: pd.DataFrame = self.parse_data(
-            fpath=fpath,
-            fname=fname,
-            df=df,
-            stop=stop,
-            max_len=max_len
+            fpath=fpath, fname=fname, df=df, stop=stop, max_len=max_len
         )
         self.test_size = test_size
         self.tr_idx: list = None
@@ -188,28 +168,23 @@ class CorpusData(Dataset):
         df: pd.DataFrame = None,
         fpath: str = None,
         fname: str = None,
-        text_col: str = 'text',
-        label_col: str = 'stars',
-        spath: str = 'projects/yelp_nlp/data/yelp_data'
-
+        text_col: str = "text",
+        label_col: str = "stars",
+        spath: str = "projects/yelp_nlp/data/yelp_data",
     ) -> pd.DataFrame:
 
         if fpath and fname:
 
             df = pd.DataFrame(load_data(fpath, fname, stop))
-            logging.info('df loaded..')
+            logging.info("df loaded..")
 
         if self.dict_yelp is None:
 
             self.dict_yelp = corpora.Dictionary(df[text_col])
-            self.dict_yelp.filter_extremes(
-                no_below=10,
-                no_above=0.97,
-                keep_n=5000
-            )
+            self.dict_yelp.filter_extremes(no_below=10, no_above=0.97, keep_n=5000)
 
             self.dict_yelp.save(f"{os.path.expanduser('~')}/{spath}.dict")
-            logging.info('dictionary created...')
+            logging.info("dictionary created...")
 
         if fpath and fname:
 
@@ -219,50 +194,47 @@ class CorpusData(Dataset):
 
             df[self.labels] = df[label_col].apply(convert_rating)
 
-            logging.info('converted tokens to numbers...')
+            logging.info("converted tokens to numbers...")
 
-            df.to_parquet(
-                f"{os.path.expanduser('~')}/{spath}.parquet",
-                index=False
-            )
+            df.to_parquet(f"{os.path.expanduser('~')}/{spath}.parquet", index=False)
 
-            logging.info(f"file saved to {os.path.expanduser('~')}/{spath}.parquet")  # noqa: E501
+            logging.info(
+                f"file saved to {os.path.expanduser('~')}/{spath}.parquet"
+            )  # noqa: E501
 
         return df.loc[
-            df[self.labels].dropna().index,
-            [self.data, self.labels]
+            df[self.labels].dropna().index, [self.data, self.labels]
         ].reset_index(drop=True)
 
     def set_mode(self, mode: str):
 
-        if mode not in ['fitting', 'training', 'eval']:
-            raise ValueError('not an available mode')
+        if mode not in ["fitting", "training", "eval"]:
+            raise ValueError("not an available mode")
 
         self.mode = mode
 
     def __len__(self):
 
-        if self.mode == 'fitting':
+        if self.mode == "fitting":
             return self.df.__len__()
-        if self.mode == 'training':
+        if self.mode == "training":
             return self.train.__len__()
-        if self.mode == 'eval':
+        if self.mode == "eval":
             return self.val.__len__()
 
     def __getitem__(self, i):
-        if self.mode == 'fitting':
+        if self.mode == "fitting":
             return self.df[self.data].iat[i], self.df[self.labels][i]
-        elif self.mode == 'training':
+        elif self.mode == "training":
             return self.train[self.data].iat[i], self.train[self.labels].iat[i]
-        elif self.mode == 'eval':
+        elif self.mode == "eval":
             return self.val[self.data].iat[i], self.val[self.labels].iat[i]
 
     def split_df(self):
 
         self.tr_idx, self.val_idx = train_test_split(
-            self.df.index.values,
-            test_size=self.test_size
-            )
+            self.df.index.values, test_size=self.test_size
+        )
         return self
 
     @property
