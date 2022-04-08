@@ -14,6 +14,7 @@ from model import RNN
 class Trainer:
     """Trainer class helps with creating the data loader,
     tracking the torch optimizer and model fitting"""
+
     optimizer: list
     dataclass: list
     batch_size: int
@@ -38,9 +39,7 @@ class Trainer:
 
             # clips high gradients
             torch.nn.utils.clip_grad_norm_(
-                model.parameters(),
-                max_norm=0.3,
-                norm_type=2
+                model.parameters(), max_norm=0.3, norm_type=2
             )
 
             # updates with new gradient
@@ -48,8 +47,10 @@ class Trainer:
 
             i += len(labels)
             self.losses.append(loss.item())
-            if i % (batch_size*100) == 0:
-                print(f"""{i/n:.2f} of rows completed in {j+1} cycles, current loss at {np.mean(self.losses[-30:]):.4f}""")  # noqa: E501
+            if i % (batch_size * 100) == 0:
+                print(
+                    f"""{i/n:.2f} of rows completed in {j+1} cycles, current loss at {np.mean(self.losses[-30:]):.4f}"""
+                )  # noqa: E501
 
     def fit(self, model):
 
@@ -60,13 +61,13 @@ class Trainer:
         epoch_count = 0
         self.losses = []
 
-        print('fitting model...')
+        print("fitting model...")
 
         for epoch in range(self.epochs):
 
             self.train_epoch(model)
 
             epoch_count += 1
-            print(f'epoch {epoch_count} completed')
-        print(f'model fitting completed, {time.time()-start:.0f} seconds passed')
+            print(f"epoch {epoch_count} completed")
+        print(f"model fitting completed, {time.time()-start:.0f} seconds passed")
         return self

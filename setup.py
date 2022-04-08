@@ -1,24 +1,24 @@
-
 from setuptools import setup, find_packages
 
 setup(
     name="yelp_nlp",
     version="0.2",
     packages=find_packages(),
-
     install_requires=[
-        "numpy", "pandas",
-        "torch", "seaborn",
-        "spacy", "scikit-learn",
-        "jsonlines", "pytest",
-        "gensim"
+        "numpy",
+        "pandas",
+        "torch",
+        "seaborn",
+        "spacy",
+        "scikit-learn",
+        "jsonlines",
+        "pytest",
+        "gensim",
     ],
-
     package_data={
         # If any package contains *.txt or *.rst files, include them:
         "": ["*.txt", "*.rst"],
     },
-
     # metadata to display on PyPI
     author="Edward Yang",
     author_email="eddiepyang@gmail.com",
@@ -26,8 +26,5 @@ setup(
     project_urls={
         "Source Code": "https://github.com/eddiepyang/yelp_nlp",
     },
-    classifiers=[
-        "License :: OSI Approved :: Python Software Foundation License"
-    ]
-
+    classifiers=["License :: OSI Approved :: Python Software Foundation License"],
 )
