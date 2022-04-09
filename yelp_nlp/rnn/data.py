@@ -1,3 +1,4 @@
+from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 import jsonlines as jsonl
@@ -40,7 +41,7 @@ def load_embeddings(
 
 def id_to_glove(
     dictionary: corpora.Dictionary, emb_path: str, emb_n: int = 100
-) -> np.array:
+) -> np.ndarray:
 
     """converts local dictionary to embeddings from glove"""
 
@@ -48,27 +49,25 @@ def id_to_glove(
     conversion_table = {}
 
     for word in dictionary.values():
-
         if word in embeddings_index:
             conversion_table[dictionary.token2id[word] + 1] = embeddings_index[word]
         else:
             conversion_table[dictionary.token2id[word] + 1] = np.random.normal(
                 0, 0.32, emb_n
             )
-
     return np.vstack(
         (np.zeros(emb_n), list(conversion_table.values()), np.random.randn(emb_n))
     )
 
 
 def convert_rating(rating: int) -> float:
-
     """scaling ratings from 0 to 1"""
-
     if rating in [4, 5]:
         return 1.0
     elif rating in [1, 2]:
         return 0.0
+    else:
+        return -1.0
 
 
 def convert_rating_linear(rating: int, max_rating: int) -> float:
@@ -79,7 +78,7 @@ def convert_rating_linear(rating: int, max_rating: int) -> float:
 
 def text_sequencer(
     dictionary: corpora.Dictionary, text: list, max_len: int = 200
-) -> np.array:
+) -> np.ndarray:
 
     """converts tokens to numeric representation by dictionary"""
 
@@ -122,6 +121,52 @@ def load_data(path: str, fname: str, stop: int = None) -> list:
     return ls
 
 
+@dataclass
+class DataParser:
+    """wrapper class for handling datasets"""
+    df: pd.DataFrame
+    stop: int
+    max_len: int
+    data: str = "data"
+    labels: str = "target"
+    fpath: str = field(default="", init=True)
+    fname: str = field(default="", init=True)
+    dictionary: corpora.Dictionary = field(default=corpora.Dictionary())
+    text_col: str = "text"
+    label_col: str = "stars"
+    spath: str = "projects/yelp_nlp/data/yelp_data"
+
+    def __post_init__(self):
+        if self.fpath and self.fname:
+
+            df = pd.DataFrame(load_data(self.fpath, self.fname, self.stop))
+            logging.info("df loaded..")
+
+        if self.dictionary is None:
+            self.dictionary = corpora.Dictionary(df[self.text_col])
+            self.dictionary.filter_extremes(no_below=10, no_above=0.97, keep_n=5000)
+            self.dictionary.save(f"{os.path.expanduser('~')}/{self.spath}.dict")
+            logging.info("dictionary created...")
+    
+    def convert_sentences(self):
+        self.df[self.data] = self.df[self.text_col].map(
+            lambda x: text_sequencer(self.dictionary, x, self.max_len)
+        )
+        self.df[self.labels] = self.df[self.label_col].apply(convert_rating)
+        logging.info("converted tokens to numbers...")
+    
+    def save(self):        
+        self.df.to_parquet(f"{os.path.expanduser('~')}/{self.spath}.parquet", index=False)
+        logging.info(
+            f"file saved to {os.path.expanduser('~')}/{self.spath}.parquet"
+        )  # noqa: E501
+    
+    def get_data(self)-> pd.DataFrame:
+        return self.df.loc[
+            self.df[self.labels].dropna().index, [self.data, self.labels]
+        ].reset_index(drop=True)
+
+
 class CorpusData(Dataset):
 
     """Dataset class required for pytorch to output items by index"""
@@ -160,51 +205,6 @@ class CorpusData(Dataset):
         self.split_df()
         self.train = None
         self.val = None
-
-    def parse_data(
-        self,
-        stop: int,
-        max_len: int,
-        df: pd.DataFrame = None,
-        fpath: str = None,
-        fname: str = None,
-        text_col: str = "text",
-        label_col: str = "stars",
-        spath: str = "projects/yelp_nlp/data/yelp_data",
-    ) -> pd.DataFrame:
-
-        if fpath and fname:
-
-            df = pd.DataFrame(load_data(fpath, fname, stop))
-            logging.info("df loaded..")
-
-        if self.dict_yelp is None:
-
-            self.dict_yelp = corpora.Dictionary(df[text_col])
-            self.dict_yelp.filter_extremes(no_below=10, no_above=0.97, keep_n=5000)
-
-            self.dict_yelp.save(f"{os.path.expanduser('~')}/{spath}.dict")
-            logging.info("dictionary created...")
-
-        if fpath and fname:
-
-            df[self.data] = df[text_col].apply(
-                lambda x: text_sequencer(self.dict_yelp, x, max_len)
-            )
-
-            df[self.labels] = df[label_col].apply(convert_rating)
-
-            logging.info("converted tokens to numbers...")
-
-            df.to_parquet(f"{os.path.expanduser('~')}/{spath}.parquet", index=False)
-
-            logging.info(
-                f"file saved to {os.path.expanduser('~')}/{spath}.parquet"
-            )  # noqa: E501
-
-        return df.loc[
-            df[self.labels].dropna().index, [self.data, self.labels]
-        ].reset_index(drop=True)
 
     def set_mode(self, mode: str):
 
