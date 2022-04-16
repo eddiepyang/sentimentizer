@@ -11,18 +11,15 @@ import logging
 from gensim import corpora
 import os
 import re
+from yelp_nlp import root
 
 from torch.utils.data import Dataset
 from sklearn.model_selection import train_test_split
 
-logging.getLogger().setLevel(logging.INFO)
-logging.basicConfig(filename="data.log")
+from yelp_nlp.rnn.config import ParserConfig, FitModes
+from yelp_nlp.logging_utils import new_logger
 
-
-class FitModes(enum.Enum):
-    fitting = 0
-    training = 1
-    evaluation = 2
+logger = new_logger(20)
 
 
 def load_embeddings(
@@ -42,7 +39,7 @@ def load_embeddings(
             for line in z:
                 values = line.split()
                 embeddings_index[values[0].decode()] = np.asarray(
-                    values[1:], dtype="float32"
+                    values[1:], dtype=np.float32
                 )  # noqa: E501
 
     return embeddings_index
@@ -109,7 +106,7 @@ def text_sequencer(
     return processed
 
 
-def tokenize(x: str) -> list:
+def tokenize(x: str) -> List[str]:
     """regex tokenize, less accurate than spacy"""
     return re.findall(r"\w+", x.lower())
 
@@ -151,12 +148,12 @@ class DataParser:
     df: pd.DataFrame
     stop: int
     max_len: int
-    text_col: str = "text"
-    label_col: str = "stars"
-    x_labels: str = "data"
-    y_labels: str = "target"
-    spath: str = field(default="projects/yelp_nlp/data/yelp_data", init=True)
-    dictionary: corpora.Dictionary = field(default=None)
+    text_col: str = ParserConfig.text_col
+    label_col: str = ParserConfig.label_col
+    x_labels: str = ParserConfig.x_labels
+    y_labels: str = ParserConfig.y_labels
+    spath: str = field(default=ParserConfig.save_path, init=True)
+    dictionary: corpora.Dictionary = field(default=None)  # type: ignore
 
     def __post_init__(self):
 
@@ -167,11 +164,12 @@ class DataParser:
             logging.info("dictionary created...")
 
     def convert_sentences(self):
-        self.df[self.df] = self.df[self.text_col].map(
+        self.df[self.x_labels] = self.df[self.text_col].map(
             lambda x: text_sequencer(self.dictionary, x, self.max_len)
         )
         self.df[self.x_labels] = self.df[self.label_col].apply(convert_rating)
         logging.info("converted tokens to numbers...")
+        return self.df
 
     def save(self):
         _get_data(self.df, self.x_labels).to_parquet(
@@ -186,29 +184,25 @@ class DataParser:
 class CorpusDataset(Dataset):
     """Dataset class required for pytorch to output items by index"""
 
-    max_len: int
-    dictionary: corpora.Dictionary
-    data: DataParser
+    data: pd.DataFrame
     x_labels: str = field(default="data")
     y_labels: str = field(default="target")
-    mode: FitModes = FitModes.training
-    test_size: float = 0.20
 
     def _pre__init__(self):
 
         super().__init__()
 
-    def set_mode(self, mode: FitModes):
+    def set_mode(self, mode: FitModes):  # todo: may not need this
 
         if mode not in FitModes:
             raise ValueError("not an available mode")
         self.mode = mode
 
     def __len__(self):
-        return self.data.df.__len__()
+        return self.data.__len__()
 
     def __getitem__(self, i):
-        return self.data.df[self.x_labels].iat[i], self.data.df[self.y_labels][i]
+        return self.data[self.x_labels].iat[i], self.data[self.y_labels].iat[i]
 
     # @property
     # def train(self):

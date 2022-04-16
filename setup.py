@@ -2,10 +2,10 @@ from setuptools import setup, find_packages
 
 setup(
     name="yelp_nlp",
-    version="0.2",
+    version="0.3",
     packages=find_packages(),
     install_requires=[
-        "numpy",
+        "numpy>=1.18",
         "pandas",
         "torch",
         "seaborn",

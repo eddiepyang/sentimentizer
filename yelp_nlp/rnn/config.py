@@ -1,5 +1,12 @@
+import enum
 from torch import nn
 from dataclasses import dataclass
+
+
+class FitModes(enum.Enum):
+    fitting = 0
+    training = 1
+    evaluation = 2
 
 
 @dataclass
@@ -16,6 +23,15 @@ class SchedulerParams:
     T_max: int = 100
     eta_min: int = 0
     last_epoch: int = -1
+
+
+@dataclass(frozen=True)
+class ParserConfig:
+    text_col: str = "text"
+    label_col: str = "stars"
+    x_labels: str = "data"
+    y_labels: str = "target"
+    save_path: str = "projects/yelp_nlp/data/yelp_data"
 
 
 loss_function = nn.BCEWithLogitsLoss()
