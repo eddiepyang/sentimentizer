@@ -1,7 +1,7 @@
 import pytest
 import pandas as pd
 
-from yelp_nlp.rnn.data import tokenize
+from yelp_nlp.rnn.data import FitModes, tokenize
 
 
 @pytest.fixture
