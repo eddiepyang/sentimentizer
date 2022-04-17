@@ -2,40 +2,43 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from attr import define
 
+
+@define
 class RNN(nn.Module):
 
     """
     RNN model class
     """
 
-    # weights are vocabsize x embedding length
-    def __init__(
-        self,
-        emb_weights: torch.tensor,
-        batch_size: int,
-        input_len: int,
-        verbose: bool = False,
-    ):
+    emb_weights: torch.Tensor
+    batch_size: int
+    input_len: int
+    verbose: bool = False
+
+    def __pre_init__(self):
 
         super().__init__()
+
+    def _post_init__(self):
+        # weights are vocabsize x embedding length
         # vocab size in, hidden size out
-        self.batch_size = batch_size
-        self.embed_layer = nn.Embedding(emb_weights.shape[0], emb_weights.shape[1])
-        self.emb_weights = emb_weights
+        self.embed_layer = nn.Embedding(
+            self.emb_weights.shape[0], self.emb_weights.shape[1]
+        )
         # input of shape (seq_len, batch, input_size)
         # https://pytorch.org/docs/stable/nn.html
-        self.fc0 = nn.Linear(emb_weights.shape[1], emb_weights.shape[1])
-        self.lstm = nn.LSTM(input_len, input_len)
-        self.fc1 = nn.Linear(input_len, 1)
-        self.fc2 = nn.Linear(emb_weights.shape[1], 1)
-        self.verbose = verbose
+        self.fc0 = nn.Linear(self.emb_weights.shape[1], self.emb_weights.shape[1])
+        self.lstm = nn.LSTM(self.input_len, self.input_len)
+        self.fc1 = nn.Linear(self.input_len, 1)
+        self.fc2 = nn.Linear(self.emb_weights.shape[1], 1)
 
     def load_weights(self):
         self.embed_layer.load_state_dict({"weight": self.emb_weights})
         return self
 
-    def forward(self, inputs: torch.tensor, p: float = 0.2):
+    def forward(self, inputs: torch.Tensor, p: float = 0.2):
 
         embeds = self.embed_layer(inputs)
 

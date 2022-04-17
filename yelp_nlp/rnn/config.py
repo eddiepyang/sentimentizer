@@ -32,6 +32,20 @@ class ParserConfig:
     x_labels: str = "data"
     y_labels: str = "target"
     save_path: str = "projects/yelp_nlp/data/yelp_data"
+    stop: int = 10000
+    max_len: int = 200
+    dict_min: int = 10
+    dict_keep: int = 5000
+    no_above: float = 0.99
 
 
 loss_function = nn.BCEWithLogitsLoss()
+
+
+@dataclass
+class TrainerConfig:
+    batch_size: int
+    epochs: int
+    workers: int
+    device: str
+    memory: bool = True

@@ -19,7 +19,7 @@ from sklearn.model_selection import train_test_split
 from yelp_nlp.rnn.config import ParserConfig, FitModes
 from yelp_nlp.logging_utils import new_logger
 
-logger = new_logger(20)
+logger = new_logger(logging.INFO)
 
 
 def load_embeddings(
@@ -116,7 +116,7 @@ def load_data(path: str, fname: str, stop: int = 0) -> pd.DataFrame:
     ls = []
 
     with zipfile.ZipFile(os.path.join(os.path.expanduser("~"), path)) as zfile:
-        logging.info(f"archive contains the following: {zfile.namelist()}")
+        logger.info(f"archive contains the following: {zfile.namelist()}")
         inf = zfile.open(fname)
 
         with jsonl.Reader(inf) as file:
@@ -137,8 +137,8 @@ def split_df(
     return df.iloc[tr_idx], df.iloc[val_idx]  # type: ignore
 
 
-def _get_data(df, x_labels) -> pd.DataFrame:
-    return df.loc[:, x_labels].reset_index(drop=True)
+def _get_data(df, columns) -> pd.DataFrame:
+    return df.loc[:, columns].reset_index(drop=True)
 
 
 @dataclass
@@ -146,37 +146,35 @@ class DataParser:
     """wrapper class for handling datasets"""
 
     df: pd.DataFrame
-    stop: int
-    max_len: int
-    text_col: str = ParserConfig.text_col
-    label_col: str = ParserConfig.label_col
-    x_labels: str = ParserConfig.x_labels
-    y_labels: str = ParserConfig.y_labels
-    spath: str = field(default=ParserConfig.save_path, init=True)
+    cfg: ParserConfig
     dictionary: corpora.Dictionary = field(default=None)  # type: ignore
 
     def __post_init__(self):
 
         if self.dictionary is None:
-            self.dictionary = corpora.Dictionary(self.df[self.text_col])
-            self.dictionary.filter_extremes(no_below=10, no_above=0.97, keep_n=5000)
-            self.dictionary.save(f"{os.path.expanduser('~')}/{self.spath}.dict")
-            logging.info("dictionary created...")
+            self.dictionary = corpora.Dictionary(self.df[self.cfg.text_col])
+            self.dictionary.filter_extremes(
+                no_below=self.cfg.dict_min,
+                no_above=self.cfg.no_above,
+                keep_n=self.cfg.dict_keep,
+            )
+            self.dictionary.save(f"{os.path.expanduser('~')}/{self.cfg.save_path}.dict")
+            logger.info("dictionary created...")
 
     def convert_sentences(self):
-        self.df[self.x_labels] = self.df[self.text_col].map(
-            lambda x: text_sequencer(self.dictionary, x, self.max_len)
+        self.df[self.cfg.x_labels] = self.df[self.cfg.text_col].map(
+            lambda x: text_sequencer(self.dictionary, x, self.cfg.max_len)
         )
-        self.df[self.x_labels] = self.df[self.label_col].apply(convert_rating)
-        logging.info("converted tokens to numbers...")
+        self.df[self.cfg.x_labels] = self.df[self.cfg.label_col].map(convert_rating)
+        logger.info("converted tokens to numbers...")
         return self.df
 
     def save(self):
-        _get_data(self.df, self.x_labels).to_parquet(
-            f"{os.path.expanduser('~')}/{self.spath}.parquet", index=False
+        _get_data(self.df, [self.cfg.x_labels] + [self.cfg.y_labels]).to_parquet(
+            f"{os.path.expanduser('~')}/{self.cfg.save_path}.parquet", index=False
         )
-        logging.info(
-            f"file saved to {os.path.expanduser('~')}/{self.spath}.parquet"
+        logger.info(
+            f"file saved to {os.path.expanduser('~')}/{self.cfg.save_path}.parquet"
         )  # noqa: E501
 
 
