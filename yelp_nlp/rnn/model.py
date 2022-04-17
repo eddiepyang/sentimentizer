@@ -35,7 +35,7 @@ class RNN(nn.Module):
         self.fc2 = nn.Linear(self.emb_weights.shape[1], 1)
 
     def load_weights(self):
-        self.embed_layer.load_state_dict({"weight": self.emb_weights})
+        self.embed_layer.load_state_dict({"weight": self.emb_weights})  # type: ignore
         return self
 
     def forward(self, inputs: torch.Tensor, p: float = 0.2):
