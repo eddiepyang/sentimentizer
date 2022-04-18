@@ -1,3 +1,5 @@
+import unittest
+from unittest.mock import Mock
 import pytest
 import pandas as pd
 
@@ -17,8 +19,37 @@ from yelp_nlp import root
 def mock_df() -> pd.DataFrame:
     return pd.DataFrame(
         {
-            "text": [("the chicken never showed up"), ("the food was terrific")],
+            "text": [
+                "the chicken never showed up".split(),
+                "the food was terrific".split(),
+            ],
             "stars": [2, 5],
+        }
+    )
+
+
+@pytest.fixture
+def raw_df() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "text": [
+                "the chicken never showed up",
+                "the food was terrific",
+            ],
+            "stars": [2, 5],
+        }
+    )
+
+
+@pytest.fixture
+def finished_df() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "data": [
+                (1, 2, 3, 4, 5, 6),
+                (5, 6, 7, 7, 8, 19),
+            ],
+            "target": [2, 5],
         }
     )
 
@@ -35,9 +66,9 @@ def test_convert_rating():
     assert convert_rating(3) == -1
 
 
-def test_tokenize(mock_df):
+def test_tokenize(raw_df):
 
-    output = tokenize(mock_df.text[0])
+    output = tokenize(raw_df.text[0])
 
     for item in output:
         assert isinstance(item, str)
@@ -46,7 +77,7 @@ def test_tokenize(mock_df):
 
 
 class TestLoadData:
-    fpath = f"{root}/tests/test_data/archive.zip"
+    fpath = f"{root}/yelp_nlp/tests/test_data/archive.zip"
     fname = "artificial-reviews.jsonl"
 
     def test_success(self):
@@ -61,11 +92,12 @@ class TestLoadData:
 
 
 class TestDataParser:
+    mock_dictionary = Mock()
+
     def test_success(self, mock_df):
         parser = DataParser(mock_df)
         parser.convert_sentences()
-        assert parser.df.shape
-        assert parser.df.columns
+        assert parser.df.shape == (2, 4)
 
     def test_failure(self):
         # todo
@@ -73,8 +105,8 @@ class TestDataParser:
 
 
 class TestCorpusDataset:
-    def test_success(self, mock_df):
-        dataset = CorpusDataset(mock_df, "text", "stars")
-
-        assert len(dataset[1]) == 2
+    def test_success(self, finished_df):
+        dataset = CorpusDataset(finished_df)
+        item = dataset[1]
+        assert len(item) == 2
         assert len(dataset) == 2
