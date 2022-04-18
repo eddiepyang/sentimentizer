@@ -13,18 +13,18 @@ import os
 import re
 from yelp_nlp import root
 
+import torch
 from torch.utils.data import Dataset
 from sklearn.model_selection import train_test_split
 
 from yelp_nlp.rnn.config import ParserConfig, FitModes
-from yelp_nlp.logging_utils import new_logger
+from yelp_nlp.logging_utils import new_logger, time_decorator
 
 logger = new_logger(logging.INFO)
 
 
 def load_embeddings(
     emb_path: str,
-    emb_file: str = "glove.6B.zip",
     emb_subfile: str = "glove.6B.100d.txt",
 ) -> dict:
 
@@ -32,9 +32,7 @@ def load_embeddings(
 
     embeddings_index = {}
 
-    with zipfile.ZipFile(
-        os.path.join(os.path.expanduser("~"), emb_path, emb_file), "r"
-    ) as f:
+    with zipfile.ZipFile(emb_path, "r") as f:
         with f.open(emb_subfile, "r") as z:
             for line in z:
                 values = line.split()
@@ -111,13 +109,13 @@ def tokenize(x: str) -> List[str]:
     return re.findall(r"\w+", x.lower())
 
 
-def load_data(path: str, fname: str, stop: int = 0) -> pd.DataFrame:
+def load_data(file_path: str, compressed_file_name: str, stop: int = 0) -> pd.DataFrame:
     "reads from zipped yelp data file"
     ls = []
 
-    with zipfile.ZipFile(os.path.join(os.path.expanduser("~"), path)) as zfile:
+    with zipfile.ZipFile(file_path) as zfile:
         logger.info(f"archive contains the following: {zfile.namelist()}")
-        inf = zfile.open(fname)
+        inf = zfile.open(compressed_file_name)
 
         with jsonl.Reader(inf) as file:
             for i, line in enumerate(file):
@@ -145,10 +143,11 @@ def _get_data(df, columns) -> pd.DataFrame:
 class DataParser:
     """wrapper class for handling datasets"""
 
-    df: pd.DataFrame
-    cfg: ParserConfig
+    df: pd.DataFrame = field(repr=False)
+    cfg: ParserConfig = field(default=ParserConfig())
     dictionary: corpora.Dictionary = field(default=None)  # type: ignore
 
+    @time_decorator
     def __post_init__(self):
 
         if self.dictionary is None:
@@ -158,24 +157,23 @@ class DataParser:
                 no_above=self.cfg.no_above,
                 keep_n=self.cfg.dict_keep,
             )
-            self.dictionary.save(f"{os.path.expanduser('~')}/{self.cfg.save_path}.dict")
+            self.dictionary.save(f"{self.cfg.dictionary_save_path}")
             logger.info("dictionary created...")
 
+    @time_decorator
     def convert_sentences(self):
         self.df[self.cfg.x_labels] = self.df[self.cfg.text_col].map(
             lambda x: text_sequencer(self.dictionary, x, self.cfg.max_len)
         )
-        self.df[self.cfg.x_labels] = self.df[self.cfg.label_col].map(convert_rating)
+        self.df[self.cfg.y_labels] = self.df[self.cfg.label_col].map(convert_rating)
         logger.info("converted tokens to numbers...")
-        return self.df
+        return self
 
     def save(self):
         _get_data(self.df, [self.cfg.x_labels] + [self.cfg.y_labels]).to_parquet(
-            f"{os.path.expanduser('~')}/{self.cfg.save_path}.parquet", index=False
+            f"{self.cfg.data_save_path}", index=False
         )
-        logger.info(
-            f"file saved to {os.path.expanduser('~')}/{self.cfg.save_path}.parquet"
-        )  # noqa: E501
+        logger.info(f"file saved to {self.cfg.data_save_path}")  # noqa: E501
 
 
 @define
@@ -183,10 +181,10 @@ class CorpusDataset(Dataset):
     """Dataset class required for pytorch to output items by index"""
 
     data: pd.DataFrame
-    x_labels: str = field(default="data")
-    y_labels: str = field(default="target")
+    x_labels: str = "data"
+    y_labels: str = "target"
 
-    def _pre__init__(self):
+    def __attr_pre__init__(self):
 
         super().__init__()
 
@@ -200,20 +198,15 @@ class CorpusDataset(Dataset):
         return self.data.__len__()
 
     def __getitem__(self, i):
-        return self.data[self.x_labels].iat[i], self.data[self.y_labels].iat[i]
+        return torch.tensor(self.data[self.x_labels].iat[i]), torch.tensor(
+            self.data[self.y_labels].iat[i]
+        )
 
-    # @property
-    # def train(self):
-    #     return self._train
 
-    # @train.setter
-    # def train(self, value):
-    #     self._train = self.data.df.iloc[self.tr_idx]
+def new_train_val_datasets(
+    data_path: str, test_size=0.2
+) -> Tuple[CorpusDataset, CorpusDataset]:
 
-    # @property
-    # def val(self):
-    #     return self._val
-
-    # @val.setter
-    # def val(self, value):
-    #     self._val = self.data.df.iloc[self.val_idx]
+    df = pd.read_parquet(data_path)
+    train_df, val_df = split_df(df, test_size=test_size)
+    return CorpusDataset(data=train_df), CorpusDataset(val_df)
