@@ -1,3 +1,7 @@
+from dataclasses import dataclass, field
+import enum
+from attr import define
+from typing import List, Tuple
 import numpy as np
 import pandas as pd
 import jsonlines as jsonl
@@ -7,17 +11,20 @@ import logging
 from gensim import corpora
 import os
 import re
+from yelp_nlp import root
 
+import torch
 from torch.utils.data import Dataset
 from sklearn.model_selection import train_test_split
 
-logging.getLogger().setLevel(logging.INFO)
-logging.basicConfig(filename="data.log")
+from yelp_nlp.rnn.config import ParserConfig, FitModes
+from yelp_nlp.logging_utils import new_logger, time_decorator
+
+logger = new_logger(logging.INFO)
 
 
 def load_embeddings(
     emb_path: str,
-    emb_file: str = "glove.6B.zip",
     emb_subfile: str = "glove.6B.100d.txt",
 ) -> dict:
 
@@ -25,14 +32,12 @@ def load_embeddings(
 
     embeddings_index = {}
 
-    with zipfile.ZipFile(
-        os.path.join(os.path.expanduser("~"), emb_path, emb_file), "r"
-    ) as f:
+    with zipfile.ZipFile(emb_path, "r") as f:
         with f.open(emb_subfile, "r") as z:
             for line in z:
                 values = line.split()
                 embeddings_index[values[0].decode()] = np.asarray(
-                    values[1:], dtype="float32"
+                    values[1:], dtype=np.float32
                 )  # noqa: E501
 
     return embeddings_index
@@ -40,7 +45,7 @@ def load_embeddings(
 
 def id_to_glove(
     dictionary: corpora.Dictionary, emb_path: str, emb_n: int = 100
-) -> np.array:
+) -> np.ndarray:
 
     """converts local dictionary to embeddings from glove"""
 
@@ -48,27 +53,25 @@ def id_to_glove(
     conversion_table = {}
 
     for word in dictionary.values():
-
         if word in embeddings_index:
             conversion_table[dictionary.token2id[word] + 1] = embeddings_index[word]
         else:
             conversion_table[dictionary.token2id[word] + 1] = np.random.normal(
                 0, 0.32, emb_n
             )
-
     return np.vstack(
         (np.zeros(emb_n), list(conversion_table.values()), np.random.randn(emb_n))
     )
 
 
 def convert_rating(rating: int) -> float:
-
     """scaling ratings from 0 to 1"""
-
     if rating in [4, 5]:
         return 1.0
     elif rating in [1, 2]:
         return 0.0
+    else:
+        return -1.0
 
 
 def convert_rating_linear(rating: int, max_rating: int) -> float:
@@ -79,7 +82,7 @@ def convert_rating_linear(rating: int, max_rating: int) -> float:
 
 def text_sequencer(
     dictionary: corpora.Dictionary, text: list, max_len: int = 200
-) -> np.array:
+) -> np.ndarray:
 
     """converts tokens to numeric representation by dictionary"""
 
@@ -101,154 +104,109 @@ def text_sequencer(
     return processed
 
 
-# regex tokenize, less accurate than spacy
-def tokenize(x: str) -> list:
+def tokenize(x: str) -> List[str]:
+    """regex tokenize, less accurate than spacy"""
     return re.findall(r"\w+", x.lower())
 
 
-def load_data(path: str, fname: str, stop: int = None) -> list:
+def load_data(file_path: str, compressed_file_name: str, stop: int = 0) -> pd.DataFrame:
     "reads from zipped yelp data file"
     ls = []
 
-    with zipfile.ZipFile(os.path.join(os.path.expanduser("~"), path)) as zfile:
-        logging.info(f"archive contains the following: {zfile.namelist()}")
-        inf = zfile.open(fname)
+    with zipfile.ZipFile(file_path) as zfile:
+        logger.info(f"archive contains the following: {zfile.namelist()}")
+        inf = zfile.open(compressed_file_name)
+
         with jsonl.Reader(inf) as file:
             for i, line in enumerate(file):
                 line["text"] = tokenize(line.get("text"))
                 ls.append(line)
-                if stop and i == stop - 1:
+                if i == stop - 1:
                     break
-    return ls
+
+    return pd.DataFrame(ls)
 
 
-class CorpusData(Dataset):
+def split_df(
+    df: pd.DataFrame, test_size: float = 0.25
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
+    tr_idx, val_idx = train_test_split(df.index.values, test_size=test_size)
+    return df.iloc[tr_idx], df.iloc[val_idx]  # type: ignore
+
+
+def _get_data(df, columns) -> pd.DataFrame:
+    return df.loc[:, columns].reset_index(drop=True)
+
+
+@dataclass
+class DataParser:
+    """wrapper class for handling datasets"""
+
+    df: pd.DataFrame = field(repr=False)
+    cfg: ParserConfig = field(default=ParserConfig())
+    dictionary: corpora.Dictionary = field(default=None)  # type: ignore
+
+    @time_decorator
+    def __post_init__(self):
+
+        if self.dictionary is None:
+            self.dictionary = corpora.Dictionary(self.df[self.cfg.text_col])
+            self.dictionary.filter_extremes(
+                no_below=self.cfg.dict_min,
+                no_above=self.cfg.no_above,
+                keep_n=self.cfg.dict_keep,
+            )
+            self.dictionary.save(f"{self.cfg.dictionary_save_path}")
+            logger.info("dictionary created...")
+
+    @time_decorator
+    def convert_sentences(self):
+        self.df[self.cfg.x_labels] = self.df[self.cfg.text_col].map(
+            lambda x: text_sequencer(self.dictionary, x, self.cfg.max_len)
+        )
+        self.df[self.cfg.y_labels] = self.df[self.cfg.label_col].map(convert_rating)
+        logger.info("converted tokens to numbers...")
+        return self
+
+    def save(self):
+        _get_data(self.df, [self.cfg.x_labels] + [self.cfg.y_labels]).to_parquet(
+            f"{self.cfg.data_save_path}", index=False
+        )
+        logger.info(f"file saved to {self.cfg.data_save_path}")  # noqa: E501
+
+
+@define
+class CorpusDataset(Dataset):
     """Dataset class required for pytorch to output items by index"""
 
-    def __init__(
-        self,
-        max_len: int,
-        dictionary: corpora.Dictionary = None,
-        stop: int = None,
-        data: str = "data",
-        labels: str = "target",
-        mode: str = "training",
-        fpath: str = None,
-        fname: str = None,
-        df: pd.DataFrame = None,
-        test_size=0.20,
-    ):
+    data: pd.DataFrame
+    x_labels: str = "data"
+    y_labels: str = "target"
+
+    def __attr_pre__init__(self):
 
         super().__init__()
-        self.fpath = fpath
-        self.fname = fname
-        self.stop = stop
-        self.data = data
-        self.labels = labels
-        self.mode = mode
-        if dictionary:
-            self.dict_yelp = dictionary
-        else:
-            self.dict_yelp = None
-        self.df: pd.DataFrame = self.parse_data(
-            fpath=fpath, fname=fname, df=df, stop=stop, max_len=max_len
-        )
-        self.test_size = test_size
-        self.tr_idx: list = None
-        self.val_idx: list = None
-        self.split_df()
-        self.train = None
-        self.val = None
 
-    def parse_data(
-        self,
-        stop: int,
-        max_len: int,
-        df: pd.DataFrame = None,
-        fpath: str = None,
-        fname: str = None,
-        text_col: str = "text",
-        label_col: str = "stars",
-        spath: str = "projects/yelp_nlp/data/yelp_data",
-    ) -> pd.DataFrame:
+    def set_mode(self, mode: FitModes):  # todo: may not need this
 
-        if fpath and fname:
-
-            df = pd.DataFrame(load_data(fpath, fname, stop))
-            logging.info("df loaded..")
-
-        if self.dict_yelp is None:
-
-            self.dict_yelp = corpora.Dictionary(df[text_col])
-            self.dict_yelp.filter_extremes(no_below=10, no_above=0.97, keep_n=5000)
-
-            self.dict_yelp.save(f"{os.path.expanduser('~')}/{spath}.dict")
-            logging.info("dictionary created...")
-
-        if fpath and fname:
-
-            df[self.data] = df[text_col].apply(
-                lambda x: text_sequencer(self.dict_yelp, x, max_len)
-            )
-
-            df[self.labels] = df[label_col].apply(convert_rating)
-
-            logging.info("converted tokens to numbers...")
-
-            df.to_parquet(f"{os.path.expanduser('~')}/{spath}.parquet", index=False)
-
-            logging.info(
-                f"file saved to {os.path.expanduser('~')}/{spath}.parquet"
-            )  # noqa: E501
-
-        return df.loc[
-            df[self.labels].dropna().index, [self.data, self.labels]
-        ].reset_index(drop=True)
-
-    def set_mode(self, mode: str):
-
-        if mode not in ["fitting", "training", "eval"]:
+        if mode not in FitModes:
             raise ValueError("not an available mode")
-
         self.mode = mode
 
     def __len__(self):
-
-        if self.mode == "fitting":
-            return self.df.__len__()
-        if self.mode == "training":
-            return self.train.__len__()
-        if self.mode == "eval":
-            return self.val.__len__()
+        return self.data.__len__()
 
     def __getitem__(self, i):
-        if self.mode == "fitting":
-            return self.df[self.data].iat[i], self.df[self.labels][i]
-        elif self.mode == "training":
-            return self.train[self.data].iat[i], self.train[self.labels].iat[i]
-        elif self.mode == "eval":
-            return self.val[self.data].iat[i], self.val[self.labels].iat[i]
-
-    def split_df(self):
-
-        self.tr_idx, self.val_idx = train_test_split(
-            self.df.index.values, test_size=self.test_size
+        return torch.tensor(self.data[self.x_labels].iat[i]), torch.tensor(
+            self.data[self.y_labels].iat[i]
         )
-        return self
 
-    @property
-    def train(self):
-        return self._train
 
-    @train.setter
-    def train(self, value):
-        self._train = self.df.iloc[self.tr_idx]
+def new_train_val_datasets(
+    data_path: str, test_size=0.2
+) -> Tuple[CorpusDataset, CorpusDataset]:
 
-    @property
-    def val(self):
-        return self._val
-
-    @val.setter
-    def val(self, value):
-        self._val = self.df.iloc[self.val_idx]
+    df = pd.read_parquet(data_path)
+    train_df, val_df = split_df(df, test_size=test_size)
+    return CorpusDataset(data=train_df), CorpusDataset(val_df)

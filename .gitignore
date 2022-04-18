@@ -19,3 +19,4 @@ src/__pycache__/*
 
 /data/*
 yelp_nlp/rnn/train.py
+vendor
