@@ -32,7 +32,7 @@ class Trainer:
             self.optimizer.zero_grad()
             sent, labels = sent.long().to(self.device), target.float().to(self.device)
             log_probs = model(sent)
-            loss = self.loss_function(log_probs, labels.to(device))
+            loss = self.loss_function(log_probs, labels.to(self.device))
 
             # gets graident
             loss.backward()
@@ -47,7 +47,7 @@ class Trainer:
 
             i += len(labels)
             self.losses.append(loss.item())
-            if i % (batch_size * 100) == 0:
+            if i % (self.batch_size * 100) == 0:
                 print(
                     f"""{i/n:.2f} of rows completed in {j+1} cycles, current loss at {np.mean(self.losses[-30:]):.4f}"""
                 )  # noqa: E501
