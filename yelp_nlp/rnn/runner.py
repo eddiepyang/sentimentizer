@@ -1,3 +1,4 @@
+from typing import Tuple
 import pandas as pd
 import os
 import argparse
@@ -5,12 +6,12 @@ import argparse
 import torch
 from gensim import corpora
 
-from yelp_nlp.rnn.data import CorpusDataset, id_to_glove
-from yelp_nlp.rnn.train import Trainer
-from yelp_nlp.rnn.model import RNN
+from yelp_nlp.rnn.data import new_train_val_datasets
+from yelp_nlp.rnn.train import Trainer, new_trainer
+from yelp_nlp.rnn.model import RNN, new_model
 from yelp_nlp.logging_utils import new_logger, time_decorator
 
-from yelp_nlp.rnn.config import OptParams, SchedulerParams, TrainerConfig, loss_function
+from yelp_nlp.rnn.config import OptimizationParams, SchedulerParams, TrainerConfig
 
 logger = new_logger(20)
 
@@ -53,39 +54,20 @@ def main(
 
     args = parser.parse_args()
 
-    df = pd.read_parquet(df_path)  # noqa: E501
-    dataset = CorpusDataset(data=df)
+    train_dataset, val_dataset = new_train_val_datasets(args.abs_path)
 
-    dict_yelp = corpora.Dictionary.load(args.abs_path)
-    embedding_matrix = id_to_glove(dict_yelp, args.abs_path)
-    emb_t = torch.from_numpy(embedding_matrix)
-
-    model = RNN(emb_weights=emb_t, batch_size=args.batch_size, input_len=args.input_len)
-
-    model.load_weights()
-
-    params = OptParams()
-
-    optimizer = torch.optim.Adam(
-        model.parameters(),
-        lr=params.lr,
-        betas=params.betas,
-        weight_decay=params.weight_decay,
+    model = new_model(
+        dict_path=args.abs_path,
+        embedding_path=args.embedding_path,
+        batch_size=args.batch_size,
+        input_len=args.input_len,
     )
 
-    sp = SchedulerParams()
-
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=sp.T_max, eta_min=sp.eta_min, last_epoch=sp.last_epoch
-    )
-
-    trainer = Trainer(
-        loss_function=loss_function,
-        optimizer=optimizer,
-        scheduler=scheduler,
-        train_data=dataset,
-        val_data=dataset,
-        cfg=TrainerConfig,
+    trainer = new_trainer(
+        model=model,
+        train_dataset=train_dataset,
+        val_dataset=val_dataset,
+        cfg=TrainerConfig(),
     )
 
     trainer.fit(model)

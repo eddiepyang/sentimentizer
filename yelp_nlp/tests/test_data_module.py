@@ -25,7 +25,7 @@ def mock_df() -> pd.DataFrame:
 
 @pytest.fixture
 def mock_parser(mock_df) -> DataParser:
-    return DataParser(mock_df, 10, 200)
+    return DataParser(mock_df)
 
 
 def test_convert_rating():
@@ -50,7 +50,7 @@ class TestLoadData:
     fname = "artificial-reviews.jsonl"
 
     def test_success(self):
-        df = load_data(fname=self.fname, path=self.fpath)
+        df = load_data(compressed_file_name=self.fname, file_path=self.fpath)
         assert df.shape == (2, 2)
         print(df.columns)
         assert df.columns.tolist() == ["text", "stars"]
@@ -62,9 +62,10 @@ class TestLoadData:
 
 class TestDataParser:
     def test_success(self, mock_df):
-        parser = DataParser(mock_df, 10, 200)
-        df = parser.convert_sentences()
-        print(df.shape, df.columns)
+        parser = DataParser(mock_df)
+        parser.convert_sentences()
+        assert parser.df.shape
+        assert parser.df.columns
 
     def test_failure(self):
         # todo

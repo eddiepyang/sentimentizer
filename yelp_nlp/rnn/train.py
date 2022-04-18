@@ -1,10 +1,9 @@
 import logging
 from typing import Callable, List
-import os
 import time
 import numpy as np
 import pandas as pd
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field
 
 import torch
 from torch import optim
@@ -13,10 +12,31 @@ from torch.utils.data import DataLoader
 from yelp_nlp.logging_utils import new_logger
 from yelp_nlp.rnn.data import CorpusDataset
 from yelp_nlp.rnn.model import RNN
-from yelp_nlp.rnn.config import TrainerConfig
+from yelp_nlp.rnn.config import TrainerConfig, OptimizationParams, SchedulerParams
 
 
 logger = new_logger(logging.INFO)
+
+
+def _new_loaders(
+    train_data: CorpusDataset, val_data: CorpusDataset, cfg: TrainerConfig
+):
+
+    train_loader = DataLoader(
+        dataset=train_data,
+        batch_size=cfg.batch_size,
+        num_workers=cfg.workers,
+        pin_memory=cfg.memory,
+    )
+
+    val_loader = DataLoader(
+        val_data,
+        batch_size=cfg.batch_size,
+        num_workers=cfg.workers,
+        pin_memory=cfg.memory,
+    )
+
+    return train_loader, val_loader
 
 
 @dataclass
@@ -31,39 +51,17 @@ class Trainer:
     train_data: CorpusDataset
     val_data: CorpusDataset
     cfg: TrainerConfig
-    losses: List[float] = []
+    losses: List[float] = field(default_factory=lambda: list())
     _mode: str = field(default="training")
 
-    def _post__init__(
-        self,
-    ):
-
-        self._create_loaders()
-
-    def _create_loaders(self):
-
-        self.train_loader = DataLoader(
-            dataset=self.train_data,
-            batch_size=self.cfg.batch_size,
-            num_workers=self.cfg.workers,
-            pin_memory=self.cfg.memory,
-        )
-
-        self.val_loader = DataLoader(
-            self.val_data,
-            batch_size=self.cfg.batch_size,
-            num_workers=self.cfg.workers,
-            pin_memory=self.cfg.memory,
-        )
-
-    def _train_epoch(self, model):
+    def _train_epoch(self, model: RNN, train_loader: DataLoader):
 
         self.train_data
         i = 0
         n = len(self.train_data)
         model.train()
 
-        for j, (sent, target) in enumerate(self.train_loader):
+        for j, (sent, target) in enumerate(train_loader):
 
             self.optimizer.zero_grad()
 
@@ -96,29 +94,27 @@ class Trainer:
                     f"current learning rate at {self.optimizer.param_groups[0]['lr']:.6f}"
                 )  # noqa: E501
 
-    def fit(self, model: torch.nn.Module):
-
+    def fit(self, model: RNN):
+        train_loader, val_loader = _new_loaders(
+            self.train_data, self.val_data, self.cfg
+        )
         model.to(self.cfg.device)
         start = time.time()
         epoch_count = 0
-
         logger.info("fitting model...")
 
         for epoch in range(self.cfg.epochs):
-
-            self._train_epoch(model)
-            self.eval(model)
+            self._train_epoch(model, train_loader)
+            self.eval(model, val_loader)
             epoch_count += 1
-
             if self.scheduler:
                 self.scheduler.step()
-
             logger.info(f"epoch {epoch_count} completed")
         logger.info(
             f"model fitting completed, {time.time()-start:.0f} seconds passed"
         )  # noqa: E501
 
-    def eval(self, model: torch.nn.Module):
+    def eval(self, model: RNN, val_loader: DataLoader):
 
         logger.info("evaluating predictions...")
         losses = []
@@ -127,19 +123,14 @@ class Trainer:
         model.to(self.cfg.device)
 
         with torch.no_grad():
-
             model.eval()
-
-            for j, (sent, target) in enumerate(self.val_loader):
-
+            for j, (sent, target) in enumerate(val_loader):
                 preds = model(sent.to(self.cfg.device))
-
                 losses.append(
                     np.mean(
                         self.loss_function(preds, target.to(self.cfg.device)).item()
                     )
                 )
-
                 i += len(target)
                 if i % (self.cfg.batch_size * 100) == 0:
                     logger.info(
@@ -147,3 +138,36 @@ class Trainer:
                     )  # noqa: E501
             self.val_loss = np.mean(losses)
             logger.info(f"validation loss at: {self.val_loss: .6f}")
+
+
+def new_trainer(
+    model: RNN,
+    train_dataset: CorpusDataset,
+    val_dataset: CorpusDataset,
+    cfg: TrainerConfig,
+):
+
+    optimizer = torch.optim.Adam(
+        model.parameters(),
+        lr=OptimizationParams.lr,
+        betas=OptimizationParams.betas,
+        weight_decay=OptimizationParams.weight_decay,
+    )
+
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=SchedulerParams.T_max,
+        eta_min=SchedulerParams.eta_min,
+        last_epoch=SchedulerParams.last_epoch,
+    )
+
+    trainer = Trainer(
+        loss_function=torch.nn.BCEWithLogitsLoss(),
+        optimizer=optimizer,
+        scheduler=scheduler,
+        train_data=train_dataset,
+        val_data=val_dataset,
+        cfg=cfg,
+    )
+
+    return trainer

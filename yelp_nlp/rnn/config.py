@@ -1,6 +1,8 @@
 import enum
+from typing import Tuple
 from torch import nn
 from dataclasses import dataclass
+from yelp_nlp import root
 
 
 class FitModes(enum.Enum):
@@ -10,10 +12,9 @@ class FitModes(enum.Enum):
 
 
 @dataclass
-class OptParams:
-
+class OptimizationParams:
     lr: float = 0.005
-    betas: tuple = (0.7, 0.99)
+    betas: Tuple[float, float] = (0.7, 0.99)
     weight_decay: float = 1e-4
 
 
@@ -25,13 +26,14 @@ class SchedulerParams:
     last_epoch: int = -1
 
 
-@dataclass(frozen=True)
+@dataclass
 class ParserConfig:
+    dictionary_save_path: str = f"{root}/data/yelp_data.dictionary"
+    data_save_path: str = f"{root}/data/review_data.parquet"
     text_col: str = "text"
     label_col: str = "stars"
     x_labels: str = "data"
     y_labels: str = "target"
-    save_path: str = "projects/yelp_nlp/data/yelp_data"
     stop: int = 10000
     max_len: int = 200
     dict_min: int = 10
@@ -39,13 +41,31 @@ class ParserConfig:
     no_above: float = 0.99
 
 
-loss_function = nn.BCEWithLogitsLoss()
+@dataclass(frozen=True)
+class FileConfig:
+    archive_path: str = f"{root}/data/archive.zip"
+    review_filename: str = "yelp_academic_dataset_review.json"
 
 
 @dataclass
 class TrainerConfig:
-    batch_size: int
-    epochs: int
-    workers: int
-    device: str
+    batch_size: int = 256
+    epochs: int = 4
+    workers: int = 6
+    device: str = "cpu"
     memory: bool = True
+
+
+@dataclass
+class EmbeddingsConfig:
+    emb_path: str = f"{root}/data/glove.6B.zip"
+    emb_file: str = "glove.6B.zip"
+    emb_subfile: str = "glove.6B.100d.txt"
+
+
+@dataclass
+class RunnerConfig:
+    data_path: str = f"{root}/data/review_data.parquet"
+    dictionary_path: str = f"{root}/data/yelp_data.dictionary"
+    embeddings: EmbeddingsConfig = EmbeddingsConfig()
+    parser: ParserConfig = ParserConfig()
