@@ -2,7 +2,7 @@ import os
 import argparse
 import torch
 
-from yelp_nlp.rnn.load import new_train_val_datasets
+from yelp_nlp.rnn.loader import new_train_val_datasets
 from yelp_nlp.rnn.train import new_trainer
 from yelp_nlp.rnn.model import new_model
 from yelp_nlp.logging_utils import new_logger, time_decorator
