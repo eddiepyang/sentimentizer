@@ -3,10 +3,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from gensim import corpora
-from yelp_nlp.rnn.data import id_to_glove
+from yelp_nlp.rnn.extract import id_to_glove
 from yelp_nlp.logging_utils import new_logger
+from yelp_nlp.rnn.config import LogLevels
 
-logger = new_logger()
+logger = new_logger(LogLevels.debug.value)
 
 
 class RNN(nn.Module):
