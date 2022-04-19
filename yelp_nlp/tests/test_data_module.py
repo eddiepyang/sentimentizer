@@ -1,13 +1,11 @@
 import pytest
 import pandas as pd
 
-from yelp_nlp.rnn.data import (
-    CorpusDataset,
+from yelp_nlp.rnn.load import CorpusDataset
+from yelp_nlp.rnn.transform import (
     DataParser,
-    FitModes,
     tokenize,
     load_data,
-    load_embeddings,
     convert_rating,
 )
 from yelp_nlp import root

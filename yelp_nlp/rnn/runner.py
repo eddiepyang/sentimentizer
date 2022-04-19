@@ -1,26 +1,20 @@
-from typing import Tuple
-import pandas as pd
 import os
 import argparse
-
 import torch
-from gensim import corpora
 
-from yelp_nlp.rnn.data import new_train_val_datasets
-from yelp_nlp.rnn.train import Trainer, new_trainer
-from yelp_nlp.rnn.model import RNN, new_model
+from yelp_nlp.rnn.load import new_train_val_datasets
+from yelp_nlp.rnn.train import new_trainer
+from yelp_nlp.rnn.model import new_model
 from yelp_nlp.logging_utils import new_logger, time_decorator
 
-from yelp_nlp.rnn.config import OptimizationParams, SchedulerParams, TrainerConfig
+from yelp_nlp.rnn.config import TrainerConfig
+from yelp_nlp.rnn.config import LogLevels
 
-logger = new_logger(20)
+logger = new_logger(LogLevels.debug.value)
 
 
 @time_decorator
-def main(
-    df_path=None,
-    dictionary_path=None,
-):
+def main():
 
     parser = argparse.ArgumentParser()
 

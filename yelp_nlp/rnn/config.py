@@ -3,6 +3,16 @@ from typing import Tuple
 from torch import nn
 from dataclasses import dataclass
 from yelp_nlp import root
+from logging import NOTSET, DEBUG, INFO, WARN, ERROR, CRITICAL
+
+
+class LogLevels(enum.Enum):
+    unset = NOTSET
+    debug = DEBUG
+    info = INFO
+    warn = WARN
+    error = ERROR
+    critical = CRITICAL
 
 
 class FitModes(enum.Enum):
