@@ -1,7 +1,7 @@
 import pytest
 import pandas as pd
 
-from yelp_nlp.rnn.load import CorpusDataset
+from yelp_nlp.rnn.loader import CorpusDataset
 from yelp_nlp.rnn.transform import (
     DataParser,
     tokenize,
