@@ -8,7 +8,7 @@ from yelp_nlp.logging_utils import new_logger, time_decorator
 logger = new_logger(LogLevels.debug.value)
 
 
-def load_embeddings(
+def extract_embeddings(
     emb_path: str,
     emb_subfile: str = "glove.6B.100d.txt",
 ) -> dict:
@@ -34,7 +34,7 @@ def id_to_glove(
 
     """converts local dictionary to embeddings from glove"""
 
-    embeddings_index = load_embeddings(emb_path)
+    embeddings_index = extract_embeddings(emb_path)
     conversion_table = {}
 
     for word in dictionary.values():

@@ -4,7 +4,7 @@ import pytest
 import pandas as pd
 
 from yelp_nlp.rnn.loader import CorpusDataset
-from yelp_nlp.rnn.transform import (
+from yelp_nlp.rnn.transformer import (
     DataParser,
     tokenize,
     load_data,
@@ -14,7 +14,7 @@ from yelp_nlp import root
 
 
 @pytest.fixture
-def mock_df() -> pd.DataFrame:
+def tokenized_df() -> pd.DataFrame:
     return pd.DataFrame(
         {
             "text": [
@@ -40,7 +40,7 @@ def raw_df() -> pd.DataFrame:
 
 
 @pytest.fixture
-def finished_df() -> pd.DataFrame:
+def processed_df() -> pd.DataFrame:
     return pd.DataFrame(
         {
             "data": [
@@ -52,9 +52,9 @@ def finished_df() -> pd.DataFrame:
     )
 
 
-@pytest.fixture
-def mock_parser(mock_df) -> DataParser:
-    return DataParser(mock_df)
+# @pytest.fixture
+# def mock_parser(mock_df) -> DataParser:
+#     return DataParser(mock_df)
 
 
 def test_convert_rating():

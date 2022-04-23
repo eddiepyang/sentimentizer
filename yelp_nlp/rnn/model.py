@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from gensim import corpora
-from yelp_nlp.rnn.extracter import id_to_glove
+from yelp_nlp.rnn.extractor import id_to_glove
 from yelp_nlp.logging_utils import new_logger
 from yelp_nlp.rnn.config import LogLevels
 
