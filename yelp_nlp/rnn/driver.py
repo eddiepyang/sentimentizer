@@ -1,14 +1,23 @@
 import os
 import argparse
 import torch
+from yelp_nlp import root
+from yelp_nlp.rnn.extractor import extract_data
 
-from yelp_nlp.rnn.loader import new_train_val_datasets
-from yelp_nlp.rnn.train import new_trainer
+from yelp_nlp.rnn.loader import new_train_val_corpus_datasets
+from yelp_nlp.rnn.trainer import new_trainer
 from yelp_nlp.rnn.model import new_model
 from yelp_nlp.logging_utils import new_logger, time_decorator
 
-from yelp_nlp.rnn.config import TrainerConfig
+from yelp_nlp.rnn.config import (
+    EmbeddingsConfig,
+    ParserConfig,
+    RunnerConfig,
+    TrainerConfig,
+    FileConfig,
+)
 from yelp_nlp.rnn.config import LogLevels
+from yelp_nlp.rnn.transformer import DataParser
 
 logger = new_logger(LogLevels.debug.value)
 
@@ -26,7 +35,7 @@ def main():
     parser.add_argument("--fname", default="yelp_academic_dataset_review.json")
     parser.add_argument(
         "--abs_path",
-        default="projects/yelp_nlp/data/",
+        default="~/projects/yelp-nlp/data/review_data.parquet",
         help="folder where data is stored, path after /home/{user}/",
     )
     parser.add_argument(
@@ -48,12 +57,18 @@ def main():
 
     args = parser.parse_args()
 
-    train_dataset, val_dataset = new_train_val_datasets(args.abs_path)
+    train_dataset, val_dataset = new_train_val_corpus_datasets(args.abs_path)
+
+    reviews_data = extract_data(
+        FileConfig.archive_path, FileConfig.review_filename, stop=args.stop
+    )
+    parser = DataParser(reviews_data, ParserConfig())
+    parser.convert_sentences().save()
 
     model = new_model(
-        dict_path=args.abs_path,
-        embedding_path=args.embedding_path,
-        batch_size=args.batch_size,
+        dict_path=RunnerConfig.dictionary_path,
+        embedding_path=EmbeddingsConfig.emb_path,
+        batch_size=TrainerConfig.batch_size,
         input_len=args.input_len,
     )
 
@@ -66,9 +81,9 @@ def main():
 
     trainer.fit(model)
 
-    weight_path = os.path.join(os.path.expanduser("~"), args.abs_path, args.state_path)
+    weight_path = os.path.join(root, args.state_path)
     torch.save(model.state_dict(), weight_path)
-    logger.info(f"model weights saved to: {args.abs_path}{args.state_path}")
+    logger.info(f"model weights saved to: {root}{args.state_path}")
 
 
 if __name__ == "__main__":

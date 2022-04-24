@@ -7,9 +7,9 @@ from yelp_nlp.rnn.loader import CorpusDataset
 from yelp_nlp.rnn.transformer import (
     DataParser,
     tokenize,
-    load_data,
     convert_rating,
 )
+from yelp_nlp.rnn.extractor import extract_data
 from yelp_nlp import root
 
 
@@ -74,12 +74,12 @@ def test_tokenize(raw_df):
     assert len(output) > 3
 
 
-class TestLoadData:
+class TestExtractData:
     fpath = f"{root}/yelp_nlp/tests/test_data/archive.zip"
     fname = "artificial-reviews.jsonl"
 
     def test_success(self):
-        df = load_data(compressed_file_name=self.fname, file_path=self.fpath)
+        df = extract_data(compressed_file_name=self.fname, file_path=self.fpath)
         assert df.shape == (2, 2)
         print(df.columns)
         assert df.columns.tolist() == ["text", "stars"]
@@ -92,8 +92,8 @@ class TestLoadData:
 class TestDataParser:
     mock_dictionary = Mock()
 
-    def test_success(self, mock_df):
-        parser = DataParser(mock_df)
+    def test_success(self, tokenized_df):
+        parser = DataParser(tokenized_df)
         parser.convert_sentences()
         assert parser.df.shape == (2, 4)
 
@@ -103,8 +103,8 @@ class TestDataParser:
 
 
 class TestCorpusDataset:
-    def test_success(self, finished_df):
-        dataset = CorpusDataset(finished_df)
+    def test_success(self, processed_df):
+        dataset = CorpusDataset(processed_df)
         item = dataset[1]
         assert len(item) == 2
         assert len(dataset) == 2

@@ -44,7 +44,7 @@ class CorpusDataset(Dataset):
         )
 
 
-def new_train_val_datasets(
+def new_train_val_corpus_datasets(
     data_path: str, test_size=0.2
 ) -> Tuple[CorpusDataset, CorpusDataset]:
 
