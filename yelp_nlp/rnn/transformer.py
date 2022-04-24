@@ -61,24 +61,6 @@ def tokenize(x: str) -> List[str]:
     return re.findall(r"\w+", x.lower())
 
 
-def load_data(file_path: str, compressed_file_name: str, stop: int = 0) -> pd.DataFrame:
-    "reads from zipped yelp data file"
-    ls = []
-
-    with zipfile.ZipFile(file_path) as zfile:
-        logger.info(f"archive contains the following: {zfile.namelist()}")
-        inf = zfile.open(compressed_file_name)
-
-        with jsonl.Reader(inf) as file:
-            for i, line in enumerate(file):
-                line["text"] = tokenize(line.get("text"))
-                ls.append(line)
-                if i == stop - 1:
-                    break
-
-    return pd.DataFrame(ls)
-
-
 def _get_data(df, columns) -> pd.DataFrame:
     return df.loc[:, columns].reset_index(drop=True)
 
