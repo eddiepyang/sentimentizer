@@ -1,4 +1,3 @@
-import unittest
 from unittest.mock import Mock
 import pytest
 import pandas as pd
