@@ -26,18 +26,6 @@ logger = new_logger(LogLevels.debug.value)
 def main():
 
     parser = argparse.ArgumentParser()
-
-    parser.add_argument(
-        "--archive_name",
-        default="archive.zip",
-        help="file where yelp data is saved, expects an archive of json files",
-    )
-    parser.add_argument("--fname", default="yelp_academic_dataset_review.json")
-    parser.add_argument(
-        "--abs_path",
-        default="~/projects/yelp-nlp/data/review_data.parquet",
-        help="folder where data is stored, path after /home/{user}/",
-    )
     parser.add_argument(
         "--state_path",
         default="model_weight.pt",
@@ -46,19 +34,13 @@ def main():
     parser.add_argument(
         "--device", default="cpu", help="run model on cuda or cpu"
     )  # noqa: E501
-    parser.add_argument("--batch_size", type=int, default=50)
-    parser.add_argument(
-        "--input_len", type=int, default=200, help="width of lstm layer"
-    )  # noqa: E501
     parser.add_argument("--n_epochs", type=int, default=8)
     parser.add_argument(
         "--stop", type=int, default=10000, help="how many lines to load"
     )
-
     args = parser.parse_args()
 
-    train_dataset, val_dataset = load_train_val_corpus_datasets(args.abs_path)
-
+    train_dataset, val_dataset = load_train_val_corpus_datasets(RunnerConfig.data_path)
     reviews_data = extract_data(
         FileConfig.archive_path, FileConfig.review_filename, stop=args.stop
     )
@@ -69,7 +51,7 @@ def main():
         dict_path=RunnerConfig.dictionary_path,
         embedding_path=EmbeddingsConfig.emb_path,
         batch_size=TrainerConfig.batch_size,
-        input_len=args.input_len,
+        input_len=ParserConfig.max_len,
     )
 
     trainer = new_trainer(
