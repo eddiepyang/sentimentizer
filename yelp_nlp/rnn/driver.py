@@ -60,7 +60,6 @@ def main():
         val_dataset=val_dataset,
         cfg=TrainerConfig(),
     )
-
     trainer.fit(model)
 
     weight_path = os.path.join(root, args.state_path)
