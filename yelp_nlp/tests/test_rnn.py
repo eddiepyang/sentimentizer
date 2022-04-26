@@ -52,11 +52,6 @@ def processed_df() -> pd.DataFrame:
     )
 
 
-# @pytest.fixture
-# def mock_parser(mock_df) -> DataParser:
-#     return DataParser(mock_df)
-
-
 def test_convert_rating():
 
     assert 1 == convert_rating(5)
@@ -108,3 +103,7 @@ class TestCorpusDataset:
         item = dataset[1]
         assert len(item) == 2
         assert len(dataset) == 2
+
+    def test_failure(self):
+        # todo
+        return
