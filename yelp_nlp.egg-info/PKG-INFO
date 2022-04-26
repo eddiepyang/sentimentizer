@@ -1,9 +1,9 @@
 Metadata-Version: 2.1
 Name: yelp-nlp
-Version: 0.2
+Version: 0.31
 Summary: utils to help with project
 Author: Edward Yang
-Author-email: eddiepyang@gmail.com
+Author-email: edwardpyang@gmail.com
 License: UNKNOWN
 Project-URL: Source Code, https://github.com/eddiepyang/yelp_nlp
 Platform: UNKNOWN

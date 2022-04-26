@@ -15,14 +15,6 @@ from yelp_nlp.rnn.config import LogLevels
 logger = new_logger(LogLevels.debug.value)
 
 
-def split_df(
-    df: pd.DataFrame, test_size: float = 0.25
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
-
-    tr_idx, val_idx = train_test_split(df.index.values, test_size=test_size)
-    return df.iloc[tr_idx], df.iloc[val_idx]  # type: ignore
-
-
 @define
 class CorpusDataset(Dataset):
     """Dataset class required for pytorch to output items by index"""
@@ -44,10 +36,10 @@ class CorpusDataset(Dataset):
         )
 
 
-def new_train_val_corpus_datasets(
+def load_train_val_corpus_datasets(
     data_path: str, test_size=0.2
 ) -> Tuple[CorpusDataset, CorpusDataset]:
 
     df = pd.read_parquet(data_path)
-    train_df, val_df = split_df(df, test_size=test_size)
+    train_df, val_df = train_test_split(df, test_size=test_size)
     return CorpusDataset(data=train_df), CorpusDataset(val_df)

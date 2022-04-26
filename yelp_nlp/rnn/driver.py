@@ -4,7 +4,7 @@ import torch
 from yelp_nlp import root
 from yelp_nlp.rnn.extractor import extract_data
 
-from yelp_nlp.rnn.loader import new_train_val_corpus_datasets
+from yelp_nlp.rnn.loader import load_train_val_corpus_datasets
 from yelp_nlp.rnn.trainer import new_trainer
 from yelp_nlp.rnn.model import new_model
 from yelp_nlp.logging_utils import new_logger, time_decorator
@@ -57,7 +57,7 @@ def main():
 
     args = parser.parse_args()
 
-    train_dataset, val_dataset = new_train_val_corpus_datasets(args.abs_path)
+    train_dataset, val_dataset = load_train_val_corpus_datasets(args.abs_path)
 
     reviews_data = extract_data(
         FileConfig.archive_path, FileConfig.review_filename, stop=args.stop
