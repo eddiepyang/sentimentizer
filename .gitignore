@@ -21,3 +21,4 @@ src/__pycache__/*
 yelp_nlp/rnn/train.py
 vendor
 model_weight.pt
+yelp_nlp.egg-info
