@@ -69,7 +69,7 @@ def test_tokenize(raw_df):
 
 
 class TestExtractData:
-    fpath = f"{root}/yelp_nlp/tests/test_data/archive.zip"
+    fpath = f"{root}/tests/test_data/archive.zip"
     fname = "artificial-reviews.jsonl"
 
     def test_success(self):
