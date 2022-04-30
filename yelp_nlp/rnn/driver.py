@@ -10,9 +10,8 @@ from yelp_nlp.rnn.model import new_model
 from yelp_nlp.logging_utils import new_logger, time_decorator
 
 from yelp_nlp.rnn.config import (
-    EmbeddingsConfig,
     ParserConfig,
-    RunnerConfig,
+    DriverConfig,
     TrainerConfig,
     FileConfig,
 )
@@ -40,25 +39,34 @@ def main():
     )
     args = parser.parse_args()
 
-    train_dataset, val_dataset = load_train_val_corpus_datasets(RunnerConfig.data_path)
+    logger.info(
+        "running with args",
+        device=args.device,
+        weight_path=args.state_path,
+        early_stop=args.stop,
+    )
+
+    train_dataset, val_dataset = load_train_val_corpus_datasets(
+        DriverConfig.parser.data_save_path
+    )
     reviews_data = extract_data(
         FileConfig.archive_path, FileConfig.review_filename, stop=args.stop
     )
-    parser = DataParser(reviews_data, ParserConfig())
+    parser = DataParser(reviews_data, DriverConfig.parser())
     parser.convert_sentences().save()
 
     model = new_model(
-        dict_path=RunnerConfig.dictionary_path,
-        embedding_path=EmbeddingsConfig.emb_path,
-        batch_size=TrainerConfig.batch_size,
-        input_len=ParserConfig.max_len,
+        dict_path=DriverConfig.parser.dictionary_save_path,
+        embedding_path=DriverConfig.embeddings.emb_path,
+        batch_size=DriverConfig.trainer.batch_size,
+        input_len=DriverConfig.parser.max_len,
     )
 
     trainer = new_trainer(
         model=model,
         train_dataset=train_dataset,
         val_dataset=val_dataset,
-        cfg=TrainerConfig(),
+        cfg=DriverConfig.trainer(device=args.device),
     )
     trainer.fit(model)
 

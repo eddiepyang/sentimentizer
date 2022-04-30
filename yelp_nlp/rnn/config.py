@@ -62,7 +62,7 @@ class TrainerConfig:
     batch_size: int = 256
     epochs: int = 4
     workers: int = 6
-    device: str = "cpu"
+    device: str = "cuda"
     memory: bool = True
 
 
@@ -74,8 +74,7 @@ class EmbeddingsConfig:
 
 
 @dataclass
-class RunnerConfig:
-    data_path: str = f"{root}/data/review_data.parquet"
-    dictionary_path: str = f"{root}/data/yelp_data.dictionary"
-    embeddings: EmbeddingsConfig = EmbeddingsConfig()
-    parser: ParserConfig = ParserConfig()
+class DriverConfig:
+    embeddings: EmbeddingsConfig = EmbeddingsConfig
+    parser: ParserConfig = ParserConfig
+    trainer: TrainerConfig = TrainerConfig
