@@ -1,17 +1,17 @@
 import os
 import argparse
 import torch
-from yelp_nlp import root
-from yelp_nlp.rnn.extractor import extract_data
+from torch_sentiment import root
+from torch_sentiment.rnn.extractor import extract_data
 
-from yelp_nlp.rnn.loader import load_train_val_corpus_datasets
-from yelp_nlp.rnn.trainer import new_trainer
-from yelp_nlp.rnn.model import new_model
-from yelp_nlp.logging_utils import new_logger, time_decorator
+from torch_sentiment.rnn.loader import load_train_val_corpus_datasets
+from torch_sentiment.rnn.trainer import new_trainer
+from torch_sentiment.rnn.model import new_model
+from torch_sentiment.logging_utils import new_logger, time_decorator
 
-from yelp_nlp.rnn.config import DriverConfig
-from yelp_nlp.rnn.config import LogLevels
-from yelp_nlp.rnn.transformer import DataTransformer
+from torch_sentiment.rnn.config import DriverConfig
+from torch_sentiment.rnn.config import LogLevels
+from torch_sentiment.rnn.transformer import DataTransformer
 
 logger = new_logger(LogLevels.debug.value)
 

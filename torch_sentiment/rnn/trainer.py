@@ -9,10 +9,10 @@ import torch
 from torch import optim
 from torch.utils.data import DataLoader
 
-from yelp_nlp.logging_utils import new_logger
-from yelp_nlp.rnn.loader import CorpusDataset
-from yelp_nlp.rnn.model import RNN
-from yelp_nlp.rnn.config import TrainerConfig, OptimizationParams, SchedulerParams
+from torch_sentiment.logging_utils import new_logger
+from torch_sentiment.rnn.loader import CorpusDataset
+from torch_sentiment.rnn.model import RNN
+from torch_sentiment.rnn.config import TrainerConfig, OptimizationParams, SchedulerParams
 
 
 logger = new_logger(logging.INFO)
