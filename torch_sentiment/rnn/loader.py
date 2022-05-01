@@ -9,8 +9,8 @@ import jsonlines as jsonl
 import torch
 from torch.utils.data import Dataset
 from sklearn.model_selection import train_test_split
-from yelp_nlp.logging_utils import new_logger
-from yelp_nlp.rnn.config import LogLevels
+from torch_sentiment.logging_utils import new_logger
+from torch_sentiment.rnn.config import LogLevels
 
 logger = new_logger(LogLevels.debug.value)
 

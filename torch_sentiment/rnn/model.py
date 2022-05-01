@@ -3,9 +3,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from gensim import corpora
-from yelp_nlp.rnn.extractor import id_to_glove
-from yelp_nlp.logging_utils import new_logger
-from yelp_nlp.rnn.config import LogLevels
+from torch_sentiment.rnn.extractor import id_to_glove
+from torch_sentiment.logging_utils import new_logger
+from torch_sentiment.rnn.config import LogLevels
 
 logger = new_logger(LogLevels.debug.value)
 
