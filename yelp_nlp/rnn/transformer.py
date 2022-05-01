@@ -1,15 +1,12 @@
 from typing import List, Tuple
 from dataclasses import dataclass, field
 
-import zipfile
 import re
 import numpy as np
 import pandas as pd
-import jsonlines as jsonl
-
 from gensim import corpora
 
-from yelp_nlp.rnn.config import ParserConfig
+from yelp_nlp.rnn.config import FileConfig, TransformerConfig
 from yelp_nlp.logging_utils import new_logger, time_decorator
 import logging
 
@@ -66,11 +63,11 @@ def _get_data(df, columns) -> pd.DataFrame:
 
 
 @dataclass
-class DataParser:
+class DataTransformer:
     """wrapper class for handling datasets"""
 
     df: pd.DataFrame = field(repr=False)
-    cfg: ParserConfig = field(default=ParserConfig())
+    cfg: TransformerConfig = field(default=TransformerConfig())
     dictionary: corpora.Dictionary = field(default=None)  # type: ignore
 
     @time_decorator
@@ -83,11 +80,11 @@ class DataParser:
                 no_above=self.cfg.no_above,
                 keep_n=self.cfg.dict_keep,
             )
-            self.dictionary.save(f"{self.cfg.dictionary_save_path}")
+            self.dictionary.save(f"{FileConfig.dictionary_file_path}")
             logger.info("dictionary created...")
 
     @time_decorator
-    def convert_sentences(self):
+    def transform_sentences(self):
         self.df[self.cfg.x_labels] = self.df[self.cfg.text_col].map(
             lambda x: text_sequencer(self.dictionary, x, self.cfg.max_len)
         )
@@ -97,6 +94,6 @@ class DataParser:
 
     def save(self):
         _get_data(self.df, [self.cfg.x_labels] + [self.cfg.y_labels]).to_parquet(
-            f"{self.cfg.data_save_path}", index=False
+            f"{FileConfig.reviews_file_path}", index=False
         )
-        logger.info(f"file saved to {self.cfg.data_save_path}")  # noqa: E501
+        logger.info(f"file saved to {FileConfig.reviews_file_path}")  # noqa: E501

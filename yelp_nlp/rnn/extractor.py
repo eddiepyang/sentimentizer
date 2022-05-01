@@ -11,6 +11,7 @@ from yelp_nlp.logging_utils import new_logger, time_decorator
 logger = new_logger(LogLevels.debug.value)
 
 
+@time_decorator
 def extract_data(
     file_path: str, compressed_file_name: str, stop: int = 0
 ) -> pd.DataFrame:
@@ -51,6 +52,7 @@ def extract_embeddings(
     return embeddings_index
 
 
+@time_decorator
 def id_to_glove(
     dictionary: corpora.Dictionary, emb_path: str, emb_length: int = 100
 ) -> np.ndarray:
