@@ -1,5 +1,5 @@
 import enum
-from typing import Tuple
+from typing import Tuple, Callable
 from torch import nn
 from dataclasses import dataclass
 from yelp_nlp import root
@@ -30,16 +30,13 @@ class OptimizationParams:
 
 @dataclass
 class SchedulerParams:
-
     T_max: int = 100
     eta_min: int = 0
     last_epoch: int = -1
 
 
 @dataclass
-class ParserConfig:
-    dictionary_save_path: str = f"{root}/data/yelp_data.dictionary"
-    data_save_path: str = f"{root}/data/review_data.parquet"
+class TransformerConfig:
     text_col: str = "text"
     label_col: str = "stars"
     x_labels: str = "data"
@@ -53,8 +50,11 @@ class ParserConfig:
 
 @dataclass(frozen=True)
 class FileConfig:
-    archive_path: str = f"{root}/data/archive.zip"
-    review_filename: str = "yelp_academic_dataset_review.json"
+    archive_file_path: str = f"{root}/data/archive.zip"
+    raw_file_path: str = "yelp_academic_dataset_review.json"
+    dictionary_file_path: str = f"{root}/data/yelp_data.dictionary"
+    reviews_file_path: str = f"{root}/data/review_data.parquet"
+    weights_file_path: str = f"{root}/data/weights.pt"
 
 
 @dataclass
@@ -68,13 +68,13 @@ class TrainerConfig:
 
 @dataclass
 class EmbeddingsConfig:
-    emb_path: str = f"{root}/data/glove.6B.zip"
-    emb_file: str = "glove.6B.zip"
-    emb_subfile: str = "glove.6B.100d.txt"
+    file_path: str = f"{root}/data/glove.6B.zip"
+    sub_file_path: str = "glove.6B.100d.txt"
 
 
 @dataclass
 class DriverConfig:
-    embeddings: EmbeddingsConfig = EmbeddingsConfig
-    parser: ParserConfig = ParserConfig
-    trainer: TrainerConfig = TrainerConfig
+    files: Callable = FileConfig
+    embeddings: Callable = EmbeddingsConfig
+    transformer: Callable = TransformerConfig
+    trainer: Callable = TrainerConfig

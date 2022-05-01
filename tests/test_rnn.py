@@ -4,7 +4,7 @@ import pandas as pd
 
 from yelp_nlp.rnn.loader import CorpusDataset
 from yelp_nlp.rnn.transformer import (
-    DataParser,
+    DataTransformer,
     tokenize,
     convert_rating,
 )
@@ -87,8 +87,8 @@ class TestDataParser:
     mock_dictionary = Mock()
 
     def test_success(self, tokenized_df):
-        parser = DataParser(tokenized_df)
-        parser.convert_sentences()
+        parser = DataTransformer(tokenized_df)
+        parser.transform_sentences()
         assert parser.df.shape == (2, 4)
 
     def test_failure(self):
