@@ -6,8 +6,8 @@ import numpy as np
 import pandas as pd
 from gensim import corpora
 
-from yelp_nlp.rnn.config import FileConfig, TransformerConfig
-from yelp_nlp.logging_utils import new_logger, time_decorator
+from torch_sentiment.rnn.config import FileConfig, TransformerConfig
+from torch_sentiment.logging_utils import new_logger, time_decorator, time_decorator_factory
 import logging
 
 logger = new_logger(logging.INFO)
@@ -70,7 +70,7 @@ class DataTransformer:
     cfg: TransformerConfig = field(default=TransformerConfig())
     dictionary: corpora.Dictionary = field(default=None)  # type: ignore
 
-    @time_decorator
+    @time_decorator_factory(optional_text="DataTransformer save_dictionary")
     def __post_init__(self):
 
         if self.dictionary is None:
