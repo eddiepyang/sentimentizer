@@ -1,11 +1,11 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="yelp-nlp",
-    version="0.31",
+    name="torch-sentiment",
+    version="0.41",
     packages=find_packages(),
     install_requires=[
-        "numpy>=1.18",
+        "numpy",
         "pandas",
         "torch",
         "seaborn",
@@ -19,7 +19,7 @@ setup(
         # If any package contains *.txt or *.rst files, include them:
         "": ["*.txt", "*.rst"],
     },
-    entry_points={"console_scripts": ["yelp-nlp=yelp_nlp.rnn.driver:main"]},
+    entry_points={"console_scripts": ["run=yelp_nlp.rnn.driver:main"]},
     # metadata to display on PyPI
     author="Edward Yang",
     author_email="edwardpyang@gmail.com",

@@ -2,14 +2,14 @@ from unittest.mock import Mock
 import pytest
 import pandas as pd
 
-from yelp_nlp.rnn.loader import CorpusDataset
-from yelp_nlp.rnn.transformer import (
+from torch_sentiment.rnn.loader import CorpusDataset
+from torch_sentiment.rnn.transformer import (
     DataTransformer,
     tokenize,
     convert_rating,
 )
-from yelp_nlp.rnn.extractor import extract_data
-from yelp_nlp import root
+from torch_sentiment.rnn.extractor import extract_data
+from torch_sentiment import root
 
 
 @pytest.fixture

@@ -2,7 +2,7 @@ import enum
 from typing import Tuple, Callable
 from torch import nn
 from dataclasses import dataclass
-from yelp_nlp import root
+from torch_sentiment import root
 from logging import NOTSET, DEBUG, INFO, WARN, ERROR, CRITICAL
 
 

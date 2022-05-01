@@ -4,9 +4,9 @@ import jsonlines as jsonl
 import zipfile
 from gensim import corpora
 
-from yelp_nlp.rnn.transformer import tokenize
-from yelp_nlp.rnn.config import LogLevels
-from yelp_nlp.logging_utils import new_logger, time_decorator
+from torch_sentiment.rnn.transformer import tokenize
+from torch_sentiment.rnn.config import LogLevels
+from torch_sentiment.logging_utils import new_logger, time_decorator
 
 logger = new_logger(LogLevels.debug.value)
 
