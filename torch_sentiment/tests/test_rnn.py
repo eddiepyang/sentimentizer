@@ -69,7 +69,7 @@ def test_tokenize(raw_df):
 
 
 class TestExtractData:
-    fpath = f"{root}/torch_sentiment/tests/test_data/archive.zip"
+    fpath = f"./torch_sentiment/tests/test_data/archive.zip"
     fname = "artificial-reviews.jsonl"
     
     def test_success(self):
