@@ -9,7 +9,6 @@ from torch_sentiment.rnn.transformer import (
     convert_rating,
 )
 from torch_sentiment.rnn.extractor import extract_data
-from torch_sentiment.tests.conftest import relative_root as root
 
 
 @pytest.fixture
