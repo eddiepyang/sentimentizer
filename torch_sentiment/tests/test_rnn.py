@@ -9,7 +9,7 @@ from torch_sentiment.rnn.transformer import (
     convert_rating,
 )
 from torch_sentiment.rnn.extractor import extract_data
-from torch_sentiment import root
+from torch_sentiment.tests.conftest import relative_root as root
 
 
 @pytest.fixture
@@ -69,7 +69,7 @@ def test_tokenize(raw_df):
 
 
 class TestExtractData:
-    fpath = f"./torch_sentiment/tests/test_data/archive.zip"
+    fpath = f"{root}/torch_sentiment/tests/test_data/archive.zip"
     fname = "artificial-reviews.jsonl"
     
     def test_success(self):
