@@ -27,7 +27,8 @@ jobs:
       #   pip3 install .
       #   pip3 install pytest pytest-cov
       run: pwd
-      
+      run: ls
+
     - name: Test with pytest
       run: |
         pytest --exitfirst --verbose --failed-first \
