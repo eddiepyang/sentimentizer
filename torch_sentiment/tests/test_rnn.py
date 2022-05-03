@@ -1,7 +1,9 @@
-from unittest.mock import Mock
 import pytest
 import pandas as pd
+from gensim import corpora
+from unittest.mock import Mock
 
+from torch_sentiment.rnn.config import TransformerConfig
 from torch_sentiment.rnn.loader import CorpusDataset
 from torch_sentiment.rnn.transformer import (
     DataTransformer,
@@ -83,11 +85,10 @@ class TestExtractData():
         return
 
 
-class TestDataParser:
-    mock_dictionary = Mock()
+class TestDataTransformer:
 
     def test_success(self, tokenized_df):
-        parser = DataTransformer(tokenized_df)
+        parser = DataTransformer(tokenized_df, TransformerConfig(save_dictionary=False))
         parser.transform_sentences()
         assert parser.df.shape == (2, 4)
 
