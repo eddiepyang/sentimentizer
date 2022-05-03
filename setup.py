@@ -12,7 +12,6 @@ setup(
         "spacy",
         "scikit-learn",
         "jsonlines",
-        "pytest",
         "gensim",
     ],
     package_data={
