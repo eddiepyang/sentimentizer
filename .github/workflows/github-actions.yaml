@@ -31,4 +31,4 @@ jobs:
       run: |
         pytest --exitfirst --verbose --failed-first \
         --cov=. --cov-report html
-      working-directory: client
+      working-directory: ..
