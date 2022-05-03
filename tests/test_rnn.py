@@ -71,7 +71,7 @@ def test_tokenize(raw_df):
 class TestExtractData:
     fpath = f"{root}/tests/test_data/archive.zip"
     fname = "artificial-reviews.jsonl"
-
+    
     def test_success(self):
         df = extract_data(compressed_file_name=self.fname, file_path=self.fpath)
         assert df.shape == (2, 2)
