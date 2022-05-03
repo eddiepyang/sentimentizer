@@ -27,6 +27,8 @@ jobs:
       #   pip3 install .
       #   pip3 install pytest pytest-cov
       run: pwd
+      
+    - name: ls 
       run: ls
 
     - name: Test with pytest
