@@ -25,6 +25,7 @@ jobs:
         sudo apt install -y $(grep -o ^[^#][[:alnum:]-]* "packages.list")
         python3 -m pip install --upgrade pip
         pip3 install .
+        pip3 install pytest pytest-cov
  
     - name: Test with pytest
       run: |
