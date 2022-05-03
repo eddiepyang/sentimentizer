@@ -13,6 +13,7 @@ setup(
         "scikit-learn",
         "jsonlines",
         "gensim",
+        "structlog"
     ],
     package_data={
         # If any package contains *.txt or *.rst files, include them:
