@@ -68,12 +68,13 @@ def test_tokenize(raw_df):
     assert len(output) > 3
 
 
-class TestExtractData:
-    fpath = f"{root}/torch_sentiment/tests/test_data/archive.zip"
+class TestExtractData():
+    
     fname = "artificial-reviews.jsonl"
     
-    def test_success(self):
-        df = extract_data(compressed_file_name=self.fname, file_path=self.fpath)
+    def test_success(self, rel_path):
+
+        df = extract_data(compressed_file_name=self.fname, file_path=rel_path)
         assert df.shape == (2, 2)
         print(df.columns)
         assert df.columns.tolist() == ["text", "stars"]
