@@ -1,11 +1,12 @@
 import io
 import logging
 import sys
-from typing import Callable, TextIO
 import structlog
 import time
 import psutil
+
 from functools import wraps
+from typing import Callable, TextIO
 
 
 def new_logger(level: int = 20, output: TextIO = sys.stderr) -> structlog.PrintLogger:

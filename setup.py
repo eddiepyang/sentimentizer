@@ -12,8 +12,9 @@ setup(
         "spacy",
         "scikit-learn",
         "jsonlines",
-        "pytest",
         "gensim",
+        "structlog",
+        "psutil",
     ],
     package_data={
         # If any package contains *.txt or *.rst files, include them:
