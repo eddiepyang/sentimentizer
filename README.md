@@ -9,6 +9,6 @@ get the yelp dataset from https://www.yelp.com/dataset
 conda create -n yelp  
 conda install pip  
 pip install -e .  
-yelp-nlp
+run
 ```
 
