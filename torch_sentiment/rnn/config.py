@@ -46,6 +46,7 @@ class TransformerConfig:
     dict_min: int = 10
     dict_keep: int = 5000
     no_above: float = 0.99
+    save_dictionary: bool = True
 
 
 @dataclass(frozen=True)

@@ -80,8 +80,11 @@ class DataTransformer:
                 no_above=self.cfg.no_above,
                 keep_n=self.cfg.dict_keep,
             )
-            self.dictionary.save(f"{FileConfig.dictionary_file_path}")
             logger.info("dictionary created...")
+
+            if self.cfg.save_dictionary:
+                self.dictionary.save(f"{FileConfig.dictionary_file_path}")
+                logger.info(f"dictionary saved to {FileConfig.dictionary_file_path}...")
 
     @time_decorator
     def transform_sentences(self):

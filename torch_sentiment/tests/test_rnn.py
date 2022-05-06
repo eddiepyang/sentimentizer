@@ -1,7 +1,9 @@
-from unittest.mock import Mock
 import pytest
 import pandas as pd
+from gensim import corpora
+from unittest.mock import Mock
 
+from torch_sentiment.rnn.config import TransformerConfig
 from torch_sentiment.rnn.loader import CorpusDataset
 from torch_sentiment.rnn.transformer import (
     DataTransformer,
@@ -9,7 +11,6 @@ from torch_sentiment.rnn.transformer import (
     convert_rating,
 )
 from torch_sentiment.rnn.extractor import extract_data
-from torch_sentiment import root
 
 
 @pytest.fixture
@@ -68,12 +69,13 @@ def test_tokenize(raw_df):
     assert len(output) > 3
 
 
-class TestExtractData:
-    fpath = f"{root}/tests/test_data/archive.zip"
+class TestExtractData():
+    
     fname = "artificial-reviews.jsonl"
+    
+    def test_success(self, rel_path):
 
-    def test_success(self):
-        df = extract_data(compressed_file_name=self.fname, file_path=self.fpath)
+        df = extract_data(compressed_file_name=self.fname, file_path=rel_path)
         assert df.shape == (2, 2)
         print(df.columns)
         assert df.columns.tolist() == ["text", "stars"]
@@ -83,11 +85,10 @@ class TestExtractData:
         return
 
 
-class TestDataParser:
-    mock_dictionary = Mock()
+class TestDataTransformer:
 
     def test_success(self, tokenized_df):
-        parser = DataTransformer(tokenized_df)
+        parser = DataTransformer(tokenized_df, TransformerConfig(save_dictionary=False))
         parser.transform_sentences()
         assert parser.df.shape == (2, 4)
 
