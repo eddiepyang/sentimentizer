@@ -1,38 +1,38 @@
-name: Tests
+name: tests
 on: [push]
  
 jobs:
   build:
-    name: Run Python Tests
+    name: run python tests
     runs-on: ubuntu-latest
  
     steps:
  
     - uses: actions/checkout@v2
  
-    - name: Setup timezone
+    - name: setup timezone
       uses: zcong1993/setup-timezone@master
       with:
         timezone: UTC
  
-    - name: Set up Python 3.10
+    - name: set up Python 3.10
       uses: actions/setup-python@v2
       with:
         python-version: "3.10"
  
-    - name: Install Python dependencies
+    - name: install python dependencies
       run: |
         sudo apt install -y $(grep -o ^[^#][[:alnum:]-]* "packages.list")
         python3 -m pip install --upgrade pip
         pip3 install .
         pip3 install pytest pytest-cov
 
-    - name: ls 
+    - name: list directory 
       run: |
         pwd
         ls
 
-    - name: Test with pytest
+    - name: test with pytest
       run: |
         pytest --exitfirst --verbose --failed-first \
         --cov=. --cov-report html
