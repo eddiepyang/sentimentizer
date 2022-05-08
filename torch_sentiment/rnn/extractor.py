@@ -3,9 +3,10 @@ import pandas as pd
 import jsonlines as jsonl
 import zipfile
 from gensim import corpora
+from collections import OrderedDict
 
 from torch_sentiment.rnn.transformer import tokenize
-from torch_sentiment.rnn.config import LogLevels
+from torch_sentiment.rnn.config import EmbeddingsConfig, LogLevels
 from torch_sentiment.logging_utils import new_logger, time_decorator
 
 logger = new_logger(LogLevels.debug.value)
@@ -32,47 +33,54 @@ def extract_data(
     return pd.DataFrame(ls)
 
 
-def extract_embeddings(
-    emb_path: str,
-    emb_subfile: str = "glove.6B.100d.txt",
-) -> dict:
+@time_decorator
+def extract_embeddings(cfg: EmbeddingsConfig) -> dict[str, np.ndarray]:
 
     """load glove vectors"""
 
-    embeddings_index = {}
+    embeddings_dict = {}
 
-    with zipfile.ZipFile(emb_path, "r") as f:
-        with f.open(emb_subfile, "r") as z:
+    with zipfile.ZipFile(cfg.file_path, "r") as f:
+        with f.open(cfg.sub_file_path, "r") as z:
             for line in z:
                 values = line.split()
-                embeddings_index[values[0].decode()] = np.asarray(
-                    values[1:], dtype=np.float32
-                )  # noqa: E501
+                embeddings_dict.setdefault(
+                    values[0].decode(), 
+                    np.asarray(
+                        values[1:], 
+                        dtype=np.float32
+                    )  # noqa: E501
+                )
 
-    return embeddings_index
+    return embeddings_dict
 
 
 @time_decorator
-def id_to_glove(
-    dictionary: corpora.Dictionary, emb_path: str, emb_length: int = 100
+def new_embedding_weights(
+    dictionary: corpora.Dictionary, cfg: EmbeddingsConfig
 ) -> np.ndarray:
 
     """converts local dictionary to embeddings from glove"""
 
-    embeddings_index = extract_embeddings(emb_path)
-    conversion_table = {}
+    embeddings_index = extract_embeddings(cfg)
+    conversion_table = OrderedDict()
 
     for word in dictionary.values():
         if word in embeddings_index:
-            conversion_table[dictionary.token2id[word] + 1] = embeddings_index[word]
-        else:
-            conversion_table[dictionary.token2id[word] + 1] = np.random.normal(
-                0, 0.32, emb_length
+            conversion_table.setdefault(
+                dictionary.token2id[word] + 1, 
+                embeddings_index[word]
             )
+        else:
+            conversion_table.setdefault(
+                dictionary.token2id[word] + 1, 
+                np.random.normal(0, 0.32, cfg.emb_length)
+            )
+    
     return np.vstack(
         (
-            np.zeros(emb_length),
+            np.zeros(cfg.emb_length),
             list(conversion_table.values()),
-            np.random.randn(emb_length),
+            np.random.randn(cfg.emb_length),
         )
     )
