@@ -20,13 +20,13 @@ setup(
         # If any package contains *.txt or *.rst files, include them:
         "": ["*.txt", "*.rst"],
     },
-    entry_points={"console_scripts": ["run=yelp_nlp.rnn.driver:main"]},
+    entry_points={"console_scripts": ["run=torch_sentiment.rnn.driver:main"]},
     # metadata to display on PyPI
     author="Edward Yang",
     author_email="edwardpyang@gmail.com",
     description="utils to help with project",
     project_urls={
-        "Source Code": "https://github.com/eddiepyang/yelp-nlp",
+        "Source Code": "https://github.com/eddiepyang/torch-sentiment",
     },
     classifiers=["License :: OSI Approved :: Python Software Foundation License"],
 )
