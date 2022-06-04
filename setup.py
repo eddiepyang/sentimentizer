@@ -26,7 +26,7 @@ setup(
     author_email="edwardpyang@gmail.com",
     description="utils to help with project",
     project_urls={
-        "Source Code": "https://github.com/eddiepyang/yelp-nlp",
+        "Source Code": "https://github.com/eddiepyang/torch-sentiment",
     },
     classifiers=["License :: OSI Approved :: Python Software Foundation License"],
 )

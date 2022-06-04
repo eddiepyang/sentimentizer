@@ -58,7 +58,7 @@ def tokenize(x: str) -> List[str]:
     return re.findall(r"\w+", x.lower())
 
 
-def _get_data(df, columns) -> pd.DataFrame:
+def _get_data(df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
     return df.loc[:, columns].reset_index(drop=True)
 
 

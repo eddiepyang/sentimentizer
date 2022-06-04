@@ -51,7 +51,7 @@ def main():
 
     model = new_model(
         dict_path=DriverConfig.files.dictionary_file_path,
-        embedding_path=DriverConfig.embeddings.file_path,
+        embeddings_config=DriverConfig.embeddings,
         batch_size=DriverConfig.trainer.batch_size,
         input_len=DriverConfig.transformer.max_len,
     )
