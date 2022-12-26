@@ -1,0 +1,8 @@
+Metadata-Version: 2.1
+Name: torch-sentiment
+Version: 0.41
+Summary: straight forward rnn model
+Author: Edward Yang
+Author-email: edwardpyang@gmail.com
+Project-URL: Source Code, https://github.com/eddiepyang/torch-sentiment
+Classifier: License :: OSI Approved :: Python Software Foundation License
