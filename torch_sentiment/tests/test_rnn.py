@@ -11,7 +11,10 @@ from torch_sentiment.rnn.transformer import (
     convert_rating,
 )
 from torch_sentiment.rnn.extractor import extract_data
+from torch_sentiment.logging_utils import new_logger
 
+
+logger = new_logger()
 
 @pytest.fixture
 def tokenized_df() -> pd.DataFrame:
@@ -77,7 +80,7 @@ class TestExtractData():
 
         df = extract_data(compressed_file_name=self.fname, file_path=rel_path)
         assert df.shape == (2, 2)
-        print(df.columns)
+        logger.info(df.shape)
         assert df.columns.tolist() == ["text", "stars"]
 
     def test_failure_empty_input(self):
