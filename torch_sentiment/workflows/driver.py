@@ -62,11 +62,9 @@ def main():
 
     trainer = new_trainer(
         model=model,
-        train_dataset=train_dataset,
-        val_dataset=val_dataset,
         cfg=DriverConfig.trainer(device=args.device),
     )
-    trainer.fit(model)
+    trainer.fit(model, train_data=train_dataset, val_data=val_dataset)
 
     torch.save(model.state_dict(), DriverConfig.files.weights_file_path)
     logger.info(f"model weights saved to: {DriverConfig.files.weights_file_path}")

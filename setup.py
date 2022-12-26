@@ -24,7 +24,7 @@ setup(
     # metadata to display on PyPI
     author="Edward Yang",
     author_email="edwardpyang@gmail.com",
-    description="utils to help with project",
+    description="straight forward rnn model",
     project_urls={
         "Source Code": "https://github.com/eddiepyang/torch-sentiment",
     },
