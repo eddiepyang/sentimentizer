@@ -1,0 +1,38 @@
+# pyproject.toml
+
+[build-system]
+requires      = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "torch_sentiment"
+version = "0.4.2"
+description = "straight forward rnn model"
+readme = "README.md"
+authors = [{ name = "Edward Yang", email = "edwardpyang@gmail.com" }]
+license = { file = "LICENSE" }
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+]
+keywords = ["rnn", "pytorch", "tutorial"]
+dependencies = [
+        "numpy",
+        "pandas",
+        "torch",
+        "seaborn",
+        "spacy",
+        "scikit-learn",
+        "jsonlines",
+        "gensim",
+        "structlog",
+        "psutil",
+]
+requires-python = ">=3.9"
+
+[project.optional-dependencies]
+dev = ["black", "bumpver", "isort", "pip-tools", "pytest"]
+
+[project.scripts]
+run = "torch_sentiment.workflows.driver:main"
