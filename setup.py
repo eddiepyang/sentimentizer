@@ -20,7 +20,7 @@ setup(
         # If any package contains *.txt or *.rst files, include them:
         "": ["*.txt", "*.rst"],
     },
-    entry_points={"console_scripts": ["run=torch_sentiment.rnn.driver:main"]},
+    entry_points={"console_scripts": ["run=torch_sentiment.workflows.driver:main"]},
     # metadata to display on PyPI
     author="Edward Yang",
     author_email="edwardpyang@gmail.com",
