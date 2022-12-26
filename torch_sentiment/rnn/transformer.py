@@ -67,8 +67,8 @@ class DataTransformer:
     """wrapper class for handling datasets"""
 
     df: pd.DataFrame = field(repr=False)
-    cfg: TransformerConfig = field(default=TransformerConfig())
-    dictionary: corpora.Dictionary = field(default=None)  # type: ignore
+    cfg: TransformerConfig = field(default_factory=TransformerConfig()) # type: ignore
+    dictionary: corpora.Dictionary = None # type: ignore
 
     @time_decorator_factory(optional_text="DataTransformer save_dictionary")
     def __post_init__(self):

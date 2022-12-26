@@ -48,17 +48,14 @@ class Trainer:
     loss_function: Callable
     optimizer: optim.Adam
     scheduler: optim.lr_scheduler._LRScheduler
-    train_data: CorpusDataset
-    val_data: CorpusDataset
     cfg: TrainerConfig
     losses: List[float] = field(default_factory=lambda: list())
     _mode: str = field(default="training")
 
     def _train_epoch(self, model: RNN, train_loader: DataLoader):
 
-        self.train_data
         i = 0
-        n = len(self.train_data)
+        n = len(train_loader.dataset)
         model.train()
 
         for j, (sent, target) in enumerate(train_loader):
@@ -94,9 +91,9 @@ class Trainer:
                     f"current learning rate at {self.optimizer.param_groups[0]['lr']:.6f}"
                 )  # noqa: E501
 
-    def fit(self, model: RNN):
+    def fit(self, model: RNN, train_data: CorpusDataset, val_data: CorpusDataset):
         train_loader, val_loader = _new_loaders(
-            self.train_data, self.val_data, self.cfg
+            train_data, val_data, self.cfg
         )
         model.to(self.cfg.device)
         start = time.time()
@@ -119,7 +116,7 @@ class Trainer:
         logger.info("evaluating predictions...")
         losses = []
         i = 0
-        n = len(self.val_data)
+        n = len(val_loader.dataset)
         model.to(self.cfg.device)
 
         with torch.no_grad():
@@ -142,8 +139,6 @@ class Trainer:
 
 def new_trainer(
     model: RNN,
-    train_dataset: CorpusDataset,
-    val_dataset: CorpusDataset,
     cfg: TrainerConfig,
 ):
 
@@ -165,8 +160,6 @@ def new_trainer(
         loss_function=torch.nn.BCEWithLogitsLoss(),
         optimizer=optimizer,
         scheduler=scheduler,
-        train_data=train_dataset,
-        val_data=val_dataset,
         cfg=cfg,
     )
 
