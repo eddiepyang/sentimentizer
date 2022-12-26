@@ -6,7 +6,7 @@ To setup environments and run the rnn example see instructions below:
 
 ```
 get the yelp dataset from https://www.yelp.com/dataset
-conda create -n yelp  
+conda create -n {env}  
 conda install pip  
 pip install -e .  
 run
