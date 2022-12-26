@@ -1,8 +1,29 @@
 Metadata-Version: 2.1
 Name: torch-sentiment
-Version: 0.41
+Version: 0.4.2
 Summary: straight forward rnn model
 Author: Edward Yang
-Author-email: edwardpyang@gmail.com
+Author-email: Edward Yang <edwardpyang@gmail.com>
 Project-URL: Source Code, https://github.com/eddiepyang/torch-sentiment
-Classifier: License :: OSI Approved :: Python Software Foundation License
+Keywords: rnn,pytorch,tutorial
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 3
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Provides-Extra: dev
+
+# Introduction
+This repo contains Neural Nets written in the pytorch framework for sentiment analysis on labeled reviews from Yelp.  
+A LSTM based torch model can be found in the rnn folder. 
+
+To setup environments and run the rnn example see instructions below:  
+
+```
+get the yelp dataset from https://www.yelp.com/dataset
+conda create -n {env}  
+conda install pip  
+pip install -e .  
+run
+```
+
