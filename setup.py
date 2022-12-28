@@ -5,7 +5,7 @@ setup(
     version="0.4.2",
     packages=find_packages(),
     install_requires=[
-        "numpy",
+        "numpy >= 1.24.0",
         "pandas",
         "torch",
         "seaborn",
