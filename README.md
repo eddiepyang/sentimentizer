@@ -1,4 +1,7 @@
 # Introduction
+
+beta release at https://pypi.org/project/torch-sentiment/
+
 This repo contains Neural Nets written in the pytorch framework for sentiment analysis on labeled reviews from Yelp.  
 A LSTM based torch model can be found in the rnn folder. 
 
