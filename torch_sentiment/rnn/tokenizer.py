@@ -1,16 +1,16 @@
-from typing import List, Tuple
-from dataclasses import dataclass, field
+from typing import List
+from dataclasses import dataclass
 
 import re
 import numpy as np
 import pandas as pd
 from gensim import corpora
 
-from torch_sentiment.rnn.config import FileConfig, TransformerConfig
-from torch_sentiment.logging_utils import new_logger, time_decorator, time_decorator_factory
-import logging
+from torch_sentiment.rnn.config import FileConfig, TokenizerConfig, LogLevels
+from torch_sentiment.logging_utils import new_logger, time_decorator
 
-logger = new_logger(logging.INFO)
+
+logger = new_logger(LogLevels.debug.value)
 
 
 def convert_rating(rating: int) -> float:
@@ -20,7 +20,7 @@ def convert_rating(rating: int) -> float:
     elif rating in [1, 2]:
         return 0.0
     else:
-        return -1.0
+        return 0.5
 
 
 def convert_rating_linear(rating: int, max_rating: int) -> float:
@@ -62,47 +62,51 @@ def _get_data(df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
     return df.loc[:, columns].reset_index(drop=True)
 
 
-@dataclass
-class DataTransformer:
-    """wrapper class for handling tokenization of datasets"""
-
-    data: pd.DataFrame = field(default=None, repr=False)
-    cfg: TransformerConfig = field(default_factory=TransformerConfig()) # type: ignore
-    dictionary: corpora.Dictionary = None # type: ignore
-
-    @time_decorator_factory(optional_text="DataTransformer save_dictionary")
-    def __post_init__(self):
-
-        if self.dictionary is None:
-            self.dictionary = corpora.Dictionary(self.data[self.cfg.text_col])
-            self.dictionary.filter_extremes(
-                no_below=self.cfg.dict_min,
-                no_above=self.cfg.no_above,
-                keep_n=self.cfg.dict_keep,
+def _get_dictionary(data: pd.DataFrame, cfg: TokenizerConfig) -> corpora.Dictionary:
+    dictionary = corpora.Dictionary(data[cfg.text_col])
+    dictionary.filter_extremes(
+                no_below=cfg.dict_min,
+                no_above=cfg.no_above,
+                keep_n=cfg.dict_keep,
             )
-            logger.info("dictionary created...")
+    logger.info("dictionary created...")
 
-            if self.cfg.save_dictionary:
-                self.dictionary.save(f"{FileConfig.dictionary_file_path}")
-                logger.info(f"dictionary saved to {FileConfig.dictionary_file_path}...")
+    if cfg.save_dictionary:
+        dictionary.save(f"{FileConfig.dictionary_file_path}")
+        logger.info(f"dictionary saved to {FileConfig.dictionary_file_path}...")
+    
+    return dictionary
+
+
+class Tokenizer:
+    """wrapper class for handling tokenization of datasets"""
+    def __init__(
+        self, data: pd.DataFrame = None,
+        cfg: TokenizerConfig = TokenizerConfig(),
+        dictionary: corpora.Dictionary = None
+    ):
+        self.cfg = cfg   # type: ignore
+        self.dictionary = dictionary
+        if dictionary is None and data is not None:
+            self.dictionary: corpora.Dictionary = _get_dictionary(data, self.cfg)  # type: ignore
 
     @time_decorator
-    def transform_sentences(self):
-        self.data[self.cfg.inputs] = self.data[self.cfg.text_col].map(
+    def transform_sentences(self, data: pd.DataFrame) -> pd.DataFrame:
+        data[self.cfg.inputs] = data[self.cfg.text_col].map(
             lambda text: text_sequencer(self.dictionary, text, self.cfg.max_len)
         )
-        self.data[self.cfg.labels] = self.data[self.cfg.label_col].map(convert_rating)
+        data[self.cfg.labels] = data[self.cfg.label_col].map(convert_rating)
         logger.info("converted tokens to numbers...")
         return self
 
-    def save(self):
-        _get_data(self.data, [self.cfg.inputs] + [self.cfg.labels]).to_parquet(
+    def save(self, data: pd.DataFrame) -> None:
+        _get_data(data, [self.cfg.inputs] + [self.cfg.labels]).to_parquet(
             f"{FileConfig.reviews_file_path}", index=False
         )
         logger.info(f"file saved to {FileConfig.reviews_file_path}")  # noqa: E501
 
 
-def get_trained_tokenizer(path: str) -> DataTransformer:
+def get_trained_tokenizer(path: str) -> Tokenizer:
     corp_dict = corpora.Dictionary()
     corp_dict.load(path)
-    return DataTransformer(dictionary=corp_dict)
+    return Tokenizer(dictionary=corp_dict)

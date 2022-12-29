@@ -3,10 +3,10 @@ import pandas as pd
 from gensim import corpora
 from unittest.mock import Mock
 
-from torch_sentiment.rnn.config import TransformerConfig
+from torch_sentiment.rnn.config import TokenizerConfig
 from torch_sentiment.rnn.loader import CorpusDataset
-from torch_sentiment.rnn.transformer import (
-    DataTransformer,
+from torch_sentiment.rnn.tokenizer import (
+    Tokenizer,
     tokenize,
     convert_rating,
 )
@@ -91,9 +91,10 @@ class TestExtractData():
 class TestDataTransformer:
 
     def test_success(self, tokenized_df):
-        parser = DataTransformer(tokenized_df, TransformerConfig(save_dictionary=False))
-        parser.transform_sentences()
-        assert parser.data.shape == (2, 4)
+        parser = Tokenizer(tokenized_df, TokenizerConfig(save_dictionary=False))
+        print(tokenized_df.shape)
+        parser.transform_sentences(tokenized_df)
+        assert tokenized_df.shape == (2, 4)
 
     def test_failure(self):
         # todo

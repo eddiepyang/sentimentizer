@@ -3,9 +3,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from gensim import corpora
+from typing import Optional
+
 from torch_sentiment.rnn.extractor import new_embedding_weights
 from torch_sentiment.logging_utils import new_logger
-from torch_sentiment.rnn.config import EmbeddingsConfig, LogLevels
+from torch_sentiment.rnn.config import EmbeddingsConfig, TokenizerConfig, LogLevels
 
 logger = new_logger(LogLevels.debug.value)
 
@@ -17,7 +19,7 @@ class RNN(nn.Module):
         self,
         batch_size: int,
         input_len: int,
-        emb_weights: torch.Tensor = torch.Tensor(),  # weights are vocabsize x embedding length
+        emb_weights: torch.Tensor,  # weights are vocabsize x embedding length
         verbose: bool = False,
         dropout: float = 0.2
     ):
@@ -25,12 +27,16 @@ class RNN(nn.Module):
         # vocab size in, hidden size out
         self.batch_size = batch_size
         self.emb_weights = emb_weights
-        if emb_weights is not None:
-            self.embed_layer = nn.Embedding(emb_weights.shape[0], emb_weights.shape[1])
+        
+        
+        self.embed_layer = nn.Embedding(emb_weights.shape[0], emb_weights.shape[1])
+        self.fc0 = nn.Linear(emb_weights.shape[1], emb_weights.shape[1])
+
         self.dropout = dropout
+        self.dropout_layer = nn.Dropout1d(p=self.dropout, inplace=True)
         # input of shape (seq_len, batch, input_size)
         # https://pytorch.org/docs/stable/nn.html
-        self.fc0 = nn.Linear(emb_weights.shape[1], emb_weights.shape[1])
+        
         self.lstm = nn.LSTM(input_len, input_len)
         self.fc1 = nn.Linear(input_len, 1)
         self.fc2 = nn.Linear(emb_weights.shape[1], 1)
@@ -42,7 +48,7 @@ class RNN(nn.Module):
 
     def forward(self, inputs: torch.Tensor):
         embeds = self.embed_layer(inputs)
-        embeds = nn.Dropout2d(p=self.dropout, inplace=False)(embeds)
+        self.dropout_layer(embeds)
         if self.verbose:
             logger.info("embedding shape %s" % (embeds.shape,))
         embeds = F.relu(self.fc0(embeds))
@@ -69,6 +75,7 @@ def new_model(dict_path: str, embeddings_config: EmbeddingsConfig, batch_size: i
 
 
 def get_trained_model(path: str, batch_size: int, input_len: int) -> RNN:
-    model = RNN(batch_size=batch_size, input_len=input_len)
+    empty_embeddings = torch.zeros(TokenizerConfig.dict_keep, (EmbeddingsConfig.emb_length))
+    model = RNN(batch_size=batch_size, input_len=input_len, emb_weights=empty_embeddings)
     model.load_state_dict(torch.load(path))
     return model

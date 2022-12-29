@@ -11,7 +11,7 @@ from torch_sentiment.logging_utils import new_logger, time_decorator
 
 from torch_sentiment.rnn.config import DriverConfig
 from torch_sentiment.rnn.config import LogLevels
-from torch_sentiment.rnn.transformer import DataTransformer
+from torch_sentiment.rnn.tokenizer import Tokenizer
 
 logger = new_logger(LogLevels.debug.value)
 
@@ -46,14 +46,14 @@ def main():
         stop=args.stop,
     )
 
-    transformer = DataTransformer(reviews_data, DriverConfig.transformer())
-    transformer.transform_sentences().save()
+    transformer = Tokenizer(reviews_data, DriverConfig.tokenizer)
+    transformer.transform_sentences(reviews_data).save(reviews_data)
 
     model = new_model(
         dict_path=DriverConfig.files.dictionary_file_path,
         embeddings_config=DriverConfig.embeddings,
         batch_size=DriverConfig.trainer.batch_size,
-        input_len=DriverConfig.transformer.max_len,
+        input_len=DriverConfig.tokenizer.max_len,
     )
 
     train_dataset, val_dataset = load_train_val_corpus_datasets(
