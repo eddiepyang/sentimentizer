@@ -38,7 +38,7 @@ def extract_embeddings(cfg: EmbeddingsConfig) -> dict[str, np.ndarray]:
 
     """load glove vectors"""
 
-    embeddings_dict = {}
+    embeddings_dict: dict = {}
 
     with zipfile.ZipFile(cfg.file_path, "r") as f:
         with f.open(cfg.sub_file_path, "r") as z:
@@ -63,7 +63,7 @@ def new_embedding_weights(
     """converts local dictionary to embeddings from glove"""
 
     embeddings_index = extract_embeddings(cfg)
-    conversion_table = OrderedDict()
+    conversion_table: OrderedDict = OrderedDict()
 
     for word in dictionary.values():
         if word in embeddings_index:

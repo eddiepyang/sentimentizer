@@ -64,9 +64,9 @@ def _get_data(df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
 
 @dataclass
 class DataTransformer:
-    """wrapper class for handling datasets"""
+    """wrapper class for handling tokenization of datasets"""
 
-    df: pd.DataFrame = field(repr=False)
+    data: pd.DataFrame = field(default=None, repr=False)
     cfg: TransformerConfig = field(default_factory=TransformerConfig()) # type: ignore
     dictionary: corpora.Dictionary = None # type: ignore
 
@@ -74,7 +74,7 @@ class DataTransformer:
     def __post_init__(self):
 
         if self.dictionary is None:
-            self.dictionary = corpora.Dictionary(self.df[self.cfg.text_col])
+            self.dictionary = corpora.Dictionary(self.data[self.cfg.text_col])
             self.dictionary.filter_extremes(
                 no_below=self.cfg.dict_min,
                 no_above=self.cfg.no_above,
@@ -88,15 +88,21 @@ class DataTransformer:
 
     @time_decorator
     def transform_sentences(self):
-        self.df[self.cfg.x_labels] = self.df[self.cfg.text_col].map(
-            lambda x: text_sequencer(self.dictionary, x, self.cfg.max_len)
+        self.data[self.cfg.inputs] = self.data[self.cfg.text_col].map(
+            lambda text: text_sequencer(self.dictionary, text, self.cfg.max_len)
         )
-        self.df[self.cfg.y_labels] = self.df[self.cfg.label_col].map(convert_rating)
+        self.data[self.cfg.labels] = self.data[self.cfg.label_col].map(convert_rating)
         logger.info("converted tokens to numbers...")
         return self
 
     def save(self):
-        _get_data(self.df, [self.cfg.x_labels] + [self.cfg.y_labels]).to_parquet(
+        _get_data(self.data, [self.cfg.inputs] + [self.cfg.labels]).to_parquet(
             f"{FileConfig.reviews_file_path}", index=False
         )
         logger.info(f"file saved to {FileConfig.reviews_file_path}")  # noqa: E501
+
+
+def get_trained_tokenizer(path: str) -> DataTransformer:
+    corp_dict = corpora.Dictionary()
+    corp_dict.load(path)
+    return DataTransformer(dictionary=corp_dict)
