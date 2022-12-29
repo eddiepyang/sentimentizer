@@ -124,9 +124,7 @@ class Trainer:
             for j, (sent, target) in enumerate(val_loader):
                 preds = model(sent.to(self.cfg.device))
                 losses.append(
-                    np.mean(
-                        self.loss_function(preds, target.to(self.cfg.device)).item()
-                    )
+                    self.loss_function(preds, target.to(self.cfg.device)).item()
                 )
                 i += len(target)
                 if i % (self.cfg.batch_size * 100) == 0:

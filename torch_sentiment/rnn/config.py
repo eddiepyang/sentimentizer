@@ -4,7 +4,10 @@ from torch import nn
 from dataclasses import dataclass
 from torch_sentiment import root
 from logging import NOTSET, DEBUG, INFO, WARN, ERROR, CRITICAL
+import os 
 
+
+data_path = os.path.join(root, "torch_sentiment")
 
 class LogLevels(enum.Enum):
     unset = NOTSET
@@ -36,7 +39,7 @@ class SchedulerParams:
 
 
 @dataclass
-class TransformerConfig:
+class TokenizerConfig:
     text_col: str = "text"
     label_col: str = "stars"
     inputs: str = "data"
@@ -51,11 +54,11 @@ class TransformerConfig:
 
 @dataclass(frozen=True)
 class FileConfig:
-    archive_file_path: str = f"{root}/data/archive.zip"
+    archive_file_path: str = f"{data_path}/data/archive.zip"
     raw_file_path: str = "yelp_academic_dataset_review.json"
-    dictionary_file_path: str = f"{root}/data/yelp_data.dictionary"
-    reviews_file_path: str = f"{root}/data/review_data.parquet"
-    weights_file_path: str = f"{root}/data/weights.pt"
+    dictionary_file_path: str = f"{data_path}/data/yelp_data.dictionary"
+    reviews_file_path: str = f"{data_path}/data/review_data.parquet"
+    weights_file_path: str = f"{data_path}/data/weights.pt"
 
 
 @dataclass
@@ -69,7 +72,7 @@ class TrainerConfig:
 
 @dataclass
 class EmbeddingsConfig:
-    file_path: str = f"{root}/data/glove.6B.zip"
+    file_path: str = f"{data_path}/data/glove.6B.zip"
     sub_file_path: str = "glove.6B.100d.txt"
     emb_length: int = 100
 
@@ -78,5 +81,5 @@ class EmbeddingsConfig:
 class DriverConfig:
     files: Callable = FileConfig
     embeddings: Callable = EmbeddingsConfig
-    transformer: Callable = TransformerConfig
+    tokenizer: Callable = TokenizerConfig
     trainer: Callable = TrainerConfig

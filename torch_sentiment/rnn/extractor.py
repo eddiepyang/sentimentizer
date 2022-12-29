@@ -5,7 +5,7 @@ import zipfile
 from gensim import corpora
 from collections import OrderedDict
 
-from torch_sentiment.rnn.transformer import tokenize
+from torch_sentiment.rnn.tokenizer import tokenize
 from torch_sentiment.rnn.config import EmbeddingsConfig, LogLevels
 from torch_sentiment.logging_utils import new_logger, time_decorator
 
@@ -25,6 +25,8 @@ def extract_data(
 
         with jsonl.Reader(inf) as file:
             for i, line in enumerate(file):
+                if i % 100000 == 0:
+                    logger.debug(f"processing line {i}")
                 line["text"] = tokenize(line.get("text"))
                 ls.append(line)
                 if i == stop - 1:
