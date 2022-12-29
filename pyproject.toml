@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "torch_sentiment"
-version = "0.4.3"
+version = "0.4.31"
 description = "straight forward rnn model"
 readme = "README.md"
 authors = [{ name = "Edward Yang", email = "edwardpyang@gmail.com" }]
@@ -22,8 +22,6 @@ dependencies = [
         "numpy >= 1.24.0",
         "pandas >= 1.5.2",
         "torch >= 1.13.1",
-        "seaborn >= 0.12.1",
-        "spacy",
         "scikit-learn",
         "jsonlines",
         "gensim",
