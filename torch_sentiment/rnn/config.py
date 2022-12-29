@@ -39,8 +39,8 @@ class SchedulerParams:
 class TransformerConfig:
     text_col: str = "text"
     label_col: str = "stars"
-    x_labels: str = "data"
-    y_labels: str = "target"
+    inputs: str = "data"
+    labels: str = "target"
     stop: int = 10000
     max_len: int = 200
     dict_min: int = 10
