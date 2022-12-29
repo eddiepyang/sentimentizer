@@ -1,5 +1,5 @@
 import logging
-from typing import Callable, List
+from typing import Callable, List, Tuple
 import time
 import numpy as np
 import pandas as pd
@@ -20,7 +20,7 @@ logger = new_logger(logging.INFO)
 
 def _new_loaders(
     train_data: CorpusDataset, val_data: CorpusDataset, cfg: TrainerConfig
-):
+) -> Tuple[DataLoader, DataLoader]:
 
     train_loader = DataLoader(
         dataset=train_data,
@@ -102,7 +102,7 @@ class Trainer:
 
         for epoch in range(self.cfg.epochs):
             self._train_epoch(model, train_loader)
-            self.eval(model, val_loader)
+            self.predict(model, val_loader)
             epoch_count += 1
             if self.scheduler:
                 self.scheduler.step()
@@ -111,7 +111,7 @@ class Trainer:
             f"model fitting completed, {time.time()-start:.0f} seconds passed"
         )  # noqa: E501
 
-    def eval(self, model: RNN, val_loader: DataLoader):
+    def predict(self, model: RNN, val_loader: DataLoader):
 
         logger.info("evaluating predictions...")
         losses = []

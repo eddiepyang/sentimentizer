@@ -15,9 +15,9 @@ class RNN(nn.Module):
 
     def __init__(
         self,
-        emb_weights: torch.Tensor,  # weights are vocabsize x embedding length
         batch_size: int,
         input_len: int,
+        emb_weights: torch.Tensor = torch.Tensor(),  # weights are vocabsize x embedding length
         verbose: bool = False,
         dropout: float = 0.2
     ):
@@ -25,7 +25,8 @@ class RNN(nn.Module):
         # vocab size in, hidden size out
         self.batch_size = batch_size
         self.emb_weights = emb_weights
-        self.embed_layer = nn.Embedding(emb_weights.shape[0], emb_weights.shape[1])
+        if emb_weights is not None:
+            self.embed_layer = nn.Embedding(emb_weights.shape[0], emb_weights.shape[1])
         self.dropout = dropout
         # input of shape (seq_len, batch, input_size)
         # https://pytorch.org/docs/stable/nn.html
@@ -64,4 +65,10 @@ def new_model(dict_path: str, embeddings_config: EmbeddingsConfig, batch_size: i
     emb_t = torch.from_numpy(embedding_matrix)
     model = RNN(batch_size=batch_size, input_len=input_len, emb_weights=emb_t)
     model.load_weights()
+    return model
+
+
+def get_trained_model(path: str, batch_size: int, input_len: int) -> RNN:
+    model = RNN(batch_size=batch_size, input_len=input_len)
+    model.load_state_dict(torch.load(path))
     return model

@@ -93,7 +93,7 @@ class TestDataTransformer:
     def test_success(self, tokenized_df):
         parser = DataTransformer(tokenized_df, TransformerConfig(save_dictionary=False))
         parser.transform_sentences()
-        assert parser.df.shape == (2, 4)
+        assert parser.data.shape == (2, 4)
 
     def test_failure(self):
         # todo
