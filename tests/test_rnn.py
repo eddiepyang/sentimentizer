@@ -115,7 +115,7 @@ class TestGetTrainedModel:
     """tests if model loads"""
 
     def test_success(self):
-        model = get_trained_model(64)
+        model = get_trained_model(64, 'cpu')
         assert isinstance(model, RNN)
 
     def test_failure(self):

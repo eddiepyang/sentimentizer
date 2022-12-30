@@ -85,10 +85,12 @@ def new_model(
     return model
 
 
-def get_trained_model(batch_size: int) -> RNN:
+def get_trained_model(batch_size: int, device: str) -> RNN:
     """loads pre-trained model"""
-
-    weights = torch.load(files("torch_sentiment.data").joinpath("weights.pth"))
+    if device not in ("cpu", "cuda"):
+        raise ValueError("device must be cpu or cuda")
+    
+    weights = torch.load(files("torch_sentiment.data").joinpath("weights.pth"), map_location=torch.device(device=device))
     empty_embeddings = torch.zeros(weights["embed_layer.weight"].shape)
     model = RNN(
         batch_size=batch_size, input_len=TokenizerConfig.max_len, emb_weights=empty_embeddings
