@@ -1,0 +1,3 @@
+include README.md
+include torch_sentiment/data/yelp.dictionary
+include torch_sentiment/data/weights.pth 

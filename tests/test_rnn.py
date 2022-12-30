@@ -1,7 +1,5 @@
 import pytest
 import pandas as pd
-from gensim import corpora
-from unittest.mock import Mock
 
 from torch_sentiment.rnn.config import TokenizerConfig
 from torch_sentiment.rnn.loader import CorpusDataset
@@ -12,6 +10,7 @@ from torch_sentiment.rnn.tokenizer import (
 )
 from torch_sentiment.rnn.extractor import extract_data
 from torch_sentiment.logging_utils import new_logger
+from torch_sentiment.rnn.model import get_trained_model, RNN
 
 
 logger = new_logger()
@@ -92,7 +91,6 @@ class TestDataTransformer:
 
     def test_success(self, tokenized_df):
         parser = Tokenizer(tokenized_df, TokenizerConfig(save_dictionary=False))
-        print(tokenized_df.shape)
         parser.transform_sentences(tokenized_df)
         assert tokenized_df.shape == (2, 4)
 
@@ -107,6 +105,17 @@ class TestCorpusDataset:
         item = dataset[1]
         assert len(item) == 2
         assert len(dataset) == 2
+
+    def test_failure(self):
+        # todo
+        return
+
+
+class TestGetTrainedModel:
+    """tests if model loads"""
+    def test_success(self):
+        model = get_trained_model(4735, 200)
+        assert isinstance(model, RNN)
 
     def test_failure(self):
         # todo
