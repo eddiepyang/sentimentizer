@@ -46,9 +46,9 @@ class TokenizerConfig:
     labels: str = "target"
     stop: int = 10000
     max_len: int = 200
-    dict_min: int = 10
-    dict_keep: int = 5000
-    no_above: float = 0.99
+    dict_min: int = 3
+    dict_keep: int = 20000
+    no_above: float = 0.99999
     save_dictionary: bool = True
 
 
@@ -56,9 +56,9 @@ class TokenizerConfig:
 class FileConfig:
     archive_file_path: str = f"{data_path}/data/archive.zip"
     raw_file_path: str = "yelp_academic_dataset_review.json"
-    dictionary_file_path: str = f"{data_path}/data/yelp_data.dictionary"
+    dictionary_file_path: str = f"{data_path}/data/yelp.dictionary"
     reviews_file_path: str = f"{data_path}/data/review_data.parquet"
-    weights_file_path: str = f"{data_path}/data/weights.pt"
+    weights_file_path: str = f"{data_path}/data/weights.pth"
 
 
 @dataclass

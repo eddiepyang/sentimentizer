@@ -47,7 +47,7 @@ def main():
     )
 
     transformer = Tokenizer(reviews_data, DriverConfig.tokenizer)
-    transformer.transform_sentences(reviews_data).save(reviews_data)
+    transformer.transform_dataframe(reviews_data).save(reviews_data)
 
     model = new_model(
         dict_path=DriverConfig.files.dictionary_file_path,

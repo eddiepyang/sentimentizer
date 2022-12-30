@@ -1,13 +1,13 @@
 Metadata-Version: 2.1
 Name: torch-sentiment
-Version: 0.4.40
+Version: 0.4.43
 Summary: straight forward rnn model
 Author-email: Edward Yang <edwardpyang@gmail.com>
 Keywords: rnn,pytorch,tutorial
 Classifier: License :: OSI Approved :: MIT License
 Classifier: Programming Language :: Python
 Classifier: Programming Language :: Python :: 3
-Requires-Python: >=3.9
+Requires-Python: >=3.10
 Description-Content-Type: text/markdown
 Provides-Extra: dev
 
