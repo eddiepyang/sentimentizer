@@ -102,7 +102,7 @@ class Trainer:
 
         for epoch in range(self.cfg.epochs):
             self._train_epoch(model, train_loader)
-            self.predict(model, val_loader)
+            self.eval(model, val_loader)
             epoch_count += 1
             if self.scheduler:
                 self.scheduler.step()
@@ -111,7 +111,7 @@ class Trainer:
             f"model fitting completed, {time.time()-start:.0f} seconds passed"
         )  # noqa: E501
 
-    def predict(self, model: RNN, val_loader: DataLoader):
+    def eval(self, model: RNN, val_loader: DataLoader):
 
         logger.info("evaluating predictions...")
         losses = []
