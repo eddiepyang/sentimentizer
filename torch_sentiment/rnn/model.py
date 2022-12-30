@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+import numpy as np
 from gensim import corpora
 from typing import Optional
 
@@ -66,6 +67,12 @@ class RNN(nn.Module):
 
         return torch.squeeze(fout)
 
+    def predict(self, converted_text: np.ndarray) -> torch.Tensor:
+        with torch.no_grad():
+            self.eval()
+            output = torch.from_numpy(converted_text)
+            return torch.sigmoid(self.forward(output))
+
 
 def new_model(
     dict_path: str, embeddings_config: EmbeddingsConfig, batch_size: int, input_len: int
@@ -78,16 +85,16 @@ def new_model(
     return model
 
 
-def get_trained_model(batch_size: int, input_len: int) -> RNN:
-
+def get_trained_model(batch_size: int) -> RNN:
     """loads pre-trained model"""
-    empty_embeddings = torch.zeros(
-        4735, EmbeddingsConfig.emb_length
-    )
+
+    weights = torch.load(files("torch_sentiment.data").joinpath("weights.pth"))
+    empty_embeddings = torch.zeros(weights["embed_layer.weight"].shape)
     model = RNN(
-        batch_size=batch_size, input_len=input_len, emb_weights=empty_embeddings
+        batch_size=batch_size, input_len=TokenizerConfig.max_len, emb_weights=empty_embeddings
     )
-    model.load_state_dict(
-        torch.load(files("torch_sentiment.data").joinpath("weights.pth"))
-    )
+    model.load_state_dict(weights)
+
     return model
+
+

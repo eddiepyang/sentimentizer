@@ -36,22 +36,20 @@ def extract_data(
 
 
 @time_decorator
-def extract_embeddings(cfg: EmbeddingsConfig) -> dict[str, np.ndarray]:
-
+def extract_embeddings(dictionary: corpora.Dictionary, cfg: EmbeddingsConfig) -> dict[str, np.ndarray]:
     """load glove vectors"""
 
     embeddings_dict: dict = {}
 
-    with zipfile.ZipFile(cfg.file_path, "r") as f:
-        with f.open(cfg.sub_file_path, "r") as z:
-            for line in z:
-                values = line.split()
+    with zipfile.ZipFile(cfg.file_path, "r") as f, f.open(cfg.sub_file_path, "r") as z:
+        for line in z:
+            values = line.split()
+            key = values[0].decode()
+
+            if key in dictionary.token2id:
                 embeddings_dict.setdefault(
-                    values[0].decode(), 
-                    np.asarray(
-                        values[1:], 
-                        dtype=np.float32
-                    )  # noqa: E501
+                    dictionary.token2id[key] + 1, 
+                    np.asarray(values[1:], dtype=np.float32),  # noqa: E501
                 )
 
     return embeddings_dict
@@ -64,25 +62,19 @@ def new_embedding_weights(
 
     """converts local dictionary to embeddings from glove"""
 
-    embeddings_index = extract_embeddings(cfg)
-    conversion_table: OrderedDict = OrderedDict()
+    embeddings_dict: dict = extract_embeddings(dictionary, cfg)
 
     for word in dictionary.values():
-        if word in embeddings_index:
-            conversion_table.setdefault(
-                dictionary.token2id[word] + 1, 
-                embeddings_index[word]
-            )
-        else:
-            conversion_table.setdefault(
+        if word not in embeddings_dict:
+            embeddings_dict.setdefault(
                 dictionary.token2id[word] + 1, 
                 np.random.normal(0, 0.32, cfg.emb_length)
             )
-    
+
     return np.vstack(
         (
             np.zeros(cfg.emb_length),
-            list(conversion_table.values()),
+            list(embeddings_dict.values()),
             np.random.randn(cfg.emb_length),
         )
     )

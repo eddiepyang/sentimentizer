@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
 Name: torch-sentiment
-Version: 0.4.42
+Version: 0.4.43
 Summary: straight forward rnn model
 Author-email: Edward Yang <edwardpyang@gmail.com>
 Keywords: rnn,pytorch,tutorial
