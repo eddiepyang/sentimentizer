@@ -2,8 +2,7 @@
 
 [![PyPI Latest Release](https://img.shields.io/pypi/v/torch-sentiment.svg)](https://pypi.org/project/torch-sentiment/)
 
-Beta release now on [pypi](https://pypi.org/project/torch-sentiment/);
-api subject to change. Install with:  
+Beta release, api subject to change. Install with:  
 
 ```
 pip install torch-sentiment
