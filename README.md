@@ -36,11 +36,11 @@ conda install pip
 pip install -e .  
 ```
 
-## Example
+## Retrain model
 To setup environments and run the rnn example see instructions below:  
 
 ```
 get the yelp dataset from https://www.yelp.com/dataset
-run
+train
 ```
 
