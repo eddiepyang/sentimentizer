@@ -2,7 +2,7 @@
 
 [![PyPI Latest Release](https://img.shields.io/pypi/v/torch-sentiment.svg)](https://pypi.org/project/torch-sentiment/)
 
-Beta release at [pypi](https://pypi.org/project/torch-sentiment/);
+Beta release now on [pypi](https://pypi.org/project/torch-sentiment/);
 api subject to change. Install with:  
 
 ```
@@ -10,10 +10,9 @@ pip install torch-sentiment
 ```  
   
 This repo contains Neural Nets written with the pytorch framework for sentiment analysis.  
-A LSTM based torch model can be found in the rnn folder. In spite of the state of the art  
-large language models (like GPT3.5 as of 2023), smaller models are still pretty efficient  
-and useful to learn from. They work pretty well for some tasks like sentiment analysis. 
-This model was trained on a single gpu and required less than 1GB of memory.
+A LSTM based torch model can be found in the rnn folder. In spite of large language models (GPT3.5 as of 2023), smaller models are still pretty efficient  
+dominating the conversation, small models can be pretty effective and are nice to learn from. This model focuses on sentiment analysis and was trained on 
+a single gpu in minutes and requires less than 1GB of memory.
 
   
 ## Usage
