@@ -37,10 +37,9 @@ pip install -e .
 ```
 
 ## Retrain model
-To setup environments and run the rnn example see instructions below:  
+To update the model get the yelp [dataset](https://www.yelp.com/dataset), then run with the rnn training entry point:
 
 ```
-get the yelp dataset from https://www.yelp.com/dataset
 train
 ```
 
