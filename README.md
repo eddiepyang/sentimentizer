@@ -10,7 +10,7 @@ pip install torch-sentiment
 ```  
   
 This repo contains Neural Nets written with the pytorch framework for sentiment analysis.  
-A LSTM based torch model can be found in the rnn folder. In spite of large language models (GPT3.5 as of 2023) getting all the attention, 
+A LSTM based torch model can be found in the rnn folder. In spite of large language models (GPT3.5 as of 2023) 
 dominating the conversation, small models can be pretty effective and are nice to learn from. This model focuses on sentiment analysis and was trained on 
 a single gpu in minutes and requires less than 1GB of memory.
 
