@@ -1,13 +1,16 @@
+import os
 import enum
-from typing import Tuple, Callable
-from torch import nn
-from dataclasses import dataclass
-from torch_sentiment import root
-from logging import NOTSET, DEBUG, INFO, WARN, ERROR, CRITICAL
-import os 
 
+from dataclasses import dataclass
+from logging import NOTSET, DEBUG, INFO, WARN, ERROR, CRITICAL
+
+from typing import Tuple, Callable
+from torch_sentiment import root
 
 data_path = os.path.join(root, "torch_sentiment")
+
+DEFAULT_LOG_LEVEL = DEBUG
+
 
 class LogLevels(enum.Enum):
     unset = NOTSET
@@ -38,7 +41,7 @@ class SchedulerParams:
     last_epoch: int = -1
 
 
-@dataclass
+@dataclass(frozen=True)
 class TokenizerConfig:
     text_col: str = "text"
     label_col: str = "stars"

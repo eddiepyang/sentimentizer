@@ -1,17 +1,19 @@
-from typing import List
-from dataclasses import dataclass
+from typing import List, TypeVar
+from dataclasses import dataclass, field
+from importlib.resources import files
 
 import re
 import numpy as np
 import pandas as pd
 from gensim import corpora
 
-from torch_sentiment.rnn.config import FileConfig, TokenizerConfig, LogLevels
+from torch_sentiment.rnn.config import FileConfig, TokenizerConfig, DEFAULT_LOG_LEVEL
 from torch_sentiment.logging_utils import new_logger, time_decorator
 
-from importlib.resources import files
 
-logger = new_logger(LogLevels.debug.value)
+logger = new_logger(DEFAULT_LOG_LEVEL)
+
+TokenizerAny = TypeVar("TokenizerAny", bound="Tokenizer")
 
 
 def convert_rating(rating: int) -> float:
@@ -82,19 +84,19 @@ def _new_dictionary(data: pd.DataFrame, cfg: TokenizerConfig) -> corpora.Diction
     return dictionary
 
 
+@dataclass
 class Tokenizer:
     """wrapper class for handling tokenization of datasets"""
 
-    def __init__(
-        self,
-        data: pd.DataFrame = None,
-        cfg: TokenizerConfig = TokenizerConfig(),
-        dictionary: corpora.Dictionary = None,
-    ):
-        self.cfg = cfg  # type: ignore
-        self.dictionary = dictionary
-        if dictionary is None and data is not None:
-            self.dictionary: corpora.Dictionary = _new_dictionary(data, self.cfg)  # type: ignore
+    cfg: TokenizerConfig = field(default_factory=TokenizerConfig)
+    dictionary: corpora.Dictionary = None
+
+    @classmethod
+    def from_data(cls: type[TokenizerAny], data: pd.DataFrame) -> TokenizerAny:
+        """creates tokenizer from dataframe"""
+        return cls(
+            dictionary=_new_dictionary(data, TokenizerConfig(save_dictionary=False))
+        )
 
     @time_decorator
     def transform_dataframe(self, data: pd.DataFrame) -> pd.DataFrame:
@@ -103,6 +105,7 @@ class Tokenizer:
         data[self.cfg.inputs] = data[self.cfg.text_col].map(
             lambda text: text_sequencer(self.dictionary, text, self.cfg.max_len)
         )
+
         data[self.cfg.labels] = data[self.cfg.label_col].map(convert_rating)
         logger.info("converted tokens to numbers...")
         return self

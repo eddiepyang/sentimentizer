@@ -6,10 +6,10 @@ from gensim import corpora
 from collections import OrderedDict
 
 from torch_sentiment.rnn.tokenizer import tokenize
-from torch_sentiment.rnn.config import EmbeddingsConfig, LogLevels
+from torch_sentiment.rnn.config import EmbeddingsConfig, LogLevels, DEFAULT_LOG_LEVEL
 from torch_sentiment.logging_utils import new_logger, time_decorator
 
-logger = new_logger(LogLevels.debug.value)
+logger = new_logger(DEFAULT_LOG_LEVEL)
 
 
 @time_decorator
