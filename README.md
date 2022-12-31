@@ -1,7 +1,8 @@
 # Introduction
 
 [![PyPI Latest Release](https://img.shields.io/pypi/v/torch-sentiment.svg)](https://pypi.org/project/torch-sentiment/)
-
+![GitHub CI](https://github.com/eddiepyang/torch-sentiment/actions/workflows/ci.yml/badge.svg)
+  
 Beta release, api subject to change. Install with:  
 
 ```
