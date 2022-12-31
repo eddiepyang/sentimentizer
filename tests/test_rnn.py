@@ -1,7 +1,7 @@
 import pytest
 import pandas as pd
 
-from torch_sentiment.rnn.config import TokenizerConfig
+from torch_sentiment.rnn.config import TokenizerConfig, DEFAULT_LOG_LEVEL
 from torch_sentiment.rnn.loader import CorpusDataset
 from torch_sentiment.rnn.tokenizer import (
     Tokenizer,
@@ -13,7 +13,7 @@ from torch_sentiment.logging_utils import new_logger
 from torch_sentiment.rnn.model import get_trained_model, RNN
 from torch_sentiment.rnn.tokenizer import get_trained_tokenizer
 
-logger = new_logger()
+logger = new_logger(DEFAULT_LOG_LEVEL)
 
 
 @pytest.fixture
@@ -88,9 +88,9 @@ class TestExtractData:
         return
 
 
-class TestDataTransformer:
+class TestDataTokenizer:
     def test_success(self, tokenized_df):
-        parser = Tokenizer(tokenized_df, TokenizerConfig(save_dictionary=False))
+        parser = Tokenizer.from_data(tokenized_df)
         parser.transform_dataframe(tokenized_df)
         assert tokenized_df.shape == (2, 4)
 
