@@ -4,16 +4,19 @@ import torch.nn.functional as F
 
 import numpy as np
 from gensim import corpora
-from typing import Optional
 
 from torch_sentiment.rnn.extractor import new_embedding_weights
 from torch_sentiment.logging_utils import new_logger
-from torch_sentiment.rnn.config import EmbeddingsConfig, TokenizerConfig, LogLevels
+from torch_sentiment.rnn.config import (
+    EmbeddingsConfig,
+    TokenizerConfig,
+    DEFAULT_LOG_LEVEL,
+)
 
 from importlib.resources import files
 
 
-logger = new_logger(LogLevels.debug.value)
+logger = new_logger(DEFAULT_LOG_LEVEL)
 
 
 class RNN(nn.Module):
@@ -89,14 +92,17 @@ def get_trained_model(batch_size: int, device: str) -> RNN:
     """loads pre-trained model"""
     if device not in ("cpu", "cuda"):
         raise ValueError("device must be cpu or cuda")
-    
-    weights = torch.load(files("torch_sentiment.data").joinpath("weights.pth"), map_location=torch.device(device=device))
+
+    weights = torch.load(
+        files("torch_sentiment.data").joinpath("weights.pth"),
+        map_location=torch.device(device=device),
+    )
     empty_embeddings = torch.zeros(weights["embed_layer.weight"].shape)
     model = RNN(
-        batch_size=batch_size, input_len=TokenizerConfig.max_len, emb_weights=empty_embeddings
+        batch_size=batch_size,
+        input_len=TokenizerConfig.max_len,
+        emb_weights=empty_embeddings,
     )
     model.load_state_dict(weights)
 
     return model
-
-

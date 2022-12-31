@@ -1,9 +1,10 @@
 import logging
-from typing import Callable, List, Tuple
 import time
+from typing import Callable, List, Tuple
+from dataclasses import dataclass, field
+
 import numpy as np
 import pandas as pd
-from dataclasses import dataclass, field
 
 import torch
 from torch import optim
@@ -12,10 +13,15 @@ from torch.utils.data import DataLoader
 from torch_sentiment.logging_utils import new_logger
 from torch_sentiment.rnn.loader import CorpusDataset
 from torch_sentiment.rnn.model import RNN
-from torch_sentiment.rnn.config import TrainerConfig, OptimizationParams, SchedulerParams
+from torch_sentiment.rnn.config import (
+    TrainerConfig,
+    OptimizationParams,
+    SchedulerParams,
+    DEFAULT_LOG_LEVEL
+)
 
 
-logger = new_logger(logging.INFO)
+logger = new_logger(DEFAULT_LOG_LEVEL)
 
 
 def _new_loaders(
@@ -92,9 +98,7 @@ class Trainer:
                 )  # noqa: E501
 
     def fit(self, model: RNN, train_data: CorpusDataset, val_data: CorpusDataset):
-        train_loader, val_loader = _new_loaders(
-            train_data, val_data, self.cfg
-        )
+        train_loader, val_loader = _new_loaders(train_data, val_data, self.cfg)
         model.to(self.cfg.device)
         start = time.time()
         epoch_count = 0

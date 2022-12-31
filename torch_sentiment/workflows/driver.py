@@ -9,11 +9,10 @@ from torch_sentiment.rnn.trainer import new_trainer
 from torch_sentiment.rnn.model import new_model
 from torch_sentiment.logging_utils import new_logger, time_decorator
 
-from torch_sentiment.rnn.config import DriverConfig
-from torch_sentiment.rnn.config import LogLevels
+from torch_sentiment.rnn.config import DriverConfig, DEFAULT_LOG_LEVEL
 from torch_sentiment.rnn.tokenizer import Tokenizer
 
-logger = new_logger(LogLevels.debug.value)
+logger = new_logger(DEFAULT_LOG_LEVEL)
 
 
 def new_parser() -> argparse.Namespace:
@@ -46,7 +45,7 @@ def main():
         stop=args.stop,
     )
 
-    transformer = Tokenizer(reviews_data, DriverConfig.tokenizer)
+    transformer = Tokenizer.from_data(reviews_data)
     transformer.transform_dataframe(reviews_data).save(reviews_data)
 
     model = new_model(
