@@ -38,7 +38,11 @@ pip install -e .
 ```
 
 ## Retrain model
-To update the model get the yelp [dataset](https://www.yelp.com/dataset), then run with the rnn training entry point:
+To update the model:
+* get the yelp [dataset](https://www.yelp.com/dataset), 
+* get the glove 6B 100D [dataset](https://nlp.stanford.edu/projects/glove/)
+* place both files in the package data directory 
+* run with the rnn training entry point:
 
 ```
 train
