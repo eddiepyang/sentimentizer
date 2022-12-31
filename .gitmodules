@@ -1,3 +1,0 @@
-[submodule "serve"]
-	path = serve
-	url = https://github.com/eddiepyang/serve.git
