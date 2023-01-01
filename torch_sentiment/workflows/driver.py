@@ -2,10 +2,10 @@ import os
 import argparse
 import torch
 from torch_sentiment import root
-from torch_sentiment.rnn.extractor import extract_data
+from torch_sentiment.extractor import extract_data
+from torch_sentiment.trainer import new_trainer
 
 from torch_sentiment.rnn.loader import load_train_val_corpus_datasets
-from torch_sentiment.rnn.trainer import new_trainer
 from torch_sentiment.rnn.model import new_model
 from torch_sentiment.logging_utils import new_logger, time_decorator
 

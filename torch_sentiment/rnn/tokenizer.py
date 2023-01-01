@@ -98,7 +98,7 @@ class Tokenizer:
             dictionary=_new_dictionary(data, TokenizerConfig(save_dictionary=False))
         )
 
-    @time_decorator
+    #@time_decorator
     def transform_dataframe(self, data: pd.DataFrame) -> pd.DataFrame:
         """transforms dataframe with text and target"""
 

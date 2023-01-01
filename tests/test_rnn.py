@@ -8,7 +8,7 @@ from torch_sentiment.rnn.tokenizer import (
     tokenize,
     convert_rating,
 )
-from torch_sentiment.rnn.extractor import extract_data
+from torch_sentiment.extractor import extract_data
 from torch_sentiment.logging_utils import new_logger
 from torch_sentiment.rnn.model import get_trained_model, RNN
 from torch_sentiment.rnn.tokenizer import get_trained_tokenizer
