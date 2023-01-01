@@ -9,7 +9,7 @@ from torch_sentiment import root
 
 data_path = os.path.join(root, "torch_sentiment")
 
-DEFAULT_LOG_LEVEL = DEBUG
+DEFAULT_LOG_LEVEL = INFO
 
 
 class LogLevels(enum.Enum):
@@ -68,7 +68,7 @@ class FileConfig:
 class TrainerConfig:
     batch_size: int = 256
     epochs: int = 4
-    workers: int = 6
+    workers: int = 10
     device: str = "cuda"
     memory: bool = True
 
