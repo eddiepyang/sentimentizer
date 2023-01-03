@@ -1,12 +1,13 @@
 import io
 import logging
 import sys
-import structlog
 import time
-import psutil
-
 from functools import wraps
-from typing import Callable, TextIO
+from typing import Callable, TextIO, Optional, Any
+
+import structlog
+
+import psutil
 
 
 def new_logger(level: int = 20, output: TextIO = sys.stderr) -> structlog.PrintLogger:
@@ -31,36 +32,9 @@ def new_logger(level: int = 20, output: TextIO = sys.stderr) -> structlog.PrintL
 logger = new_logger(logging.INFO)
 
 
-def time_decorator_factory(optional_text: str = ""):
-    def time_decorator(func) -> Callable:
-        """logs time stats of function"""
 
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            ts = time.perf_counter()
-            result = func(*args, **kwargs)
-            te = time.perf_counter()
-            event = "function completed successfully"
-            if optional_text:
-                event = f"function completed successfully: {optional_text}"
-            logger.info(
-                event,
-                function=func.__name__,
-                run_time=f"{te-ts: 2.4f} seconds",
-                available_memory=f"{psutil.virtual_memory().available/1024**3: .2f} GBs",
-                free_memory=f"{psutil.virtual_memory().free/1024**3: .2f} GBs",
-                used_memory=f"{psutil.virtual_memory().used/1024**3: .2f} GBs",
-            )
-            return result
-
-        return wrapper
-
-    return time_decorator
-
-
-def time_decorator(func) -> Callable:
+def time_decorator(func):
     """logs time stats of function"""
-
     @wraps(func)
     def wrapper(*args, **kwargs):
         ts = time.perf_counter()
@@ -76,5 +50,4 @@ def time_decorator(func) -> Callable:
             used_memory=f"{psutil.virtual_memory().used/1024**3: .2f} GBs",
         )
         return result
-
     return wrapper

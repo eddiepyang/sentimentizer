@@ -17,22 +17,22 @@ def extract_data(
     file_path: str, compressed_file_name: str, stop: int = 0
 ) -> pd.DataFrame:
     "reads from zipped yelp data file"
-    ls = []
+    review_dicts = []
 
     with zipfile.ZipFile(file_path) as zfile:
         logger.info(f"archive contains the following: {zfile.namelist()}")
         inf = zfile.open(compressed_file_name)
 
-        with jsonl.Reader(inf) as file:
-            for i, line in enumerate(file):
+        with jsonl.Reader(inf) as review_file:
+            for i, line in enumerate(review_file):
                 if i % 100000 == 0:
                     logger.debug(f"processing line {i}")
                 line["text"] = tokenize(line.get("text"))
-                ls.append(line)
+                review_dicts.append(line)
                 if i == stop - 1:
                     break
 
-    return pd.DataFrame(ls)
+    return pd.DataFrame(review_dicts)
 
 
 @time_decorator

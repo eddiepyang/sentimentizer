@@ -17,7 +17,7 @@ from torch_sentiment.rnn.config import (
     TrainerConfig,
     OptimizationParams,
     SchedulerParams,
-    DEFAULT_LOG_LEVEL
+    DEFAULT_LOG_LEVEL,
 )
 
 
@@ -140,7 +140,7 @@ class Trainer:
 
 
 def new_trainer(
-    model: RNN,
+    model: torch.nn.Module,
     cfg: TrainerConfig,
 ):
 
