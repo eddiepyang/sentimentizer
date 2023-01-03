@@ -66,7 +66,7 @@ class FileConfig:
 
 @dataclass
 class TrainerConfig:
-    batch_size: int = 256
+    batch_size: int = 64
     epochs: int = 4
     workers: int = 10
     device: str = "cuda"

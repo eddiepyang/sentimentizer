@@ -1,11 +1,12 @@
 import pytest
 import pandas as pd
 
-from torch_sentiment.rnn.config import TokenizerConfig, DEFAULT_LOG_LEVEL
+from torch_sentiment.rnn.config import DEFAULT_LOG_LEVEL
 from torch_sentiment.rnn.loader import CorpusDataset
 from torch_sentiment.rnn.tokenizer import (
     Tokenizer,
     tokenize,
+    text_sequencer,
     convert_rating,
 )
 from torch_sentiment.extractor import extract_data
@@ -80,7 +81,7 @@ class TestExtractData:
 
         df = extract_data(compressed_file_name=self.fname, file_path=rel_path)
         assert df.shape == (2, 2)
-        logger.info(df.shape)
+        logger.info(str(df.shape))
         assert df.columns.tolist() == ["text", "stars"]
 
     def test_failure_empty_input(self):
@@ -115,7 +116,7 @@ class TestGetTrainedModel:
     """tests if model loads"""
 
     def test_success(self):
-        model = get_trained_model(64, 'cpu')
+        model = get_trained_model(64, "cpu")
         assert isinstance(model, RNN)
 
     def test_failure(self):
@@ -133,3 +134,19 @@ class TestGetTrainedTokenizer:
     def test_failure(self):
         # todo
         return
+
+
+class TestTokenize:
+    """tests regex"""
+
+    def test_success(self):
+        result = tokenize("chicken wasn't good")
+
+        assert len(result) == 3
+        assert result[0] == "chicken"
+        assert result[1] == "wasn't"
+
+    def test_success_one(self):
+        result = tokenize("1st place food")
+        assert len(result) == 3
+        assert result[0] == "1st"

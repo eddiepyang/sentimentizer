@@ -1,7 +1,5 @@
-import os
 import argparse
 import torch
-from torch_sentiment import root
 from torch_sentiment.extractor import extract_data
 from torch_sentiment.trainer import new_trainer
 
