@@ -1,12 +1,8 @@
-from dataclasses import dataclass, field
-import enum
 from attr import define
-from typing import List, Tuple
-import numpy as np
 import pandas as pd
-import jsonlines as jsonl
 
 import torch
+from typing import Tuple
 from torch.utils.data import Dataset
 from sklearn.model_selection import train_test_split
 from torch_sentiment.logging_utils import new_logger
@@ -42,4 +38,5 @@ def load_train_val_corpus_datasets(
 
     df = pd.read_parquet(data_path)
     train_df, val_df = train_test_split(df, test_size=test_size)
+    del df
     return CorpusDataset(data=train_df), CorpusDataset(val_df)

@@ -14,9 +14,9 @@ Provides-Extra: dev
 # Introduction
 
 [![PyPI Latest Release](https://img.shields.io/pypi/v/torch-sentiment.svg)](https://pypi.org/project/torch-sentiment/)
-
-Beta release now on [pypi](https://pypi.org/project/torch-sentiment/);
-api subject to change. Install with:  
+![GitHub CI](https://github.com/eddiepyang/torch-sentiment/actions/workflows/ci.yaml/badge.svg)
+  
+Beta release, api subject to change. Install with:  
 
 ```
 pip install torch-sentiment

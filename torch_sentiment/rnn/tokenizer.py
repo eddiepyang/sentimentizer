@@ -1,4 +1,4 @@
-from typing import List, TypeVar
+from typing import List, TypeVar, Optional
 from dataclasses import dataclass, field
 from importlib.resources import files
 
@@ -8,12 +8,14 @@ import pandas as pd
 from gensim import corpora
 
 from torch_sentiment.rnn.config import FileConfig, TokenizerConfig, DEFAULT_LOG_LEVEL
-from torch_sentiment.logging_utils import new_logger, time_decorator
+from torch_sentiment.logging_utils import new_logger
 
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
 TokenizerAny = TypeVar("TokenizerAny", bound="Tokenizer")
+
+pattern = re.compile(r"[a-z0-9'-]+")
 
 
 def convert_rating(rating: int) -> float:
@@ -61,7 +63,7 @@ def text_sequencer(
 
 def tokenize(x: str) -> List[str]:
     """regex tokenize, less accurate than spacy"""
-    return re.findall(r"\w+", x.lower())
+    return pattern.findall(x.lower())
 
 
 def _get_data(df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
@@ -89,7 +91,7 @@ class Tokenizer:
     """wrapper class for handling tokenization of datasets"""
 
     cfg: TokenizerConfig = field(default_factory=TokenizerConfig)
-    dictionary: corpora.Dictionary = None
+    dictionary: Optional[corpora.Dictionary] = None
 
     @classmethod
     def from_data(cls: type[TokenizerAny], data: pd.DataFrame) -> TokenizerAny:
@@ -98,8 +100,8 @@ class Tokenizer:
             dictionary=_new_dictionary(data, TokenizerConfig(save_dictionary=False))
         )
 
-    @time_decorator
-    def transform_dataframe(self, data: pd.DataFrame) -> pd.DataFrame:
+    # @time_decorator
+    def transform_dataframe(self, data: pd.DataFrame) -> TokenizerAny:
         """transforms dataframe with text and target"""
 
         data[self.cfg.inputs] = data[self.cfg.text_col].map(
