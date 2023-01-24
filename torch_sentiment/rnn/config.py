@@ -60,7 +60,8 @@ class FileConfig:
     archive_file_path: str = f"{data_path}/data/archive.zip"
     raw_file_path: str = "yelp_academic_dataset_review.json"
     dictionary_file_path: str = f"{data_path}/data/yelp.dictionary"
-    reviews_file_path: str = f"{data_path}/data/review_data.parquet"
+    raw_reviews_file_path: str = f"{data_path}/data/review_data.arrow"
+    processed_reviews_file_path: str = f"{data_path}/data/review_data.parquet"
     weights_file_path: str = f"{data_path}/data/weights.pth"
 
 

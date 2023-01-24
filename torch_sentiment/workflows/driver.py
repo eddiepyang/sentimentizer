@@ -1,6 +1,7 @@
 import argparse
 import torch
-from torch_sentiment.extractor import extract_data
+import pandas as pd
+from torch_sentiment.extractor import extract_data, write_arrow
 from torch_sentiment.trainer import new_trainer
 
 from torch_sentiment.rnn.loader import load_train_val_corpus_datasets
@@ -46,17 +47,17 @@ def main():
 
     model = None
     if args.type == "new":
-        reviews_data = extract_data(
+        gen = extract_data(
             DriverConfig.files.archive_file_path,
             DriverConfig.files.raw_file_path,
             stop=args.stop,
         )
+        write_arrow(gen, args.stop, DriverConfig.files.raw_reviews_file_path)
 
+        reviews_data = pd.read_feather(DriverConfig.files.raw_reviews_file_path)
         transformer = Tokenizer.from_data(reviews_data)
         transformer.transform_dataframe(reviews_data)
-
-        if args.save:
-            transformer.save(reviews_data)
+        transformer.save(reviews_data)
 
         model = new_model(
             dict_path=DriverConfig.files.dictionary_file_path,
@@ -72,7 +73,7 @@ def main():
         raise TypeError("no model loaded, check the input arguments")
 
     train_dataset, val_dataset = load_train_val_corpus_datasets(
-        DriverConfig.files.reviews_file_path
+        DriverConfig.files.processed_reviews_file_path
     )
     trainer = new_trainer(
         model=model,
