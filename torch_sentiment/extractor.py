@@ -56,10 +56,9 @@ def write_arrow(
 ) -> None:
     gen = generate_batch(generator_input, iter_size)
 
-    in_schema = None
+    in_schema = schema
     if schema is None:
         records, _, _ = next(gen)
-        # print(records[0])
         batch = pa.RecordBatch.from_pylist(records)
         in_schema = batch.schema
 

@@ -123,6 +123,14 @@ class Tokenizer:
             1, self.cfg.max_len
         )
 
+    def save(self, data: pd.DataFrame) -> None:
+        _get_data(data, [self.cfg.inputs] + [self.cfg.labels]).to_parquet(
+            f"{FileConfig.processed_reviews_file_path}", index=False
+        )
+        logger.info(
+            f"file saved to {FileConfig.processed_reviews_file_path}"
+        )  # noqa: E501
+
 
 def get_trained_tokenizer() -> Tokenizer:
     corp_dict = corpora.Dictionary.load(
