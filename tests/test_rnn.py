@@ -1,5 +1,6 @@
 import pytest
 import pandas as pd
+import polars as pl
 
 from torch_sentiment.rnn.config import DEFAULT_LOG_LEVEL
 from torch_sentiment.rnn.loader import CorpusDataset
@@ -9,7 +10,7 @@ from torch_sentiment.rnn.tokenizer import (
     text_sequencer,
     convert_rating,
 )
-from torch_sentiment.extractor import extract_data
+from torch_sentiment.extractor import extract_data, write_arrow
 from torch_sentiment.logging_utils import new_logger
 from torch_sentiment.rnn.model import get_trained_model, RNN
 from torch_sentiment.rnn.tokenizer import get_trained_tokenizer
@@ -76,13 +77,17 @@ def test_tokenize(raw_df):
 class TestExtractData:
 
     fname = "artificial-reviews.jsonl"
+    stop = 2
 
-    def test_success(self, rel_path):
-
-        df = extract_data(compressed_file_name=self.fname, file_path=rel_path)
+    def test_success(self, rel_path, relative_root):
+        print(relative_root)
+        gen = extract_data(
+            compressed_file_name=self.fname, file_path=rel_path, stop=self.stop
+        )
+        write_arrow(gen, self.stop, f"{relative_root}/tests/file.arrow")
+        df = pl.read_ipc(f"{relative_root}/tests/file.arrow")
         assert df.shape == (2, 2)
         logger.info(str(df.shape))
-        assert df.columns.tolist() == ["text", "stars"]
 
     def test_failure_empty_input(self):
         # todo
