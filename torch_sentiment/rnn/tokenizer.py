@@ -1,13 +1,13 @@
 from dataclasses import dataclass, field
 from importlib.resources import files
 import re
-from typing import Generic, List, TypeVar
+from typing import List, TypeVar
 
 from gensim import corpora
 import numpy as np
 import pandas as pd
 
-from torch_sentiment.logging_utils import new_logger
+from torch_sentiment.logging_utils import new_logger, time_decorator
 from torch_sentiment.rnn.config import DEFAULT_LOG_LEVEL, FileConfig, TokenizerConfig
 
 
@@ -100,7 +100,7 @@ class Tokenizer:
             dictionary=_new_dictionary(data, TokenizerConfig(save_dictionary=False))
         )
 
-    # @time_decorator
+    @time_decorator
     def transform_dataframe(self, data: pd.DataFrame) -> "Tokenizer":
         """transforms dataframe with text and target"""
         if self.dictionary is None:
