@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from importlib.resources import files
 import re
-from typing import List, Self, TypeVar
+from typing import Generic, List, TypeVar
 
 from gensim import corpora
 import numpy as np
@@ -101,7 +101,7 @@ class Tokenizer:
         )
 
     # @time_decorator
-    def transform_dataframe(self, data: pd.DataFrame) -> Self:
+    def transform_dataframe(self, data: pd.DataFrame) -> "Tokenizer":
         """transforms dataframe with text and target"""
         if self.dictionary is None:
             raise ValueError("no dictionary loaded")
