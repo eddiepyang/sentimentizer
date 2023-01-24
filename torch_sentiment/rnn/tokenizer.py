@@ -1,4 +1,4 @@
-from typing import List, TypeVar, Optional
+from typing import List, Self, TypeVar, Optional
 from dataclasses import dataclass, field
 from importlib.resources import files
 
@@ -101,8 +101,10 @@ class Tokenizer:
         )
 
     # @time_decorator
-    def transform_dataframe(self, data: pd.DataFrame) -> TokenizerAny:
+    def transform_dataframe(self, data: pd.DataFrame) -> Self:
         """transforms dataframe with text and target"""
+        if self.dictionary is None:
+            raise ValueError("no dictionary loaded")
 
         data[self.cfg.inputs] = data[self.cfg.text_col].map(
             lambda text: text_sequencer(self.dictionary, text, self.cfg.max_len)
@@ -114,16 +116,12 @@ class Tokenizer:
 
     def tokenize_text(self, text: str) -> np.ndarray:
         """converts string phrase to numpy array"""
+        if self.dictionary is None:
+            raise ValueError("no dictionary loaded")
         tokens = tokenize(text)
         return text_sequencer(self.dictionary, tokens, self.cfg.max_len).reshape(
             1, self.cfg.max_len
         )
-
-    def save(self, data: pd.DataFrame) -> None:
-        _get_data(data, [self.cfg.inputs] + [self.cfg.labels]).to_parquet(
-            f"{FileConfig.reviews_file_path}", index=False
-        )
-        logger.info(f"file saved to {FileConfig.reviews_file_path}")  # noqa: E501
 
 
 def get_trained_tokenizer() -> Tokenizer:

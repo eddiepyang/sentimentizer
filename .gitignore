@@ -8,6 +8,7 @@
 *.txt
 *.pyc
 *.ipynb
+*.arrow
 
 yelp_nlp/code/.ipynb_checkpoints/*
 /.ipynb_checkpoints/*

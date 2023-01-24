@@ -1,42 +1,86 @@
-import numpy as np
-import pandas as pd
-import jsonlines as jsonl
 import zipfile
-from gensim import corpora
-from collections import OrderedDict
+from itertools import islice
+from typing import IO, Generator
 
-from torch_sentiment.rnn.tokenizer import tokenize
-from torch_sentiment.rnn.config import EmbeddingsConfig, LogLevels, DEFAULT_LOG_LEVEL
+import numpy as np
+import orjson as json
+import pyarrow as pa
+from gensim import corpora
+
 from torch_sentiment.logging_utils import new_logger, time_decorator
+from torch_sentiment.rnn.config import DEFAULT_LOG_LEVEL, EmbeddingsConfig
+from torch_sentiment.rnn.tokenizer import tokenize
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
+BATCH_SIZE = 100000
+WRITE_BYTES = "wb"
+
+
+def generate_batch(
+    generator_input: Generator[dict, str, None], iter_size: int
+) -> Generator[pa.RecordBatch, list, None]:
+
+    for start in range(0, iter_size, BATCH_SIZE):
+        end = min(start + BATCH_SIZE, iter_size)
+        review_dicts = []
+        review_dicts.extend(islice(generator_input, BATCH_SIZE))
+        yield review_dicts, start, end
+
+
+def process_json(json_file: IO[bytes], stop: int = 0) -> Generator:
+    for i, line in enumerate(json_file):
+        if i % 100000 == 0:
+            logger.debug(f"processing line {i}")
+        dc = json.loads(line)
+        dc["text"] = tokenize(dc.get("text"))
+        if i >= stop and stop != 0:
+            break
+        yield dc
+
 
 @time_decorator
-def extract_data(
-    file_path: str, compressed_file_name: str, stop: int = 0
-) -> pd.DataFrame:
+def extract_data(file_path: str, compressed_file_name: str, stop: int = 0) -> Generator:
     "reads from zipped yelp data file"
-    review_dicts = []
 
     with zipfile.ZipFile(file_path) as zfile:
-        logger.info(f"archive contains the following: {zfile.namelist()}")
         inf = zfile.open(compressed_file_name)
+    return process_json(inf, stop)
 
-        with jsonl.Reader(inf) as review_file:
-            for i, line in enumerate(review_file):
-                if i % 100000 == 0:
-                    logger.debug(f"processing line {i}")
-                line["text"] = tokenize(line.get("text"))
-                review_dicts.append(line)
-                if i == stop - 1:
-                    break
 
-    return pd.DataFrame(review_dicts)
+def write_arrow(
+    generator_input: Generator,
+    iter_size: int,
+    write_path: str,
+    schema: pa.Schema = None,
+) -> None:
+    gen = generate_batch(generator_input, iter_size)
+    if schema is None:
+        records, _, _ = next(gen)
+        # print(records[0])
+        batch = pa.RecordBatch.from_pylist(records)
+        in_schema = batch.schema
+    else:
+        in_schema = schema
+
+    with pa.OSFile(write_path, WRITE_BYTES) as sink, pa.ipc.RecordBatchFileWriter(
+        sink, in_schema
+    ) as writer:
+        if schema is None:
+            writer.write(batch)
+
+        for records, _, _ in gen:
+            try:
+                batch = pa.RecordBatch.from_pylist(records)
+                writer.write(batch)
+            except pa.ArrowInvalid as e:
+                print(f"file completed with error {e}")
 
 
 @time_decorator
-def extract_embeddings(dictionary: corpora.Dictionary, cfg: EmbeddingsConfig) -> dict[str, np.ndarray]:
+def extract_embeddings(
+    dictionary: corpora.Dictionary, cfg: EmbeddingsConfig
+) -> dict[str, np.ndarray]:
     """load glove vectors"""
 
     embeddings_dict: dict = {}
@@ -48,7 +92,7 @@ def extract_embeddings(dictionary: corpora.Dictionary, cfg: EmbeddingsConfig) ->
 
             if key in dictionary.token2id:
                 embeddings_dict.setdefault(
-                    dictionary.token2id[key] + 1, 
+                    dictionary.token2id[key] + 1,
                     np.asarray(values[1:], dtype=np.float32),  # noqa: E501
                 )
 
@@ -67,8 +111,7 @@ def new_embedding_weights(
     for word in dictionary.values():
         if word not in embeddings_dict:
             embeddings_dict.setdefault(
-                dictionary.token2id[word] + 1, 
-                np.random.normal(0, 0.32, cfg.emb_length)
+                dictionary.token2id[word] + 1, np.random.normal(0, 0.32, cfg.emb_length)
             )
 
     return np.vstack(

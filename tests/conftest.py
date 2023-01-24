@@ -2,14 +2,22 @@ from pathlib import Path
 import pytest
 
 file_root = Path(__file__).parent.absolute()
-relative_root = Path(".").resolve()
+root = Path(".").resolve()
+
 
 @pytest.fixture
 def rel_path():
-    global relative_root
-    path = f"{relative_root}/tests/test_data/archive.zip"
+    global root
+    path = f"{root}/tests/test_data/archive.zip"
     return path
 
-if __name__=="__main__":
 
-    print("root is:", file_root, relative_root)
+@pytest.fixture
+def relative_root():
+    global root
+    return root
+
+
+if __name__ == "__main__":
+
+    print("root is:", file_root, root)
