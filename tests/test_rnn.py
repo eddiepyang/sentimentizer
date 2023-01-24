@@ -80,12 +80,12 @@ class TestExtractData:
     stop = 2
 
     def test_success(self, rel_path, relative_root):
-        print(relative_root)
+
         gen = extract_data(
             compressed_file_name=self.fname, file_path=rel_path, stop=self.stop
         )
-        write_arrow(gen, self.stop, f"{relative_root}/tests/file.arrow")
-        df = pl.read_ipc(f"{relative_root}/tests/file.arrow")
+        write_arrow(gen, self.stop, f"{relative_root}/tests/test_data/file.arrow")
+        df = pl.read_ipc(f"{relative_root}/tests/test_data/file.arrow")
         assert df.shape == (2, 2)
         logger.info(str(df.shape))
 
