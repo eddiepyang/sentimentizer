@@ -55,13 +55,12 @@ def write_arrow(
     schema: pa.Schema = None,
 ) -> None:
     gen = generate_batch(generator_input, iter_size)
+
+    in_schema = schema
     if schema is None:
         records, _, _ = next(gen)
-        # print(records[0])
         batch = pa.RecordBatch.from_pylist(records)
         in_schema = batch.schema
-    else:
-        in_schema = schema
 
     with pa.OSFile(write_path, WRITE_BYTES) as sink, pa.ipc.RecordBatchFileWriter(
         sink, in_schema
@@ -73,8 +72,8 @@ def write_arrow(
             try:
                 batch = pa.RecordBatch.from_pylist(records)
                 writer.write(batch)
-            except pa.ArrowInvalid as e:
-                print(f"file completed with error {e}")
+            except pa.ArrowInvalid:
+                logger.info("file completed")
 
 
 @time_decorator
