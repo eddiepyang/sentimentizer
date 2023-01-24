@@ -1,15 +1,37 @@
 Metadata-Version: 2.1
 Name: torch-sentiment
-Version: 0.4.43
+Version: 0.5.1
 Summary: straight forward rnn model
 Author-email: Edward Yang <edwardpyang@gmail.com>
-Keywords: rnn,pytorch,tutorial
+License: Copyright (c) 2018-Present Edward Yang
+        
+        Permission is hereby granted, free of charge, to any person obtaining
+        a copy of this software and associated documentation files (the
+        "Software"), to deal in the Software without restriction, including
+        without limitation the rights to use, copy, modify, merge, publish,
+        distribute, sublicense, and/or sell copies of the Software, and to
+        permit persons to whom the Software is furnished to do so, subject to
+        the following conditions:
+        
+        The above copyright notice and this permission notice shall be
+        included in all copies or substantial portions of the Software.
+        
+        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+        EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+        MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+        NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+        LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+        OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+        WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+        
+Keywords: rnn,pytorch,nlp,pytorch
 Classifier: License :: OSI Approved :: MIT License
 Classifier: Programming Language :: Python
 Classifier: Programming Language :: Python :: 3
 Requires-Python: >=3.10
 Description-Content-Type: text/markdown
 Provides-Extra: dev
+License-File: LICENSE
 
 # Introduction
 
@@ -51,7 +73,11 @@ pip install -e .
 ```
 
 ## Retrain model
-To update the model get the yelp [dataset](https://www.yelp.com/dataset), then run with the rnn training entry point:
+To rerun the model:
+* get the yelp [dataset](https://www.yelp.com/dataset), 
+* get the glove 6B 100D [dataset](https://nlp.stanford.edu/projects/glove/)
+* place both files in the package data directory 
+* run with the rnn training entry point:
 
 ```
 train
