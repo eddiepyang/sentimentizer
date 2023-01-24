@@ -10,7 +10,7 @@ version = "0.5.0"
 description = "straight forward rnn model"
 readme = "README.md"
 authors = [{ name = "Edward Yang", email = "edwardpyang@gmail.com" }]
-#license = { file = "LICENSE" }
+license = { file = "LICENSE" }
 classifiers = [
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python",
