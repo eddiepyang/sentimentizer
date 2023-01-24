@@ -24,6 +24,7 @@ dependencies = [
         "pandas >= 1.5.2",
         "torch >= 1.13.1",
         "orjson >= 3.8.5",
+        "pyarrow >= 10.0.1",
         "scikit-learn",
         "gensim",
         "structlog",
