@@ -1,19 +1,19 @@
-from typing import List, Self, TypeVar, Optional
 from dataclasses import dataclass, field
 from importlib.resources import files
-
 import re
+from typing import List, Self, TypeVar
+
+from gensim import corpora
 import numpy as np
 import pandas as pd
-from gensim import corpora
 
-from torch_sentiment.rnn.config import FileConfig, TokenizerConfig, DEFAULT_LOG_LEVEL
 from torch_sentiment.logging_utils import new_logger
+from torch_sentiment.rnn.config import DEFAULT_LOG_LEVEL, FileConfig, TokenizerConfig
 
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
-TokenizerAny = TypeVar("TokenizerAny", bound="Tokenizer")
+TokenizerType = TypeVar("TokenizerType", bound="Tokenizer")
 
 pattern = re.compile(r"[a-z0-9'-]+")
 
@@ -90,11 +90,11 @@ def _new_dictionary(data: pd.DataFrame, cfg: TokenizerConfig) -> corpora.Diction
 class Tokenizer:
     """wrapper class for handling tokenization of datasets"""
 
+    dictionary: corpora.Dictionary
     cfg: TokenizerConfig = field(default_factory=TokenizerConfig)
-    dictionary: Optional[corpora.Dictionary] = None
 
     @classmethod
-    def from_data(cls: type[TokenizerAny], data: pd.DataFrame) -> TokenizerAny:
+    def from_data(cls: type[TokenizerType], data: pd.DataFrame) -> TokenizerType:
         """creates tokenizer from dataframe"""
         return cls(
             dictionary=_new_dictionary(data, TokenizerConfig(save_dictionary=False))
