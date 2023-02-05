@@ -5,7 +5,7 @@ from torch_sentiment.trainer import new_trainer
 
 from torch_sentiment.rnn.loader import load_train_val_corpus_datasets
 from torch_sentiment.transformer.model import new_model
-from torch_sentiment.logging_utils import new_logger, time_decorator
+from torch_sentiment import new_logger, time_decorator
 
 from torch_sentiment.rnn.config import DriverConfig, DEFAULT_LOG_LEVEL
 from torch_sentiment.rnn.tokenizer import Tokenizer

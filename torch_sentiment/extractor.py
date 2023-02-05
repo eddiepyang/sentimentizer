@@ -7,7 +7,7 @@ import orjson as json
 import pyarrow as pa
 from gensim import corpora
 
-from torch_sentiment.logging_utils import new_logger, time_decorator
+from torch_sentiment import new_logger, time_decorator
 from torch_sentiment.rnn.config import DEFAULT_LOG_LEVEL, EmbeddingsConfig
 from torch_sentiment.rnn.tokenizer import tokenize
 
@@ -68,12 +68,12 @@ def write_arrow(
         if schema is None:
             writer.write(batch)
 
-        for records, _, _ in gen:
+        for records, _, end in gen:
             try:
                 batch = pa.RecordBatch.from_pylist(records)
                 writer.write(batch)
             except pa.ArrowInvalid:
-                logger.info("file completed")
+                logger.info(f"file completed, last item count was {end}")
 
 
 @time_decorator

@@ -6,7 +6,7 @@ from torch_sentiment.trainer import new_trainer
 
 from torch_sentiment.rnn.loader import load_train_val_corpus_datasets
 from torch_sentiment.rnn.model import get_trained_model, new_model
-from torch_sentiment.logging_utils import new_logger, time_decorator
+from torch_sentiment import new_logger, time_decorator
 
 from torch_sentiment.rnn.config import DriverConfig, DEFAULT_LOG_LEVEL
 from torch_sentiment.rnn.tokenizer import Tokenizer
@@ -38,6 +38,35 @@ def new_parser() -> argparse.Namespace:
         early_stop=args.stop,
     )
     return args
+
+
+def extract(stop: int = 0) -> None:
+    gen = extract_data(
+        DriverConfig.files.archive_file_path,
+        DriverConfig.files.raw_file_path,
+        stop=stop,
+    )
+    write_arrow(gen, stop, DriverConfig.files.raw_reviews_file_path)
+
+
+def tokenize() -> None:
+    reviews_data = pd.read_feather(DriverConfig.files.raw_reviews_file_path)
+    transformer = Tokenizer.from_data(reviews_data)
+    transformer.transform_dataframe(reviews_data)
+    transformer.save(reviews_data)
+
+
+def fit_model(model: torch.nn.Module) -> None:
+
+    train_dataset, val_dataset = load_train_val_corpus_datasets(
+        DriverConfig.files.processed_reviews_file_path
+    )
+    trainer = new_trainer(
+        model=model,
+        cfg=DriverConfig.trainer(device=args.device),
+    )
+
+    trainer.fit(model, train_data=train_dataset, val_data=val_dataset)
 
 
 @time_decorator
