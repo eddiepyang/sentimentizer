@@ -1,25 +1,20 @@
-import logging
 import time
-from typing import Callable, List, Tuple
 from dataclasses import dataclass, field
+from typing import Callable, List, Tuple
 
 import numpy as np
-import pandas as pd
-
 import torch
 from torch import optim
 from torch.utils.data import DataLoader
 
-from torch_sentiment.logging_utils import new_logger
-from torch_sentiment.rnn.loader import CorpusDataset
-from torch_sentiment.rnn.model import RNN
+from torch_sentiment import new_logger
 from torch_sentiment.rnn.config import (
-    TrainerConfig,
+    DEFAULT_LOG_LEVEL,
     OptimizationParams,
     SchedulerParams,
-    DEFAULT_LOG_LEVEL,
+    TrainerConfig,
 )
-
+from torch_sentiment.rnn.loader import CorpusDataset
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
@@ -58,7 +53,7 @@ class Trainer:
     losses: List[float] = field(default_factory=lambda: list())
     _mode: str = field(default="training")
 
-    def _train_epoch(self, model: RNN, train_loader: DataLoader):
+    def _train_epoch(self, model: torch.nn.Module, train_loader: DataLoader):
 
         i = 0
         n = len(train_loader.dataset)
@@ -97,25 +92,27 @@ class Trainer:
                     f"current learning rate at {self.optimizer.param_groups[0]['lr']:.6f}"
                 )  # noqa: E501
 
-    def fit(self, model: RNN, train_data: CorpusDataset, val_data: CorpusDataset):
+    def fit(
+        self, model: torch.nn.Module, train_data: CorpusDataset, val_data: CorpusDataset
+    ):
         train_loader, val_loader = _new_loaders(train_data, val_data, self.cfg)
         model.to(self.cfg.device)
         start = time.time()
-        epoch_count = 0
+
         logger.info("fitting model...")
 
         for epoch in range(self.cfg.epochs):
             self._train_epoch(model, train_loader)
             self.eval(model, val_loader)
-            epoch_count += 1
+
             if self.scheduler:
                 self.scheduler.step()
-            logger.info(f"epoch {epoch_count} completed")
+            logger.info(f"epoch {epoch} completed")
         logger.info(
             f"model fitting completed, {time.time()-start:.0f} seconds passed"
         )  # noqa: E501
 
-    def eval(self, model: RNN, val_loader: DataLoader):
+    def eval(self, model: torch.nn.Module, val_loader: DataLoader):
 
         logger.info("evaluating predictions...")
         losses = []
