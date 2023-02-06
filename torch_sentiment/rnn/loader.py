@@ -5,7 +5,7 @@ import torch
 from typing import Tuple
 from torch.utils.data import Dataset
 from sklearn.model_selection import train_test_split
-from torch_sentiment.logging_utils import new_logger
+from torch_sentiment import new_logger
 from torch_sentiment.rnn.config import DEFAULT_LOG_LEVEL
 
 logger = new_logger(DEFAULT_LOG_LEVEL)

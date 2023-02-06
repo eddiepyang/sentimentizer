@@ -7,7 +7,7 @@ from gensim import corpora
 import numpy as np
 import pandas as pd
 
-from torch_sentiment.logging_utils import new_logger, time_decorator
+from torch_sentiment import new_logger, time_decorator
 from torch_sentiment.rnn.config import DEFAULT_LOG_LEVEL, FileConfig, TokenizerConfig
 
 

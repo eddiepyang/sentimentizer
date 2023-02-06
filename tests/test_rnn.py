@@ -7,11 +7,10 @@ from torch_sentiment.rnn.loader import CorpusDataset
 from torch_sentiment.rnn.tokenizer import (
     Tokenizer,
     tokenize,
-    text_sequencer,
     convert_rating,
 )
 from torch_sentiment.extractor import extract_data, write_arrow
-from torch_sentiment.logging_utils import new_logger
+from torch_sentiment import new_logger
 from torch_sentiment.rnn.model import get_trained_model, RNN
 from torch_sentiment.rnn.tokenizer import get_trained_tokenizer
 

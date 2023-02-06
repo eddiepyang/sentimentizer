@@ -6,7 +6,7 @@ import numpy as np
 from gensim import corpora
 
 from torch_sentiment.extractor import new_embedding_weights
-from torch_sentiment.logging_utils import new_logger
+from torch_sentiment import new_logger
 from torch_sentiment.rnn.config import (
     EmbeddingsConfig,
     TokenizerConfig,
