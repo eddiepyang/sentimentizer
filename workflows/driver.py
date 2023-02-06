@@ -16,6 +16,11 @@ from torch_sentiment.rnn.tokenizer import Tokenizer
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
 
+class RunTypeError(Exception):
+    def __init__(self):
+        super().__init__("incorrect run type found")
+
+
 def _load_model(args: argparse.Namespace) -> torch.nn.Module:
     if args.type == "new":
         model = new_model(
@@ -28,7 +33,7 @@ def _load_model(args: argparse.Namespace) -> torch.nn.Module:
     elif args.type == "update":
         model = get_trained_model(DriverConfig.trainer.batch_size, args.device)
     else:
-        raise ValueError
+        raise RunTypeError
 
     return model
 
@@ -49,7 +54,7 @@ def new_parser() -> argparse.Namespace:
     args = parser.parse_args()
 
     if args.type not in ("new", "update"):
-        raise ValueError("type must be new or update")
+        raise RunTypeError
 
     logger.info(
         "running with args",
@@ -60,16 +65,13 @@ def new_parser() -> argparse.Namespace:
 
 
 def run_extract(args: argparse.Namespace) -> None:
-    if args.type == "new":
 
-        gen = extract_data(
-            DriverConfig.files.archive_file_path,
-            DriverConfig.files.raw_file_path,
-            stop=args.stop,
-        )
-        write_arrow(gen, args.stop, DriverConfig.files.raw_reviews_file_path)
-    else:
-        return None
+    gen = extract_data(
+        DriverConfig.files.archive_file_path,
+        DriverConfig.files.raw_file_path,
+        stop=args.stop,
+    )
+    write_arrow(gen, args.stop, DriverConfig.files.raw_reviews_file_path)
 
 
 def run_tokenize(args: argparse.Namespace) -> None:
