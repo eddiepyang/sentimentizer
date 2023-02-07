@@ -10,7 +10,7 @@ from torch.nn import TransformerEncoder, TransformerEncoderLayer
 
 from torch_sentiment.extractor import new_embedding_weights
 from torch_sentiment import new_logger
-from torch_sentiment.rnn.config import (
+from torch_sentiment.config import (
     EmbeddingsConfig,
     TokenizerConfig,
     DEFAULT_LOG_LEVEL,

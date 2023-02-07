@@ -18,7 +18,7 @@ a single gpu in minutes and requires less than 1GB of memory.
 ## Usage
 ```
 # where 0 is very negative and 1 is very positive
-from torch_sentiment.rnn.tokenizer import get_trained_tokenizer
+from torch_sentiment.tokenizer import get_trained_tokenizer
 from torch_sentiment.rnn.model import get_trained_model
 
 model = get_trained_model(64)
@@ -27,7 +27,7 @@ review_text = "greatest pie ever, best in town!"
 positive_ids = tokenizer.tokenize_text(review_text)
 model.predict(positive_ids)
   
->>> tensor(0.9701)
+>> tensor(0.9701)
 ```
 
 ## Install for development with miniconda:  
