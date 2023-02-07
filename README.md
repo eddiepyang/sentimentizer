@@ -42,9 +42,5 @@ To rerun the model:
 * get the yelp [dataset](https://www.yelp.com/dataset), 
 * get the glove 6B 100D [dataset](https://nlp.stanford.edu/projects/glove/)
 * place both files in the package data directory 
-* run with the rnn training entry point:
-
-```
-train
-```
+* run the training script in workflows
 
