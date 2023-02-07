@@ -5,7 +5,7 @@ from typing import List, TypeVar
 
 from gensim import corpora
 import numpy as np
-import pandas as pd
+import polars as pl
 
 from torch_sentiment import new_logger, time_decorator
 from torch_sentiment.config import DEFAULT_LOG_LEVEL, FileConfig, TokenizerConfig
@@ -66,11 +66,11 @@ def tokenize(x: str) -> List[str]:
     return pattern.findall(x.lower())
 
 
-def _get_data(df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
+def _get_data(df: pl.DataFrame, columns: List[str]) -> pl.DataFrame:
     return df.loc[:, columns].reset_index(drop=True)
 
 
-def _new_dictionary(data: pd.DataFrame, cfg: TokenizerConfig) -> corpora.Dictionary:
+def _new_dictionary(data: pl.DataFrame, cfg: TokenizerConfig) -> corpora.Dictionary:
     dictionary = corpora.Dictionary(data[cfg.text_col])
     dictionary.filter_extremes(
         no_below=cfg.dict_min,
@@ -94,25 +94,28 @@ class Tokenizer:
     cfg: TokenizerConfig = field(default_factory=TokenizerConfig)
 
     @classmethod
-    def from_data(cls: type[TokenizerType], data: pd.DataFrame) -> TokenizerType:
+    def from_data(cls: type[TokenizerType], data: pl.DataFrame) -> TokenizerType:
         """creates tokenizer from dataframe"""
         return cls(
             dictionary=_new_dictionary(data, TokenizerConfig(save_dictionary=False))
         )
 
     @time_decorator
-    def transform_dataframe(self, data: pd.DataFrame) -> "Tokenizer":
+    def transform_dataframe(self, data: pl.DataFrame) -> pl.DataFrame:
         """transforms dataframe with text and target"""
         if self.dictionary is None:
             raise ValueError("no dictionary loaded")
 
-        data[self.cfg.inputs] = data[self.cfg.text_col].map(
-            lambda text: text_sequencer(self.dictionary, text, self.cfg.max_len)
+        return data.with_columns(
+            [
+                pl.col(self.cfg.text_col)
+                .apply(
+                    lambda text: text_sequencer(self.dictionary, text, self.cfg.max_len)
+                )
+                .alias(self.cfg.inputs),
+                pl.col(self.cfg.label_col).apply(convert_rating).alias(self.cfg.labels),
+            ]
         )
-
-        data[self.cfg.labels] = data[self.cfg.label_col].map(convert_rating)
-        logger.info("converted tokens to numbers...")
-        return self
 
     def tokenize_text(self, text: str) -> np.ndarray:
         """converts string phrase to numpy array"""
@@ -123,9 +126,9 @@ class Tokenizer:
             1, self.cfg.max_len
         )
 
-    def save(self, data: pd.DataFrame) -> None:
-        _get_data(data, [self.cfg.inputs] + [self.cfg.labels]).to_parquet(
-            f"{FileConfig.processed_reviews_file_path}", index=False
+    def save(self, data: pl.DataFrame) -> None:
+        _get_data(data, [self.cfg.inputs] + [self.cfg.labels]).write_parquet(
+            f"{FileConfig.processed_reviews_file_path}"
         )
         logger.info(
             f"file saved to {FileConfig.processed_reviews_file_path}"

@@ -6,7 +6,6 @@ from gensim import corpora
 import torch
 from torch import nn
 import torch.nn.functional as F
-from torch.nn import TransformerEncoder, TransformerEncoderLayer
 
 from torch_sentiment.extractor import new_embedding_weights
 from torch_sentiment import new_logger

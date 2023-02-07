@@ -1,6 +1,6 @@
 import argparse
 import torch
-import pandas as pd
+import polars as pl
 from gensim import corpora
 
 from torch_sentiment.extractor import extract_data, write_arrow
@@ -83,7 +83,7 @@ def run_extract(args: argparse.Namespace) -> None:
 
 
 def run_tokenize(args: argparse.Namespace) -> None:
-    reviews_data = pd.read_feather(DriverConfig.files.raw_reviews_file_path)
+    reviews_data = pl.read_feather(DriverConfig.files.raw_reviews_file_path)
     if args.type == "new":
         tokenizer = Tokenizer.from_data(reviews_data)
     elif args.type == "update":

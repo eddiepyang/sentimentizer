@@ -1,4 +1,4 @@
-import pandas as pd
+import polars as pl
 import polars as pl
 import pytest
 
@@ -13,8 +13,8 @@ logger = new_logger(DEFAULT_LOG_LEVEL)
 
 
 @pytest.fixture
-def tokenized_df() -> pd.DataFrame:
-    return pd.DataFrame(
+def tokenized_df() -> pl.DataFrame:
+    return pl.DataFrame(
         {
             "text": [
                 "the chicken never showed up".split(),
@@ -26,8 +26,8 @@ def tokenized_df() -> pd.DataFrame:
 
 
 @pytest.fixture
-def raw_df() -> pd.DataFrame:
-    return pd.DataFrame(
+def raw_df() -> pl.DataFrame:
+    return pl.DataFrame(
         {
             "text": [
                 "the chicken never showed up",
@@ -39,8 +39,8 @@ def raw_df() -> pd.DataFrame:
 
 
 @pytest.fixture
-def processed_df() -> pd.DataFrame:
-    return pd.DataFrame(
+def processed_df() -> pl.DataFrame:
+    return pl.DataFrame(
         {
             "data": [
                 (1, 2, 3, 4, 5, 6),
@@ -60,7 +60,7 @@ def test_convert_rating():
 
 def test_tokenize(raw_df):
 
-    output = tokenize(raw_df.text[0])
+    output = tokenize(raw_df["text"][0])
 
     for item in output:
         assert isinstance(item, str)
@@ -91,8 +91,8 @@ class TestExtractData:
 class TestDataTokenizer:
     def test_success(self, tokenized_df):
         parser = Tokenizer.from_data(tokenized_df)
-        parser.transform_dataframe(tokenized_df)
-        assert tokenized_df.shape == (2, 4)
+        new_df = parser.transform_dataframe(tokenized_df)
+        assert new_df.shape == (2, 4)
 
     def test_failure(self):
         # todo
