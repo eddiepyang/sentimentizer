@@ -7,7 +7,6 @@ from torch_sentiment.extractor import extract_data, write_arrow
 from torch_sentiment.trainer import new_trainer
 
 from torch_sentiment.rnn.loader import load_train_val_corpus_datasets
-from torch_sentiment.rnn.model import get_trained_model, new_model
 from torch_sentiment import new_logger, time_decorator
 
 from torch_sentiment.rnn.config import DriverConfig, DEFAULT_LOG_LEVEL
@@ -22,6 +21,13 @@ class RunTypeError(Exception):
 
 
 def _load_model(args: argparse.Namespace) -> torch.nn.Module:
+    if args.model == "rnn":
+        from torch_sentiment.rnn.model import new_model, get_trained_model
+    elif args.model == "transformer":
+        from torch_sentiment.transformer.model import new_model, get_trained_model
+    else:
+        raise ValueError(f"no model {args.model}")
+
     if args.type == "new":
         model = new_model(
             dict_path=DriverConfig.files.dictionary_file_path,
@@ -29,7 +35,6 @@ def _load_model(args: argparse.Namespace) -> torch.nn.Module:
             batch_size=DriverConfig.trainer.batch_size,
             input_len=DriverConfig.tokenizer.max_len,
         )
-
     elif args.type == "update":
         model = get_trained_model(DriverConfig.trainer.batch_size, args.device)
     else:
@@ -43,6 +48,9 @@ def new_parser() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--device", default="cuda", help="run model on cuda or cpu"
+    )  # noqa: E501
+    parser.add_argument(
+        "--model", default="rnn", help="model loaded, must be rnn or transformer"
     )  # noqa: E501
     parser.add_argument(
         "--type", default="new", help="type of run, must be new or update"
@@ -75,19 +83,16 @@ def run_extract(args: argparse.Namespace) -> None:
 
 
 def run_tokenize(args: argparse.Namespace) -> None:
+    reviews_data = pd.read_feather(DriverConfig.files.raw_reviews_file_path)
     if args.type == "new":
-        reviews_data = pd.read_feather(DriverConfig.files.raw_reviews_file_path)
         tokenizer = Tokenizer.from_data(reviews_data)
-        tokenizer.transform_dataframe(reviews_data)
-        tokenizer.save(reviews_data)
     elif args.type == "update":
-        reviews_data = pd.read_feather(DriverConfig.files.raw_reviews_file_path)
         dictionary = corpora.Dictionary.load(DriverConfig.files.dictionary_file_path)
         tokenizer = Tokenizer(dictionary=dictionary)
-        tokenizer.transform_dataframe(reviews_data)
-        tokenizer.save(reviews_data)
     else:
-        raise ValueError
+        raise RunTypeError
+    tokenizer.transform_dataframe(reviews_data)
+    tokenizer.save(reviews_data)
 
 
 def run_fit(args: argparse.Namespace) -> None:
