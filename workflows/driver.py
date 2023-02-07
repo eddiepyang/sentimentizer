@@ -6,11 +6,11 @@ from gensim import corpora
 from torch_sentiment.extractor import extract_data, write_arrow
 from torch_sentiment.trainer import new_trainer
 
-from torch_sentiment.rnn.loader import load_train_val_corpus_datasets
+from torch_sentiment.loader import load_train_val_corpus_datasets
 from torch_sentiment import new_logger, time_decorator
 
-from torch_sentiment.rnn.config import DriverConfig, DEFAULT_LOG_LEVEL
-from torch_sentiment.rnn.tokenizer import Tokenizer
+from torch_sentiment.config import DriverConfig, DEFAULT_LOG_LEVEL
+from torch_sentiment.tokenizer import Tokenizer
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
 

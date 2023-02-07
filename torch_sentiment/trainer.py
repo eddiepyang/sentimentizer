@@ -8,13 +8,13 @@ from torch import optim
 from torch.utils.data import DataLoader
 
 from torch_sentiment import new_logger
-from torch_sentiment.rnn.config import (
+from torch_sentiment.config import (
     DEFAULT_LOG_LEVEL,
     OptimizationParams,
     SchedulerParams,
     TrainerConfig,
 )
-from torch_sentiment.rnn.loader import CorpusDataset
+from torch_sentiment.loader import CorpusDataset
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
