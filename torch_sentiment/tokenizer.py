@@ -3,6 +3,7 @@ from importlib.resources import files
 import re
 from typing import List, TypeVar
 
+from itertools import starmap
 from gensim import corpora
 import numpy as np
 import polars as pl
@@ -67,7 +68,7 @@ def tokenize(x: str) -> List[str]:
 
 
 def _get_data(df: pl.DataFrame, columns: List[str]) -> pl.DataFrame:
-    return df.loc[:, columns].reset_index(drop=True)
+    return df.select(columns)
 
 
 def _new_dictionary(data: pl.DataFrame, cfg: TokenizerConfig) -> corpora.Dictionary:
@@ -105,14 +106,13 @@ class Tokenizer:
         """transforms dataframe with text and target"""
         if self.dictionary is None:
             raise ValueError("no dictionary loaded")
-
+        column_iter = starmap(
+            lambda text: text_sequencer(self.dictionary, text, 200),
+            data.select(self.cfg.text_col).to_numpy(),
+        )
         return data.with_columns(
             [
-                pl.col(self.cfg.text_col)
-                .apply(
-                    lambda text: text_sequencer(self.dictionary, text, self.cfg.max_len)
-                )
-                .alias(self.cfg.inputs),
+                pl.Series(name=self.cfg.inputs, values=column_iter),
                 pl.col(self.cfg.label_col).apply(convert_rating).alias(self.cfg.labels),
             ]
         )
@@ -126,7 +126,7 @@ class Tokenizer:
             1, self.cfg.max_len
         )
 
-    def save(self, data: pl.DataFrame) -> None:
+    def save_parquet(self, data: pl.DataFrame) -> None:
         _get_data(data, [self.cfg.inputs] + [self.cfg.labels]).write_parquet(
             f"{FileConfig.processed_reviews_file_path}"
         )

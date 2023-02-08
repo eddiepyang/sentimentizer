@@ -83,7 +83,7 @@ def run_extract(args: argparse.Namespace) -> None:
 
 
 def run_tokenize(args: argparse.Namespace) -> None:
-    reviews_data = pl.read_feather(DriverConfig.files.raw_reviews_file_path)
+    reviews_data = pl.read_ipc(DriverConfig.files.raw_reviews_file_path)
     if args.type == "new":
         tokenizer = Tokenizer.from_data(reviews_data)
     elif args.type == "update":
@@ -91,8 +91,8 @@ def run_tokenize(args: argparse.Namespace) -> None:
         tokenizer = Tokenizer(dictionary=dictionary)
     else:
         raise RunTypeError
-    tokenizer.transform_dataframe(reviews_data)
-    tokenizer.save(reviews_data)
+    parsed_data = tokenizer.transform_dataframe(reviews_data)
+    tokenizer.save_parquet(parsed_data)
 
 
 def run_fit(args: argparse.Namespace) -> None:
