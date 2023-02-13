@@ -1,20 +1,14 @@
+from importlib.resources import files
+
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-import numpy as np
 from gensim import corpora
 
-from torch_sentiment.extractor import new_embedding_weights
 from torch_sentiment import new_logger
-from torch_sentiment.config import (
-    EmbeddingsConfig,
-    TokenizerConfig,
-    DEFAULT_LOG_LEVEL,
-)
-
-from importlib.resources import files
-
+from torch_sentiment.config import DEFAULT_LOG_LEVEL, EmbeddingsConfig, TokenizerConfig
+from torch_sentiment.extractor import new_embedding_weights
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
@@ -94,7 +88,7 @@ def get_trained_model(batch_size: int, device: str) -> RNN:
         raise ValueError("device must be cpu or cuda")
 
     weights = torch.load(
-        files("torch_sentiment.data").joinpath("weights.pth"),
+        str(files("torch_sentiment.data").joinpath("weights.pth")),
         map_location=torch.device(device=device),
     )
     empty_embeddings = torch.zeros(weights["embed_layer.weight"].shape)

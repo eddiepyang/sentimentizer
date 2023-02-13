@@ -20,6 +20,37 @@ class RunTypeError(Exception):
         super().__init__("incorrect run type found")
 
 
+def new_parser() -> argparse.Namespace:
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--device", default="cuda", help="run model on cuda or cpu"
+    )  # noqa: E501
+    parser.add_argument(
+        "--model",
+        default="transformer",
+        help="model loaded, must be rnn or transformer",
+    )  # noqa: E501
+    parser.add_argument(
+        "--type", default="new", help="type of run, must be new or update"
+    )  # noqa: E501
+    parser.add_argument(
+        "--stop", type=int, default=10000, help="how many lines to load"
+    )
+    parser.add_argument("--save", type=bool, default=False, help="save data and model")
+    args = parser.parse_args()
+
+    if args.type not in ("new", "update"):
+        raise RunTypeError
+
+    logger.info(
+        "running with args",
+        device=args.device,
+        early_stop=args.stop,
+    )
+    return args
+
+
 def _load_model(args: argparse.Namespace) -> torch.nn.Module:
     if args.model == "rnn":
         from torch_sentiment.rnn.model import new_model, get_trained_model
@@ -41,35 +72,6 @@ def _load_model(args: argparse.Namespace) -> torch.nn.Module:
         raise RunTypeError
 
     return model
-
-
-def new_parser() -> argparse.Namespace:
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--device", default="cuda", help="run model on cuda or cpu"
-    )  # noqa: E501
-    parser.add_argument(
-        "--model", default="rnn", help="model loaded, must be rnn or transformer"
-    )  # noqa: E501
-    parser.add_argument(
-        "--type", default="new", help="type of run, must be new or update"
-    )  # noqa: E501
-    parser.add_argument(
-        "--stop", type=int, default=10000, help="how many lines to load"
-    )
-    parser.add_argument("--save", type=bool, default=False, help="save data and model")
-    args = parser.parse_args()
-
-    if args.type not in ("new", "update"):
-        raise RunTypeError
-
-    logger.info(
-        "running with args",
-        device=args.device,
-        early_stop=args.stop,
-    )
-    return args
 
 
 def run_extract(args: argparse.Namespace) -> None:
