@@ -1,20 +1,14 @@
 from importlib.resources import files
 
 import numpy as np
-from gensim import corpora
-
 import torch
-from torch import nn
 import torch.nn.functional as F
-from torch.nn import TransformerEncoder, TransformerEncoderLayer
+from gensim import corpora
+from torch import nn
 
-from torch_sentiment.extractor import new_embedding_weights
 from torch_sentiment import new_logger
-from torch_sentiment.config import (
-    EmbeddingsConfig,
-    TokenizerConfig,
-    DEFAULT_LOG_LEVEL,
-)
+from torch_sentiment.config import DEFAULT_LOG_LEVEL, EmbeddingsConfig
+from torch_sentiment.extractor import new_embedding_weights
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
@@ -45,7 +39,12 @@ class Encoder(nn.Module):
         # input of shape (seq_len, batch, input_size)
         # https://pytorch.org/docs/stable/nn.html
 
-        self.encoder = nn.TransformerEncoderLayer(d_model, n_heads)
+        encoder_layer = nn.TransformerEncoderLayer(d_model, n_heads)
+        layer_norm = nn.LayerNorm(d_model)
+        self.encoder = nn.TransformerEncoder(
+            encoder_layer=encoder_layer, num_layers=3, norm=layer_norm
+        )
+
         self.fc1 = nn.Linear(input_len, 1)
         self.fc2 = nn.Linear(emb_weights.shape[1], 1)
         self.verbose = verbose
@@ -60,10 +59,10 @@ class Encoder(nn.Module):
 
         logger.debug("embedding shape %s" % (embeds.shape,))
         embeds = F.relu(self.fc0(embeds))
-        out = self.encoder(embeds.permute(0, 2, 1))
+        encoded_out = self.encoder(embeds.permute(0, 2, 1))
 
-        logger.debug("lstm out shape %s" % (out.shape,))
-        out = self.fc1(out)
+        logger.debug("lstm out shape %s" % (encoded_out.shape,))
+        out = self.fc1(encoded_out)
         logger.debug("fc1 out shape %s" % (out.shape,))
         fout = self.fc2(out.permute(0, 2, 1))
         logger.debug("final %s" % (fout.shape,))
@@ -100,15 +99,18 @@ def get_trained_model(batch_size: int, device: str) -> Encoder:
         raise ValueError("device must be cpu or cuda")
 
     weights = torch.load(
-        files("torch_sentiment.data").joinpath("weights.pth"),
+        str(files("torch_sentiment.data").joinpath("embed_weights.pth")),
         map_location=torch.device(device=device),
     )
     empty_embeddings = torch.zeros(weights["embed_layer.weight"].shape)
-    model = RNN(
+    model = Encoder(
         batch_size=batch_size,
-        input_len=TokenizerConfig.max_len,
+        d_model=200,
+        n_heads=4,
+        input_len=200,
         emb_weights=empty_embeddings,
     )
+
     model.load_state_dict(weights)
 
     return model
