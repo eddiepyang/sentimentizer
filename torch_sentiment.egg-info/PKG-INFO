@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
 Name: torch-sentiment
-Version: 0.5.1
+Version: 0.6.0
 Summary: straight forward rnn model
 Author-email: Edward Yang <edwardpyang@gmail.com>
 License: Copyright (c) 2018-Present Edward Yang
@@ -27,7 +27,6 @@ License: Copyright (c) 2018-Present Edward Yang
 Keywords: rnn,pytorch,nlp,pytorch
 Classifier: License :: OSI Approved :: MIT License
 Classifier: Programming Language :: Python
-Classifier: Programming Language :: Python :: 3
 Requires-Python: >=3.10
 Description-Content-Type: text/markdown
 Provides-Extra: dev
@@ -62,7 +61,7 @@ review_text = "greatest pie ever, best in town!"
 positive_ids = tokenizer.tokenize_text(review_text)
 model.predict(positive_ids)
   
->>> tensor(0.9701)
+>> tensor(0.9701)
 ```
 
 ## Install for development with miniconda:  
@@ -77,9 +76,5 @@ To rerun the model:
 * get the yelp [dataset](https://www.yelp.com/dataset), 
 * get the glove 6B 100D [dataset](https://nlp.stanford.edu/projects/glove/)
 * place both files in the package data directory 
-* run with the rnn training entry point:
-
-```
-train
-```
+* run the training script in workflows
 

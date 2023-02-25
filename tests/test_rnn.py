@@ -6,7 +6,7 @@ from torch_sentiment.tokenizer import Tokenizer, convert_rating, new_logger, tok
 from torch_sentiment.config import DEFAULT_LOG_LEVEL
 from torch_sentiment.extractor import extract_data, write_arrow
 from torch_sentiment.loader import CorpusDataset
-from torch_sentiment.rnn.model import RNN, get_trained_model
+from torch_sentiment.models.rnn import RNN, get_trained_model
 from torch_sentiment.tokenizer import get_trained_tokenizer
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
