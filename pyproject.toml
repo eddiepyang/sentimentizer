@@ -1,7 +1,5 @@
-# pyproject.toml
-
 [build-system]
-requires      = ["setuptools>=61.0.0", "wheel"]
+requires      = ["setuptools>=61.0.1", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -24,6 +22,7 @@ dependencies = [
         "torch >= 1.13.1",
         "orjson >= 3.8.5",
         "pyarrow >= 10.0.1",
+        "attrs >= 22.2.0",
         "scikit-learn",
         "gensim",
         "structlog",
