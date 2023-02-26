@@ -1,0 +1,131 @@
+{"device": "cuda", "early_stop": 100000, "event": "running with args", "level": "info", "timestamp": "2023-02-08T21:14:35.706881Z"}
+{"function": "extract_data", "run_time": " 0.0003 seconds", "available_memory": " 5.57 GBs", "free_memory": " 3.04 GBs", "used_memory": " 23.60 GBs", "event": "function completed successfully", "level": "info", "timestamp": "2023-02-08T21:14:35.707359Z"}
+{"event": "dictionary created...", "level": "info", "timestamp": "2023-02-08T21:14:42.449890Z"}
+{"event": "converted tokens to numbers...", "level": "info", "timestamp": "2023-02-08T21:14:53.215534Z"}
+{"function": "transform_dataframe", "run_time": " 10.7656 seconds", "available_memory": " 5.24 GBs", "free_memory": " 2.63 GBs", "used_memory": " 23.94 GBs", "event": "function completed successfully", "level": "info", "timestamp": "2023-02-08T21:14:53.215731Z"}
+{"event": "file saved to /home/ryeyoo/projects/torch-sentiment/torch_sentiment/data/review_data.parquet", "level": "info", "timestamp": "2023-02-08T21:14:53.640313Z"}
+{"function": "extract_embeddings", "run_time": " 2.8870 seconds", "available_memory": " 5.25 GBs", "free_memory": " 2.62 GBs", "used_memory": " 23.93 GBs", "event": "function completed successfully", "level": "info", "timestamp": "2023-02-08T21:14:56.808692Z"}
+{"function": "new_embedding_weights", "run_time": " 2.9512 seconds", "available_memory": " 5.25 GBs", "free_memory": " 2.62 GBs", "used_memory": " 23.93 GBs", "event": "function completed successfully", "level": "info", "timestamp": "2023-02-08T21:14:56.872878Z"}
+{"event": "fitting model...", "level": "info", "timestamp": "2023-02-08T21:14:57.479952Z"}
+{"event": "0.08 of rows completed in 100 cycles, current loss at 0.537816", "level": "info", "timestamp": "2023-02-08T21:14:58.386047Z"}
+{"event": "current learning rate at 0.004999", "level": "info", "timestamp": "2023-02-08T21:14:58.386140Z"}
+{"event": "0.16 of rows completed in 200 cycles, current loss at 0.356119", "level": "info", "timestamp": "2023-02-08T21:14:58.923346Z"}
+{"event": "current learning rate at 0.004995", "level": "info", "timestamp": "2023-02-08T21:14:58.923393Z"}
+{"event": "0.24 of rows completed in 300 cycles, current loss at 0.325156", "level": "info", "timestamp": "2023-02-08T21:14:59.470492Z"}
+{"event": "current learning rate at 0.004989", "level": "info", "timestamp": "2023-02-08T21:14:59.470528Z"}
+{"event": "0.32 of rows completed in 400 cycles, current loss at 0.302225", "level": "info", "timestamp": "2023-02-08T21:14:59.980637Z"}
+{"event": "current learning rate at 0.004980", "level": "info", "timestamp": "2023-02-08T21:14:59.980672Z"}
+{"event": "0.40 of rows completed in 500 cycles, current loss at 0.297922", "level": "info", "timestamp": "2023-02-08T21:15:00.491564Z"}
+{"event": "current learning rate at 0.004969", "level": "info", "timestamp": "2023-02-08T21:15:00.491602Z"}
+{"event": "0.48 of rows completed in 600 cycles, current loss at 0.309725", "level": "info", "timestamp": "2023-02-08T21:15:01.000595Z"}
+{"event": "current learning rate at 0.004956", "level": "info", "timestamp": "2023-02-08T21:15:01.000630Z"}
+{"event": "0.56 of rows completed in 700 cycles, current loss at 0.295682", "level": "info", "timestamp": "2023-02-08T21:15:01.511579Z"}
+{"event": "current learning rate at 0.004940", "level": "info", "timestamp": "2023-02-08T21:15:01.511614Z"}
+{"event": "0.64 of rows completed in 800 cycles, current loss at 0.296913", "level": "info", "timestamp": "2023-02-08T21:15:02.018582Z"}
+{"event": "current learning rate at 0.004921", "level": "info", "timestamp": "2023-02-08T21:15:02.018617Z"}
+{"event": "0.72 of rows completed in 900 cycles, current loss at 0.291733", "level": "info", "timestamp": "2023-02-08T21:15:02.529466Z"}
+{"event": "current learning rate at 0.004901", "level": "info", "timestamp": "2023-02-08T21:15:02.529500Z"}
+{"event": "0.80 of rows completed in 1000 cycles, current loss at 0.286298", "level": "info", "timestamp": "2023-02-08T21:15:03.037459Z"}
+{"event": "current learning rate at 0.004878", "level": "info", "timestamp": "2023-02-08T21:15:03.037495Z"}
+{"event": "0.88 of rows completed in 1100 cycles, current loss at 0.286538", "level": "info", "timestamp": "2023-02-08T21:15:03.546678Z"}
+{"event": "current learning rate at 0.004852", "level": "info", "timestamp": "2023-02-08T21:15:03.546713Z"}
+{"event": "0.96 of rows completed in 1200 cycles, current loss at 0.287701", "level": "info", "timestamp": "2023-02-08T21:15:04.056652Z"}
+{"event": "current learning rate at 0.004824", "level": "info", "timestamp": "2023-02-08T21:15:04.056686Z"}
+{"event": "evaluating predictions...", "level": "info", "timestamp": "2023-02-08T21:15:04.347854Z"}
+{"event": "0.32 of rows completed in 100 cycles, current loss at 0.263387", "level": "info", "timestamp": "2023-02-08T21:15:04.709491Z"}
+{"event": "0.64 of rows completed in 200 cycles, current loss at 0.267478", "level": "info", "timestamp": "2023-02-08T21:15:04.874299Z"}
+{"event": "0.96 of rows completed in 300 cycles, current loss at 0.257670", "level": "info", "timestamp": "2023-02-08T21:15:05.038482Z"}
+{"event": "validation loss at:  0.263445", "level": "info", "timestamp": "2023-02-08T21:15:05.102742Z"}
+{"event": "epoch 0 completed", "level": "info", "timestamp": "2023-02-08T21:15:05.102843Z"}
+{"event": "0.08 of rows completed in 100 cycles, current loss at 0.292866", "level": "info", "timestamp": "2023-02-08T21:15:05.821043Z"}
+{"event": "current learning rate at 0.004762", "level": "info", "timestamp": "2023-02-08T21:15:05.821116Z"}
+{"event": "0.16 of rows completed in 200 cycles, current loss at 0.278702", "level": "info", "timestamp": "2023-02-08T21:15:06.336832Z"}
+{"event": "current learning rate at 0.004728", "level": "info", "timestamp": "2023-02-08T21:15:06.336871Z"}
+{"event": "0.24 of rows completed in 300 cycles, current loss at 0.287068", "level": "info", "timestamp": "2023-02-08T21:15:06.851870Z"}
+{"event": "current learning rate at 0.004691", "level": "info", "timestamp": "2023-02-08T21:15:06.851908Z"}
+{"event": "0.32 of rows completed in 400 cycles, current loss at 0.275745", "level": "info", "timestamp": "2023-02-08T21:15:07.366987Z"}
+{"event": "current learning rate at 0.004652", "level": "info", "timestamp": "2023-02-08T21:15:07.367025Z"}
+{"event": "0.40 of rows completed in 500 cycles, current loss at 0.276250", "level": "info", "timestamp": "2023-02-08T21:15:07.890080Z"}
+{"event": "current learning rate at 0.004611", "level": "info", "timestamp": "2023-02-08T21:15:07.890119Z"}
+{"event": "0.48 of rows completed in 600 cycles, current loss at 0.289687", "level": "info", "timestamp": "2023-02-08T21:15:08.403918Z"}
+{"event": "current learning rate at 0.004568", "level": "info", "timestamp": "2023-02-08T21:15:08.403954Z"}
+{"event": "0.56 of rows completed in 700 cycles, current loss at 0.287920", "level": "info", "timestamp": "2023-02-08T21:15:08.913901Z"}
+{"event": "current learning rate at 0.004523", "level": "info", "timestamp": "2023-02-08T21:15:08.913936Z"}
+{"event": "0.64 of rows completed in 800 cycles, current loss at 0.279116", "level": "info", "timestamp": "2023-02-08T21:15:09.421535Z"}
+{"event": "current learning rate at 0.004475", "level": "info", "timestamp": "2023-02-08T21:15:09.421570Z"}
+{"event": "0.72 of rows completed in 900 cycles, current loss at 0.268130", "level": "info", "timestamp": "2023-02-08T21:15:09.931755Z"}
+{"event": "current learning rate at 0.004426", "level": "info", "timestamp": "2023-02-08T21:15:09.931793Z"}
+{"event": "0.80 of rows completed in 1000 cycles, current loss at 0.276060", "level": "info", "timestamp": "2023-02-08T21:15:10.443453Z"}
+{"event": "current learning rate at 0.004375", "level": "info", "timestamp": "2023-02-08T21:15:10.443489Z"}
+{"event": "0.88 of rows completed in 1100 cycles, current loss at 0.279161", "level": "info", "timestamp": "2023-02-08T21:15:10.960564Z"}
+{"event": "current learning rate at 0.004322", "level": "info", "timestamp": "2023-02-08T21:15:10.960599Z"}
+{"event": "0.96 of rows completed in 1200 cycles, current loss at 0.278585", "level": "info", "timestamp": "2023-02-08T21:15:11.471832Z"}
+{"event": "current learning rate at 0.004268", "level": "info", "timestamp": "2023-02-08T21:15:11.471870Z"}
+{"event": "evaluating predictions...", "level": "info", "timestamp": "2023-02-08T21:15:11.775321Z"}
+{"event": "0.32 of rows completed in 100 cycles, current loss at 0.260202", "level": "info", "timestamp": "2023-02-08T21:15:12.154585Z"}
+{"event": "0.64 of rows completed in 200 cycles, current loss at 0.258446", "level": "info", "timestamp": "2023-02-08T21:15:12.319409Z"}
+{"event": "0.96 of rows completed in 300 cycles, current loss at 0.257135", "level": "info", "timestamp": "2023-02-08T21:15:12.482708Z"}
+{"event": "validation loss at:  0.258977", "level": "info", "timestamp": "2023-02-08T21:15:12.543390Z"}
+{"event": "epoch 1 completed", "level": "info", "timestamp": "2023-02-08T21:15:12.543490Z"}
+{"event": "0.08 of rows completed in 100 cycles, current loss at 0.279857", "level": "info", "timestamp": "2023-02-08T21:15:13.256753Z"}
+{"event": "current learning rate at 0.004153", "level": "info", "timestamp": "2023-02-08T21:15:13.256827Z"}
+{"event": "0.16 of rows completed in 200 cycles, current loss at 0.270977", "level": "info", "timestamp": "2023-02-08T21:15:13.777009Z"}
+{"event": "current learning rate at 0.004094", "level": "info", "timestamp": "2023-02-08T21:15:13.777045Z"}
+{"event": "0.24 of rows completed in 300 cycles, current loss at 0.276266", "level": "info", "timestamp": "2023-02-08T21:15:14.290155Z"}
+{"event": "current learning rate at 0.004032", "level": "info", "timestamp": "2023-02-08T21:15:14.290192Z"}
+{"event": "0.32 of rows completed in 400 cycles, current loss at 0.265912", "level": "info", "timestamp": "2023-02-08T21:15:14.800058Z"}
+{"event": "current learning rate at 0.003969", "level": "info", "timestamp": "2023-02-08T21:15:14.800094Z"}
+{"event": "0.40 of rows completed in 500 cycles, current loss at 0.264377", "level": "info", "timestamp": "2023-02-08T21:15:15.323824Z"}
+{"event": "current learning rate at 0.003905", "level": "info", "timestamp": "2023-02-08T21:15:15.323860Z"}
+{"event": "0.48 of rows completed in 600 cycles, current loss at 0.274102", "level": "info", "timestamp": "2023-02-08T21:15:15.837006Z"}
+{"event": "current learning rate at 0.003840", "level": "info", "timestamp": "2023-02-08T21:15:15.837043Z"}
+{"event": "0.56 of rows completed in 700 cycles, current loss at 0.273986", "level": "info", "timestamp": "2023-02-08T21:15:16.349632Z"}
+{"event": "current learning rate at 0.003773", "level": "info", "timestamp": "2023-02-08T21:15:16.349668Z"}
+{"event": "0.64 of rows completed in 800 cycles, current loss at 0.267421", "level": "info", "timestamp": "2023-02-08T21:15:16.859601Z"}
+{"event": "current learning rate at 0.003704", "level": "info", "timestamp": "2023-02-08T21:15:16.859637Z"}
+{"event": "0.72 of rows completed in 900 cycles, current loss at 0.266921", "level": "info", "timestamp": "2023-02-08T21:15:17.370722Z"}
+{"event": "current learning rate at 0.003635", "level": "info", "timestamp": "2023-02-08T21:15:17.370757Z"}
+{"event": "0.80 of rows completed in 1000 cycles, current loss at 0.266543", "level": "info", "timestamp": "2023-02-08T21:15:17.884657Z"}
+{"event": "current learning rate at 0.003564", "level": "info", "timestamp": "2023-02-08T21:15:17.884696Z"}
+{"event": "0.88 of rows completed in 1100 cycles, current loss at 0.274165", "level": "info", "timestamp": "2023-02-08T21:15:18.398922Z"}
+{"event": "current learning rate at 0.003493", "level": "info", "timestamp": "2023-02-08T21:15:18.398958Z"}
+{"event": "0.96 of rows completed in 1200 cycles, current loss at 0.268562", "level": "info", "timestamp": "2023-02-08T21:15:18.910881Z"}
+{"event": "current learning rate at 0.003420", "level": "info", "timestamp": "2023-02-08T21:15:18.910917Z"}
+{"event": "evaluating predictions...", "level": "info", "timestamp": "2023-02-08T21:15:19.210148Z"}
+{"event": "0.32 of rows completed in 100 cycles, current loss at 0.250172", "level": "info", "timestamp": "2023-02-08T21:15:19.572442Z"}
+{"event": "0.64 of rows completed in 200 cycles, current loss at 0.255360", "level": "info", "timestamp": "2023-02-08T21:15:19.741348Z"}
+{"event": "0.96 of rows completed in 300 cycles, current loss at 0.244970", "level": "info", "timestamp": "2023-02-08T21:15:19.907929Z"}
+{"event": "validation loss at:  0.250957", "level": "info", "timestamp": "2023-02-08T21:15:19.968286Z"}
+{"event": "epoch 2 completed", "level": "info", "timestamp": "2023-02-08T21:15:19.968405Z"}
+{"event": "0.08 of rows completed in 100 cycles, current loss at 0.270937", "level": "info", "timestamp": "2023-02-08T21:15:20.684349Z"}
+{"event": "current learning rate at 0.003273", "level": "info", "timestamp": "2023-02-08T21:15:20.684423Z"}
+{"event": "0.16 of rows completed in 200 cycles, current loss at 0.255263", "level": "info", "timestamp": "2023-02-08T21:15:21.203349Z"}
+{"event": "current learning rate at 0.003197", "level": "info", "timestamp": "2023-02-08T21:15:21.203384Z"}
+{"event": "0.24 of rows completed in 300 cycles, current loss at 0.265666", "level": "info", "timestamp": "2023-02-08T21:15:21.713260Z"}
+{"event": "current learning rate at 0.003122", "level": "info", "timestamp": "2023-02-08T21:15:21.713296Z"}
+{"event": "0.32 of rows completed in 400 cycles, current loss at 0.279605", "level": "info", "timestamp": "2023-02-08T21:15:22.227266Z"}
+{"event": "current learning rate at 0.003045", "level": "info", "timestamp": "2023-02-08T21:15:22.227302Z"}
+{"event": "0.40 of rows completed in 500 cycles, current loss at 0.253988", "level": "info", "timestamp": "2023-02-08T21:15:22.745767Z"}
+{"event": "current learning rate at 0.002968", "level": "info", "timestamp": "2023-02-08T21:15:22.745803Z"}
+{"event": "0.48 of rows completed in 600 cycles, current loss at 0.267140", "level": "info", "timestamp": "2023-02-08T21:15:23.270282Z"}
+{"event": "current learning rate at 0.002891", "level": "info", "timestamp": "2023-02-08T21:15:23.270319Z"}
+{"event": "0.56 of rows completed in 700 cycles, current loss at 0.268051", "level": "info", "timestamp": "2023-02-08T21:15:23.785225Z"}
+{"event": "current learning rate at 0.002813", "level": "info", "timestamp": "2023-02-08T21:15:23.785261Z"}
+{"event": "0.64 of rows completed in 800 cycles, current loss at 0.251548", "level": "info", "timestamp": "2023-02-08T21:15:24.310343Z"}
+{"event": "current learning rate at 0.002735", "level": "info", "timestamp": "2023-02-08T21:15:24.310381Z"}
+{"event": "0.72 of rows completed in 900 cycles, current loss at 0.252789", "level": "info", "timestamp": "2023-02-08T21:15:24.832548Z"}
+{"event": "current learning rate at 0.002657", "level": "info", "timestamp": "2023-02-08T21:15:24.832589Z"}
+{"event": "0.80 of rows completed in 1000 cycles, current loss at 0.257003", "level": "info", "timestamp": "2023-02-08T21:15:25.351622Z"}
+{"event": "current learning rate at 0.002579", "level": "info", "timestamp": "2023-02-08T21:15:25.351658Z"}
+{"event": "0.88 of rows completed in 1100 cycles, current loss at 0.261072", "level": "info", "timestamp": "2023-02-08T21:15:25.870294Z"}
+{"event": "current learning rate at 0.002500", "level": "info", "timestamp": "2023-02-08T21:15:25.870330Z"}
+{"event": "0.96 of rows completed in 1200 cycles, current loss at 0.253425", "level": "info", "timestamp": "2023-02-08T21:15:26.389061Z"}
+{"event": "current learning rate at 0.002421", "level": "info", "timestamp": "2023-02-08T21:15:26.389098Z"}
+{"event": "evaluating predictions...", "level": "info", "timestamp": "2023-02-08T21:15:26.686931Z"}
+{"event": "0.32 of rows completed in 100 cycles, current loss at 0.243668", "level": "info", "timestamp": "2023-02-08T21:15:27.043920Z"}
+{"event": "0.64 of rows completed in 200 cycles, current loss at 0.248233", "level": "info", "timestamp": "2023-02-08T21:15:27.209532Z"}
+{"event": "0.96 of rows completed in 300 cycles, current loss at 0.238670", "level": "info", "timestamp": "2023-02-08T21:15:27.372872Z"}
+{"event": "validation loss at:  0.244366", "level": "info", "timestamp": "2023-02-08T21:15:27.432587Z"}
+{"event": "epoch 3 completed", "level": "info", "timestamp": "2023-02-08T21:15:27.432694Z"}
+{"event": "model fitting completed, 30 seconds passed", "level": "info", "timestamp": "2023-02-08T21:15:27.432719Z"}
+{"function": "main", "run_time": " 51.7392 seconds", "available_memory": " 3.92 GBs", "free_memory": " 1.29 GBs", "used_memory": " 25.24 GBs", "event": "function completed successfully", "level": "info", "timestamp": "2023-02-08T21:15:27.445870Z"}

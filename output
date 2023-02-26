@@ -1,0 +1,31 @@
+{"device": "cuda", "early_stop": 10000, "event": "running with args", "level": "info", "timestamp": "2023-02-08T21:13:49.639076Z"}
+{"function": "extract_data", "run_time": " 0.0003 seconds", "available_memory": " 5.68 GBs", "free_memory": " 3.07 GBs", "used_memory": " 23.50 GBs", "event": "function completed successfully", "level": "info", "timestamp": "2023-02-08T21:13:49.639545Z"}
+{"event": "dictionary created...", "level": "info", "timestamp": "2023-02-08T21:13:50.310326Z"}
+{"event": "converted tokens to numbers...", "level": "info", "timestamp": "2023-02-08T21:13:50.926997Z"}
+{"function": "transform_dataframe", "run_time": " 0.6167 seconds", "available_memory": " 5.63 GBs", "free_memory": " 3.09 GBs", "used_memory": " 23.56 GBs", "event": "function completed successfully", "level": "info", "timestamp": "2023-02-08T21:13:50.927175Z"}
+{"event": "file saved to /home/ryeyoo/projects/torch-sentiment/torch_sentiment/data/review_data.parquet", "level": "info", "timestamp": "2023-02-08T21:13:51.025022Z"}
+{"function": "extract_embeddings", "run_time": " 2.8279 seconds", "available_memory": " 5.65 GBs", "free_memory": " 3.14 GBs", "used_memory": " 23.52 GBs", "event": "function completed successfully", "level": "info", "timestamp": "2023-02-08T21:13:53.882178Z"}
+{"function": "new_embedding_weights", "run_time": " 2.8943 seconds", "available_memory": " 5.62 GBs", "free_memory": " 3.11 GBs", "used_memory": " 23.55 GBs", "event": "function completed successfully", "level": "info", "timestamp": "2023-02-08T21:13:53.948657Z"}
+{"event": "fitting model...", "level": "info", "timestamp": "2023-02-08T21:13:54.556516Z"}
+{"event": "0.80 of rows completed in 100 cycles, current loss at 0.487387", "level": "info", "timestamp": "2023-02-08T21:13:55.411830Z"}
+{"event": "current learning rate at 0.004999", "level": "info", "timestamp": "2023-02-08T21:13:55.411923Z"}
+{"event": "evaluating predictions...", "level": "info", "timestamp": "2023-02-08T21:13:55.593690Z"}
+{"event": "validation loss at:  0.338801", "level": "info", "timestamp": "2023-02-08T21:13:55.857776Z"}
+{"event": "epoch 0 completed", "level": "info", "timestamp": "2023-02-08T21:13:55.857898Z"}
+{"event": "0.80 of rows completed in 100 cycles, current loss at 0.313167", "level": "info", "timestamp": "2023-02-08T21:13:56.532200Z"}
+{"event": "current learning rate at 0.004989", "level": "info", "timestamp": "2023-02-08T21:13:56.532272Z"}
+{"event": "evaluating predictions...", "level": "info", "timestamp": "2023-02-08T21:13:56.691386Z"}
+{"event": "validation loss at:  0.287692", "level": "info", "timestamp": "2023-02-08T21:13:56.962615Z"}
+{"event": "epoch 1 completed", "level": "info", "timestamp": "2023-02-08T21:13:56.962863Z"}
+{"event": "0.80 of rows completed in 100 cycles, current loss at 0.277784", "level": "info", "timestamp": "2023-02-08T21:13:57.643109Z"}
+{"event": "current learning rate at 0.004969", "level": "info", "timestamp": "2023-02-08T21:13:57.643179Z"}
+{"event": "evaluating predictions...", "level": "info", "timestamp": "2023-02-08T21:13:57.800794Z"}
+{"event": "validation loss at:  0.280480", "level": "info", "timestamp": "2023-02-08T21:13:58.059390Z"}
+{"event": "epoch 2 completed", "level": "info", "timestamp": "2023-02-08T21:13:58.059517Z"}
+{"event": "0.80 of rows completed in 100 cycles, current loss at 0.263928", "level": "info", "timestamp": "2023-02-08T21:13:58.731314Z"}
+{"event": "current learning rate at 0.004940", "level": "info", "timestamp": "2023-02-08T21:13:58.731391Z"}
+{"event": "evaluating predictions...", "level": "info", "timestamp": "2023-02-08T21:13:58.894097Z"}
+{"event": "validation loss at:  0.281259", "level": "info", "timestamp": "2023-02-08T21:13:59.163469Z"}
+{"event": "epoch 3 completed", "level": "info", "timestamp": "2023-02-08T21:13:59.163596Z"}
+{"event": "model fitting completed, 5 seconds passed", "level": "info", "timestamp": "2023-02-08T21:13:59.163626Z"}
+{"function": "main", "run_time": " 9.5262 seconds", "available_memory": " 4.20 GBs", "free_memory": " 1.69 GBs", "used_memory": " 24.96 GBs", "event": "function completed successfully", "level": "info", "timestamp": "2023-02-08T21:13:59.165000Z"}
