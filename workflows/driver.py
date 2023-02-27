@@ -53,9 +53,9 @@ def new_parser() -> argparse.Namespace:
 
 def _load_model(args: argparse.Namespace) -> torch.nn.Module:
     if args.model == "rnn":
-        from torch_sentiment.rnn.model import new_model, get_trained_model
+        from torch_sentiment.models.rnn import new_model, get_trained_model
     elif args.model == "transformer":
-        from torch_sentiment.transformer.model import new_model, get_trained_model
+        from torch_sentiment.models.encoder import new_model, get_trained_model
     else:
         raise ValueError(f"no model {args.model}")
 
