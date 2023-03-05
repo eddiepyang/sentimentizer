@@ -1,6 +1,6 @@
 import zipfile
 from itertools import islice
-from typing import IO, Generator
+from typing import IO, Iterator, List
 
 import numpy as np
 import orjson as json
@@ -18,8 +18,8 @@ WRITE_BYTES = "wb"
 
 
 def generate_batch(
-    generator_input: Generator[dict, str, None], iter_size: int
-) -> Generator[pa.RecordBatch, list, None]:
+    generator_input: Iterator[dict], iter_size: int
+) -> Iterator[List[dict]]:
 
     for start in range(0, iter_size, BATCH_SIZE):
         end = min(start + BATCH_SIZE, iter_size)
