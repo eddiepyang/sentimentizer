@@ -27,7 +27,7 @@ def generate_batch(
         yield batch_list, start, end
 
 
-def process_json(json_file: IO[bytes], stop: int = 0) -> Generator:
+def process_json(json_file: IO[bytes], stop: int = 0) -> Iterator:
     for i, line in enumerate(json_file):
         if i % 100000 == 0:
             logger.debug(f"processing line {i}")
@@ -39,7 +39,7 @@ def process_json(json_file: IO[bytes], stop: int = 0) -> Generator:
 
 
 @time_decorator
-def extract_data(file_path: str, compressed_file_name: str, stop: int = 0) -> Generator:
+def extract_data(file_path: str, compressed_file_name: str, stop: int = 0) -> Iterator:
     "reads from zipped yelp data file"
 
     with zipfile.ZipFile(file_path) as zfile:
@@ -48,7 +48,7 @@ def extract_data(file_path: str, compressed_file_name: str, stop: int = 0) -> Ge
 
 
 def write_arrow(
-    generator_input: Generator,
+    generator_input: Iterator,
     iter_size: int,
     write_path: str,
     schema: pa.Schema = None,
