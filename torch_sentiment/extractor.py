@@ -23,9 +23,8 @@ def generate_batch(
 
     for start in range(0, iter_size, BATCH_SIZE):
         end = min(start + BATCH_SIZE, iter_size)
-        review_dicts = []
-        review_dicts.extend(islice(generator_input, BATCH_SIZE))
-        yield review_dicts, start, end
+        batch_list = list(islice(generator_input, BATCH_SIZE))
+        yield batch_list, start, end
 
 
 def process_json(json_file: IO[bytes], stop: int = 0) -> Generator:
