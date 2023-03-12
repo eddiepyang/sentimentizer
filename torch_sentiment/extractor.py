@@ -10,11 +10,11 @@ from gensim import corpora
 from torch_sentiment import new_logger, time_decorator
 from torch_sentiment.config import (
     DEFAULT_LOG_LEVEL,
-    EmbeddingsConfig,
     BATCH_SIZE,
     WRITE_BYTES,
     READ_BYTES,
     TEXT_COLUMN,
+    EmbeddingsConfig,
 )
 
 from torch_sentiment.tokenizer import tokenize
