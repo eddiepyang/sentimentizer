@@ -21,7 +21,7 @@ a single gpu in minutes and requires less than 1GB of memory.
 from torch_sentiment.tokenizer import get_trained_tokenizer
 from torch_sentiment.rnn.model import get_trained_model
 
-model = get_trained_model(64)
+model = get_trained_model(64, 'cpu')
 tokenizer = get_trained_tokenizer()
 review_text = "greatest pie ever, best in town!"
 positive_ids = tokenizer.tokenize_text(review_text)
