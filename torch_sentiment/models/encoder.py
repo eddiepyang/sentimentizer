@@ -7,7 +7,7 @@ from gensim import corpora
 from torch import nn
 
 from torch_sentiment import new_logger
-from torch_sentiment.config import DEFAULT_LOG_LEVEL, EmbeddingsConfig
+from torch_sentiment.config import DEFAULT_LOG_LEVEL, EmbeddingsConfig, Devices
 from torch_sentiment.extractor import new_embedding_weights
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
@@ -95,8 +95,8 @@ def new_model(
 
 def get_trained_model(batch_size: int, device: str) -> Encoder:
     """loads pre-trained model"""
-    if device not in ("cpu", "cuda"):
-        raise ValueError("device must be cpu or cuda")
+    if device not in Devices:
+        raise ValueError("device must be cpu, cuda, or mps")
 
     weights = torch.load(
         str(files("torch_sentiment.data").joinpath("embed_weights.pth")),
