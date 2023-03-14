@@ -8,13 +8,18 @@ import pyarrow as pa
 from gensim import corpora
 
 from torch_sentiment import new_logger, time_decorator
-from torch_sentiment.config import DEFAULT_LOG_LEVEL, EmbeddingsConfig
+from torch_sentiment.config import (
+    DEFAULT_LOG_LEVEL,
+    BATCH_SIZE,
+    WRITE_BYTES,
+    READ_BYTES,
+    TEXT_COLUMN,
+    EmbeddingsConfig,
+)
+
 from torch_sentiment.tokenizer import tokenize
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
-
-BATCH_SIZE = 100000
-WRITE_BYTES = "wb"
 
 
 def generate_batch(
@@ -32,7 +37,7 @@ def process_json(json_file: IO[bytes], stop: int = 0) -> Iterator:
         if i % 100000 == 0:
             logger.debug(f"processing line {i}")
         dc = json.loads(line)
-        dc["text"] = tokenize(dc.get("text"))
+        dc[TEXT_COLUMN] = tokenize(dc.get(TEXT_COLUMN))
         if i >= stop and stop != 0:
             break
         yield dc
@@ -83,7 +88,9 @@ def extract_embeddings(
 
     embeddings_dict: dict = {}
 
-    with zipfile.ZipFile(cfg.file_path, "r") as f, f.open(cfg.sub_file_path, "r") as z:
+    with zipfile.ZipFile(cfg.file_path, READ_BYTES) as f, f.open(
+        cfg.sub_file_path, READ_BYTES
+    ) as z:
         for line in z:
             values = line.split()
             key = values[0].decode()
@@ -101,7 +108,6 @@ def extract_embeddings(
 def new_embedding_weights(
     dictionary: corpora.Dictionary, cfg: EmbeddingsConfig
 ) -> np.ndarray:
-
     """converts local dictionary to embeddings from glove"""
 
     embeddings_dict: dict = extract_embeddings(dictionary, cfg)
