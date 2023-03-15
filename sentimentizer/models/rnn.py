@@ -7,7 +7,12 @@ import torch.nn.functional as F
 from gensim import corpora
 
 from sentimentizer import new_logger
-from sentimentizer.config import DEFAULT_LOG_LEVEL, EmbeddingsConfig, TokenizerConfig
+from sentimentizer.config import (
+    DEFAULT_LOG_LEVEL,
+    EmbeddingsConfig,
+    TokenizerConfig,
+    Devices,
+)
 from sentimentizer.extractor import new_embedding_weights
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
