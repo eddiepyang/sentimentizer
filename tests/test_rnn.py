@@ -81,7 +81,8 @@ class TestExtractData:
         write_arrow(gen, self.stop, f"{relative_root}/tests/test_data/file.arrow")
         df = pl.read_ipc(f"{relative_root}/tests/test_data/file.arrow")
         assert df.shape == (2, 2)
-        logger.info(str(df.shape))
+        assert df.schema['text'] == pl.datatypes.List(pl.datatypes.Utf8)
+        assert df.schema['stars'] == pl.datatypes.Int64
 
     def test_failure_empty_input(self):
         # todo

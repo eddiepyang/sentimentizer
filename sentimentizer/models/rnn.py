@@ -84,8 +84,8 @@ def new_model(
 
 def get_trained_model(batch_size: int, device: str) -> RNN:
     """loads pre-trained model"""
-    if device not in ("cpu", "cuda"):
-        raise ValueError("device must be cpu or cuda")
+    if device not in Devices:
+        raise ValueError("device must be cpu, cuda, or mps")
 
     weights = torch.load(
         str(files("sentimentizer.data").joinpath("weights.pth")),

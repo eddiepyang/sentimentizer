@@ -1,19 +1,19 @@
 from importlib.resources import files
 
-from gensim import corpora
 import numpy as np
 import torch
-from torch import nn
 import torch.nn.functional as F
+from gensim import corpora
+from torch import nn
 
 from sentimentizer import new_logger
-from sentimentizer.config import DEFAULT_LOG_LEVEL, EmbeddingsConfig
+from sentimentizer.config import DEFAULT_LOG_LEVEL, EmbeddingsConfig, Devices
 from sentimentizer.extractor import new_embedding_weights
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
 
-class Encoder(nn.Module):
+class Decoder(nn.Module):
     """model class"""
 
     def __init__(
@@ -39,10 +39,10 @@ class Encoder(nn.Module):
         # input of shape (seq_len, batch, input_size)
         # https://pytorch.org/docs/stable/nn.html
 
-        encoder_layer = nn.TransformerEncoderLayer(d_model, n_heads)
+        decoder_layer = nn.TransformerDecoderLayer(d_model, n_heads)
         layer_norm = nn.LayerNorm(d_model)
-        self.encoder = nn.TransformerEncoder(
-            encoder_layer=encoder_layer, num_layers=1, norm=layer_norm
+        self.encoder = nn.TransformerDecoder(
+            encoder_layer=decoder_layer, num_layers=1, norm=layer_norm
         )
 
         self.fc1 = nn.Linear(input_len, 1)
