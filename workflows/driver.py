@@ -3,14 +3,14 @@ import torch
 import pandas as pd
 from gensim import corpora
 
-from torch_sentiment.extractor import extract_data, write_arrow
-from torch_sentiment.trainer import new_trainer
+from sentimentizer.extractor import extract_data, write_arrow
+from sentimentizer.trainer import new_trainer
 
-from torch_sentiment.loader import load_train_val_corpus_datasets
-from torch_sentiment import new_logger, time_decorator
+from sentimentizer.loader import load_train_val_corpus_datasets
+from sentimentizer import new_logger, time_decorator
 
-from torch_sentiment.config import DriverConfig, DEFAULT_LOG_LEVEL
-from torch_sentiment.tokenizer import Tokenizer
+from sentimentizer.config import DriverConfig, DEFAULT_LOG_LEVEL
+from sentimentizer.tokenizer import Tokenizer
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
@@ -28,7 +28,7 @@ def new_parser() -> argparse.Namespace:
     )  # noqa: E501
     parser.add_argument(
         "--model",
-        default="transformer",
+        default="rnn",
         help="model loaded, must be rnn or transformer",
     )  # noqa: E501
     parser.add_argument(
@@ -53,9 +53,9 @@ def new_parser() -> argparse.Namespace:
 
 def _load_model(args: argparse.Namespace) -> torch.nn.Module:
     if args.model == "rnn":
-        from torch_sentiment.models.rnn import new_model, get_trained_model
+        from sentimentizer.models.rnn import new_model, get_trained_model
     elif args.model == "transformer":
-        from torch_sentiment.models.encoder import new_model, get_trained_model
+        from sentimentizer.models.encoder import new_model, get_trained_model
     else:
         raise ValueError(f"no model {args.model}")
 

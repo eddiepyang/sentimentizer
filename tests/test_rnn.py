@@ -2,12 +2,12 @@ import pandas as pd
 import polars as pl
 import pytest
 
-from torch_sentiment.tokenizer import Tokenizer, convert_rating, new_logger, tokenize
-from torch_sentiment.config import DEFAULT_LOG_LEVEL
-from torch_sentiment.extractor import extract_data, write_arrow
-from torch_sentiment.loader import CorpusDataset
-from torch_sentiment.models.rnn import RNN, get_trained_model
-from torch_sentiment.tokenizer import get_trained_tokenizer
+from sentimentizer.tokenizer import Tokenizer, convert_rating, new_logger, tokenize
+from sentimentizer.config import DEFAULT_LOG_LEVEL
+from sentimentizer.extractor import extract_data, write_arrow
+from sentimentizer.loader import CorpusDataset
+from sentimentizer.models.rnn import RNN, get_trained_model
+from sentimentizer.tokenizer import get_trained_tokenizer
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
 

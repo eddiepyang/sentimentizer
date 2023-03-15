@@ -7,14 +7,14 @@ import torch
 from torch import optim
 from torch.utils.data import DataLoader
 
-from torch_sentiment import new_logger
-from torch_sentiment.config import (
+from sentimentizer import new_logger
+from sentimentizer.config import (
     DEFAULT_LOG_LEVEL,
     OptimizationParams,
     SchedulerParams,
     TrainerConfig,
 )
-from torch_sentiment.loader import CorpusDataset
+from sentimentizer.loader import CorpusDataset
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
@@ -130,7 +130,7 @@ class Trainer:
                 i += len(target)
                 if i % (self.cfg.batch_size * 100) == 0:
                     logger.info(
-                        f"{i/n:.2f} of rows completed in {j + 1} cycles, current loss at {np.mean(losses[-60:]):.6f}"
+                        f"{i/n:.2f} of rows completed in {j + 1} cycles, training loss at {np.mean(losses[-60:]):.6f}"
                     )  # noqa: E501
             self.val_loss = np.mean(losses)
             logger.info(f"validation loss at: {self.val_loss: .6f}")
