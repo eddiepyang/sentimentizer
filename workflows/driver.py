@@ -24,12 +24,12 @@ def new_parser() -> argparse.Namespace:
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--device", default="cuda", help="run model on cuda or cpu"
+        "--device", default="cpu", help="run model on cuda or cpu"
     )  # noqa: E501
     parser.add_argument(
         "--model",
-        default="transformer",
-        help="model loaded, must be rnn or transformer",
+        default="encoder",
+        help="model loaded, must be rnn, encoder, or decoder",
     )  # noqa: E501
     parser.add_argument(
         "--type", default="new", help="type of run, must be new or update"
@@ -54,7 +54,9 @@ def new_parser() -> argparse.Namespace:
 def _load_model(args: argparse.Namespace) -> torch.nn.Module:
     if args.model == "rnn":
         from torch_sentiment.models.rnn import new_model, get_trained_model
-    elif args.model == "transformer":
+    elif args.model == "decoder":
+        from torch_sentiment.models.decoder import new_model, get_trained_model
+    elif args.model == "encoder":
         from torch_sentiment.models.encoder import new_model, get_trained_model
     else:
         raise ValueError(f"no model {args.model}")
