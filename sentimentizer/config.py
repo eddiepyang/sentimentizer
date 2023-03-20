@@ -5,9 +5,9 @@ from dataclasses import dataclass
 from logging import NOTSET, DEBUG, INFO, WARN, ERROR, CRITICAL
 
 from typing import Tuple, Callable
-from torch_sentiment import root
+from sentimentizer import root
 
-data_path = os.path.join(root, "torch_sentiment")
+data_path = os.path.join(root, "sentimentizer")
 
 DEFAULT_LOG_LEVEL = INFO
 

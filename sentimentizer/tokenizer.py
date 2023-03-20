@@ -7,8 +7,8 @@ from gensim import corpora
 import numpy as np
 import pandas as pd
 
-from torch_sentiment import new_logger, time_decorator
-from torch_sentiment.config import DEFAULT_LOG_LEVEL, FileConfig, TokenizerConfig
+from sentimentizer import new_logger, time_decorator
+from sentimentizer.config import DEFAULT_LOG_LEVEL, FileConfig, TokenizerConfig
 
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
@@ -134,6 +134,6 @@ class Tokenizer:
 
 def get_trained_tokenizer() -> Tokenizer:
     corp_dict = corpora.Dictionary.load(
-        str(files("torch_sentiment.data").joinpath("yelp.dictionary"))
+        str(files("sentimentizer.data").joinpath("yelp.dictionary"))
     )
     return Tokenizer(dictionary=corp_dict)

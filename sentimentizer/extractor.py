@@ -1,50 +1,46 @@
 import zipfile
 from itertools import islice
-from typing import IO, Iterator, List
+from typing import IO, Generator
 
 import numpy as np
 import orjson as json
 import pyarrow as pa
 from gensim import corpora
 
-from torch_sentiment import new_logger, time_decorator
-from torch_sentiment.config import (
-    DEFAULT_LOG_LEVEL,
-    BATCH_SIZE,
-    WRITE_BYTES,
-    READ_BYTES,
-    TEXT_COLUMN,
-    EmbeddingsConfig,
-)
-
-from torch_sentiment.tokenizer import tokenize
+from sentimentizer import new_logger, time_decorator
+from sentimentizer.config import DEFAULT_LOG_LEVEL, EmbeddingsConfig
+from sentimentizer.tokenizer import tokenize
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
+BATCH_SIZE = 100000
+WRITE_BYTES = "wb"
+
 
 def generate_batch(
-    generator_input: Iterator[dict], iter_size: int
-) -> Iterator[List[dict]]:
+    generator_input: Generator[dict, str, None], iter_size: int
+) -> Generator[pa.RecordBatch, list, None]:
 
     for start in range(0, iter_size, BATCH_SIZE):
         end = min(start + BATCH_SIZE, iter_size)
-        batch_list = list(islice(generator_input, BATCH_SIZE))
-        yield batch_list, start, end
+        review_dicts = []
+        review_dicts.extend(islice(generator_input, BATCH_SIZE))
+        yield review_dicts, start, end
 
 
-def process_json(json_file: IO[bytes], stop: int = 0) -> Iterator:
+def process_json(json_file: IO[bytes], stop: int = 0) -> Generator:
     for i, line in enumerate(json_file):
         if i % 100000 == 0:
             logger.debug(f"processing line {i}")
         dc = json.loads(line)
-        dc[TEXT_COLUMN] = tokenize(dc.get(TEXT_COLUMN))
+        dc["text"] = tokenize(dc.get("text"))
         if i >= stop and stop != 0:
             break
         yield dc
 
 
 @time_decorator
-def extract_data(file_path: str, compressed_file_name: str, stop: int = 0) -> Iterator:
+def extract_data(file_path: str, compressed_file_name: str, stop: int = 0) -> Generator:
     "reads from zipped yelp data file"
 
     with zipfile.ZipFile(file_path) as zfile:
@@ -53,7 +49,7 @@ def extract_data(file_path: str, compressed_file_name: str, stop: int = 0) -> It
 
 
 def write_arrow(
-    generator_input: Iterator,
+    generator_input: Generator,
     iter_size: int,
     write_path: str,
     schema: pa.Schema = None,
@@ -88,9 +84,7 @@ def extract_embeddings(
 
     embeddings_dict: dict = {}
 
-    with zipfile.ZipFile(cfg.file_path, READ_BYTES) as f, f.open(
-        cfg.sub_file_path, READ_BYTES
-    ) as z:
+    with zipfile.ZipFile(cfg.file_path, "r") as f, f.open(cfg.sub_file_path, "r") as z:
         for line in z:
             values = line.split()
             key = values[0].decode()
@@ -108,6 +102,7 @@ def extract_embeddings(
 def new_embedding_weights(
     dictionary: corpora.Dictionary, cfg: EmbeddingsConfig
 ) -> np.ndarray:
+
     """converts local dictionary to embeddings from glove"""
 
     embeddings_dict: dict = extract_embeddings(dictionary, cfg)

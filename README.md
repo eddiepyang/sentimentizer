@@ -1,12 +1,12 @@
 # Introduction
 
-[![PyPI Latest Release](https://img.shields.io/pypi/v/torch-sentiment.svg)](https://pypi.org/project/torch-sentiment/)
-![GitHub CI](https://github.com/eddiepyang/torch-sentiment/actions/workflows/ci.yaml/badge.svg)
+[![PyPI Latest Release](https://img.shields.io/pypi/v/sentimentizer.svg)](https://pypi.org/project/sentimentizer/)
+![GitHub CI](https://github.com/eddiepyang/sentimentizer/actions/workflows/ci.yaml/badge.svg)
   
 Beta release, api subject to change. Install with:  
 
 ```
-pip install torch-sentiment
+pip install sentimentizer
 ```  
   
 This repo contains Neural Nets written with the pytorch framework for sentiment analysis.  
@@ -18,8 +18,8 @@ a single gpu in minutes and requires less than 1GB of memory.
 ## Usage
 ```
 # where 0 is very negative and 1 is very positive
-from torch_sentiment.tokenizer import get_trained_tokenizer
-from torch_sentiment.rnn.model import get_trained_model
+from sentimentizer.tokenizer import get_trained_tokenizer
+from sentimentizer.rnn.model import get_trained_model
 
 model = get_trained_model(64, 'cpu')
 tokenizer = get_trained_tokenizer()
