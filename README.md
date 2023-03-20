@@ -1,12 +1,12 @@
 # Introduction
 
-[![PyPI Latest Release](https://img.shields.io/pypi/v/torch-sentiment.svg)](https://pypi.org/project/torch-sentiment/)
-![GitHub CI](https://github.com/eddiepyang/torch-sentiment/actions/workflows/ci.yaml/badge.svg)
+[![PyPI Latest Release](https://img.shields.io/pypi/v/sentimentizer.svg)](https://pypi.org/project/sentimentizer/)
+![GitHub CI](https://github.com/eddiepyang/sentimentizer/actions/workflows/ci.yaml/badge.svg)
   
 Beta release, api subject to change. Install with:  
 
 ```
-pip install torch-sentiment
+pip install sentimentizer
 ```  
   
 This repo contains Neural Nets written with the pytorch framework for sentiment analysis.  

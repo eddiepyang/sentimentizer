@@ -24,7 +24,7 @@ def new_parser() -> argparse.Namespace:
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--device", default="cuda", help="run model on cuda or cpu"
+        "--device", default="cuda", help="run model on cuda, mps, or cpu"
     )  # noqa: E501
     parser.add_argument(
         "--model",
@@ -54,7 +54,9 @@ def new_parser() -> argparse.Namespace:
 def _load_model(args: argparse.Namespace) -> torch.nn.Module:
     if args.model == "rnn":
         from sentimentizer.models.rnn import new_model, get_trained_model
-    elif args.model == "transformer":
+    elif args.model == "encoder":
+        from sentimentizer.models.encoder import new_model, get_trained_model
+    elif args.model == "decoder":
         from sentimentizer.models.encoder import new_model, get_trained_model
     else:
         raise ValueError(f"no model {args.model}")
