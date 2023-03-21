@@ -7,9 +7,9 @@ import orjson as json
 import pyarrow as pa
 from gensim import corpora
 
-from torch_sentiment import new_logger, time_decorator
-from torch_sentiment.config import DEFAULT_LOG_LEVEL, EmbeddingsConfig
-from torch_sentiment.tokenizer import tokenize
+from sentimentizer import new_logger, time_decorator
+from sentimentizer.config import DEFAULT_LOG_LEVEL, EmbeddingsConfig
+from sentimentizer.tokenizer import tokenize
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
 

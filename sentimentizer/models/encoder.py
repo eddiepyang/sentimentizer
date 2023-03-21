@@ -1,14 +1,14 @@
 from importlib.resources import files
 
+from gensim import corpora
 import numpy as np
 import torch
-import torch.nn.functional as F
-from gensim import corpora
 from torch import nn
+import torch.nn.functional as F
 
-from torch_sentiment import new_logger
-from torch_sentiment.config import DEFAULT_LOG_LEVEL, EmbeddingsConfig
-from torch_sentiment.extractor import new_embedding_weights
+from sentimentizer import new_logger
+from sentimentizer.config import DEFAULT_LOG_LEVEL, EmbeddingsConfig
+from sentimentizer.extractor import new_embedding_weights
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
@@ -42,7 +42,7 @@ class Encoder(nn.Module):
         encoder_layer = nn.TransformerEncoderLayer(d_model, n_heads)
         layer_norm = nn.LayerNorm(d_model)
         self.encoder = nn.TransformerEncoder(
-            encoder_layer=encoder_layer, num_layers=3, norm=layer_norm
+            encoder_layer=encoder_layer, num_layers=1, norm=layer_norm
         )
 
         self.fc1 = nn.Linear(input_len, 1)
@@ -95,11 +95,11 @@ def new_model(
 
 def get_trained_model(batch_size: int, device: str) -> Encoder:
     """loads pre-trained model"""
-    if device not in ("cpu", "cuda"):
-        raise ValueError("device must be cpu or cuda")
+    if device not in Devices:
+        raise ValueError("device must be cpu, cuda, or mps")
 
     weights = torch.load(
-        str(files("torch_sentiment.data").joinpath("embed_weights.pth")),
+        str(files("sentimentizer.data").joinpath("embed_weights.pth")),
         map_location=torch.device(device=device),
     )
     empty_embeddings = torch.zeros(weights["embed_layer.weight"].shape)
