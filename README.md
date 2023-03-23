@@ -19,7 +19,7 @@ a single gpu in minutes and requires less than 1GB of memory.
 ```
 # where 0 is very negative and 1 is very positive
 from sentimentizer.tokenizer import get_trained_tokenizer
-from sentimentizer.rnn.model import get_trained_model
+from sentimentizer.models.rnn import get_trained_model
 
 model = get_trained_model(64, 'cpu')
 tokenizer = get_trained_tokenizer()
