@@ -1,0 +1,23 @@
+name: torch311
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - ipykernel
+  - jupyterlab
+  - pytest
+  - mypy
+  - bandit
+  - flake8
+  - pylint
+  - python
+  - pyarrow
+  - cuda
+  - ninja
+  - cmake
+  - mkl-include
+  - mkl
+  - nccl
+  - pandas
+  - numpy
+  - typing-extensions
