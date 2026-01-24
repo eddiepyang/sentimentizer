@@ -9,17 +9,17 @@ Beta release, api subject to change. Install with:
 pip install sentimentizer
 ```  
   
-This repo contains Neural Nets written with the pytorch framework for sentiment analysis.  
-A LSTM based torch model can be found in the rnn folder. In spite of large language models (GPT3.5 as of 2023) 
-dominating the conversation, small models can be pretty effective and are nice to learn from. This model focuses on sentiment analysis and was trained on 
-a single gpu in minutes and requires less than 1GB of memory.
+This repo contains Neural Nets written with the pytorch framework for sentiment analysis. 
+Small models can be pretty effective for classification tasks at a much smaller cost to deploy.
+This package focuses on sentiment analysis and all models were trained on a single 2080Ti gpu in minutes. 
+Deploying models for inference requires less than 1GB of memory which makes creating multiple containers relatively efficient.
 
-  
+
 ## Usage
 ```
 # where 0 is very negative and 1 is very positive
 from sentimentizer.tokenizer import get_trained_tokenizer
-from sentimentizer.rnn.model import get_trained_model
+from sentimentizer.models.rnn import get_trained_model
 
 model = get_trained_model(64, 'cpu')
 tokenizer = get_trained_tokenizer()
