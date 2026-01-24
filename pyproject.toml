@@ -16,12 +16,11 @@ classifiers = [
 
 keywords = ["rnn", "pytorch", "nlp", "sentiment"]
 dependencies = [
-        "numpy >= 1.24.0",
-        "polars >= 0.15.16",
+        "numpy >= 1.23.0",
         "pandas >= 1.5.2",
-        "torch >= 1.13.1",
+        "torch >= 2.10",
         "orjson >= 3.8.5",
-        "pyarrow >= 10.0.1",
+        "pyarrow >= 11.0.0",
         "attrs >= 22.2.0",
         "scikit-learn",
         "gensim",
