@@ -20,7 +20,6 @@ WRITE_BYTES = "wb"
 def generate_batch(
     generator_input: Generator[dict, str, None], iter_size: int
 ) -> Generator[pa.RecordBatch, list, None]:
-
     for start in range(0, iter_size, BATCH_SIZE):
         end = min(start + BATCH_SIZE, iter_size)
         review_dicts = []
@@ -102,7 +101,6 @@ def extract_embeddings(
 def new_embedding_weights(
     dictionary: corpora.Dictionary, cfg: EmbeddingsConfig
 ) -> np.ndarray:
-
     """converts local dictionary to embeddings from glove"""
 
     embeddings_dict: dict = extract_embeddings(dictionary, cfg)

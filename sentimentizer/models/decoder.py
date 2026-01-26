@@ -22,7 +22,7 @@ class Decoder(nn.Module):
         input_len: int,
         d_model: int,
         n_heads: int,
-        emb_weights: torch.Tensor,  # weights are vocabsize x embedding length
+        emb_weights: torch.Tensor,  # weights are sized vocabsize x embedding length
         verbose: bool = True,
         dropout: float = 0.2,
     ):
@@ -41,8 +41,8 @@ class Decoder(nn.Module):
 
         decoder_layer = nn.TransformerDecoderLayer(d_model, n_heads)
         layer_norm = nn.LayerNorm(d_model)
-        self.encoder = nn.TransformerDecoder(
-            encoder_layer=decoder_layer, num_layers=1, norm=layer_norm
+        self.decoder = nn.TransformerDecoder(
+            decoder_layer=decoder_layer, num_layers=1, norm=layer_norm
         )
 
         self.fc1 = nn.Linear(input_len, 1)
@@ -59,10 +59,10 @@ class Decoder(nn.Module):
 
         logger.debug("embedding shape %s" % (embeds.shape,))
         embeds = F.relu(self.fc0(embeds))
-        encoded_out = self.encoder(embeds.permute(0, 2, 1))
+        decoded_out = self.decoder(embeds.permute(0, 2, 1))
 
-        logger.debug("lstm out shape %s" % (encoded_out.shape,))
-        out = self.fc1(encoded_out)
+        logger.debug("lstm out shape %s" % (decoded_out.shape,))
+        out = self.fc1(decoded_out)
         logger.debug("fc1 out shape %s" % (out.shape,))
         fout = self.fc2(out.permute(0, 2, 1))
         logger.debug("final %s" % (fout.shape,))
@@ -82,7 +82,7 @@ def new_model(
     dict_yelp = corpora.Dictionary.load(dict_path)
     embedding_matrix = new_embedding_weights(dict_yelp, embeddings_config)
     emb_t = torch.from_numpy(embedding_matrix)
-    model = Encoder(
+    model = Decoder(
         batch_size=batch_size,
         d_model=200,
         n_heads=4,
@@ -93,7 +93,7 @@ def new_model(
     return model
 
 
-def get_trained_model(batch_size: int, device: str) -> Encoder:
+def get_trained_model(batch_size: int, device: str) -> Decoder:
     """loads pre-trained model"""
     if device not in Devices:
         raise ValueError("device must be cpu, cuda, or mps")
@@ -103,7 +103,7 @@ def get_trained_model(batch_size: int, device: str) -> Encoder:
         map_location=torch.device(device=device),
     )
     empty_embeddings = torch.zeros(weights["embed_layer.weight"].shape)
-    model = Encoder(
+    model = Decoder(
         batch_size=batch_size,
         d_model=200,
         n_heads=4,

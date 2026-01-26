@@ -18,10 +18,12 @@ TEXT_COLUMN = "text"
 
 Devices = set(("cpu", "cuda", "mps"))
 
+
 class Device(enum.Enum):
     CPU = 0
     CUDA = 1
     MPS = 2
+
 
 class FitModes(enum.Enum):
     fitting = 0

@@ -29,7 +29,6 @@ def convert_rating(rating: int) -> float:
 
 
 def convert_rating_linear(rating: int, max_rating: int) -> float:
-
     """scaling ratings from 0 to 1 linearly"""
     return rating / max_rating
 
@@ -37,7 +36,6 @@ def convert_rating_linear(rating: int, max_rating: int) -> float:
 def text_sequencer(
     dictionary: corpora.Dictionary, text: list, max_len: int = 200
 ) -> np.ndarray:
-
     """
     converts tokens to numeric representation by dictionary;
     zero is considered padding
