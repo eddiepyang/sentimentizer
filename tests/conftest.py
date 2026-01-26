@@ -19,5 +19,4 @@ def relative_root():
 
 
 if __name__ == "__main__":
-
     print("root is:", file_root, root)

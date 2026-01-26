@@ -52,14 +52,12 @@ def processed_df() -> pd.DataFrame:
 
 
 def test_convert_rating():
-
     assert 1 == convert_rating(5)
     assert 0 == convert_rating(1)
     assert convert_rating(3) == 0.5
 
 
 def test_tokenize(raw_df):
-
     output = tokenize(raw_df.text[0])
 
     for item in output:
@@ -69,20 +67,18 @@ def test_tokenize(raw_df):
 
 
 class TestExtractData:
-
     fname = "artificial-reviews.jsonl"
     stop = 2
 
     def test_success(self, rel_path, relative_root):
-
         gen = extract_data(
             compressed_file_name=self.fname, file_path=rel_path, stop=self.stop
         )
         write_arrow(gen, self.stop, f"{relative_root}/tests/test_data/file.arrow")
         df = pl.read_ipc(f"{relative_root}/tests/test_data/file.arrow")
         assert df.shape == (2, 2)
-        assert df.schema['text'] == pl.datatypes.List(pl.datatypes.Utf8)
-        assert df.schema['stars'] == pl.datatypes.Int64
+        assert df.schema["text"] == pl.datatypes.List(pl.datatypes.Utf8)
+        assert df.schema["stars"] == pl.datatypes.Int64
 
     def test_failure_empty_input(self):
         # todo
