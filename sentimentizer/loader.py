@@ -20,7 +20,6 @@ class CorpusDataset(Dataset):
     y_labels: str = "target"
 
     def __attr_pre__init__(self):
-
         super().__init__()
 
     def __len__(self):
@@ -35,7 +34,6 @@ class CorpusDataset(Dataset):
 def load_train_val_corpus_datasets(
     data_path: str, test_size=0.2
 ) -> Tuple[CorpusDataset, CorpusDataset]:
-
     df = pd.read_parquet(data_path)
     train_df, val_df = train_test_split(df, test_size=test_size)
     del df

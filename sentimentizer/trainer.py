@@ -22,7 +22,6 @@ logger = new_logger(DEFAULT_LOG_LEVEL)
 def _new_loaders(
     train_data: CorpusDataset, val_data: CorpusDataset, cfg: TrainerConfig
 ) -> Tuple[DataLoader, DataLoader]:
-
     train_loader = DataLoader(
         dataset=train_data,
         batch_size=cfg.batch_size,
@@ -54,13 +53,11 @@ class Trainer:
     _mode: str = field(default="training")
 
     def _train_epoch(self, model: torch.nn.Module, train_loader: DataLoader):
-
         i = 0
         n = len(train_loader.dataset)
         model.train()
 
         for j, (sent, target) in enumerate(train_loader):
-
             self.optimizer.zero_grad()
 
             # noqa: E501
@@ -113,7 +110,6 @@ class Trainer:
         )  # noqa: E501
 
     def eval(self, model: torch.nn.Module, val_loader: DataLoader):
-
         logger.info("evaluating predictions...")
         losses = []
         i = 0
@@ -140,7 +136,6 @@ def new_trainer(
     model: torch.nn.Module,
     cfg: TrainerConfig,
 ):
-
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=OptimizationParams.lr,

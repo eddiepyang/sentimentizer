@@ -23,7 +23,6 @@ class RunTypeError(Exception):
 
 
 def new_parser() -> argparse.Namespace:
-
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--device", default="cuda", help="run model on cuda, mps, or cpu"
@@ -59,9 +58,9 @@ def _load_model(args: argparse.Namespace) -> torch.nn.Module:
     elif args.model == "encoder":
         from sentimentizer.models.encoder import new_model, get_trained_model
     elif args.model == "decoder":
-        from sentimentizer.models.encoder import new_model, get_trained_model
+        from sentimentizer.models.decoder import new_model, get_trained_model
     else:
-        raise ValueError(f"no model {args.model}")
+        raise ValueError(f"no matching model for {args.model}")
 
     if args.type == "new":
         model = new_model(
@@ -106,7 +105,6 @@ def run_tokenize(args: argparse.Namespace) -> None:
 
 
 def run_fit(args: argparse.Namespace) -> None:
-
     train_dataset, val_dataset = load_train_val_corpus_datasets(
         DriverConfig.files.processed_reviews_file_path
     )
@@ -134,5 +132,4 @@ def main():
 
 
 if __name__ == "__main__":
-
     main()
