@@ -6,6 +6,7 @@ from typing import List, TypeVar
 from gensim import corpora
 import numpy as np
 import pandas as pd
+import ray
 
 from sentimentizer import new_logger, time_decorator
 from sentimentizer.config import DEFAULT_LOG_LEVEL, FileConfig, TokenizerConfig
@@ -61,7 +62,7 @@ def text_sequencer(
     return processed
 
 
-def tokenize(x: str) -> List[str]:
+def regex_tokenize(x: str) -> List[str]:
     """regex tokenize, less accurate than spacy"""
     return pattern.findall(x.lower())
 
@@ -118,10 +119,64 @@ class Tokenizer:
         """converts string phrase to numpy array"""
         if self.dictionary is None:
             raise ValueError("no dictionary loaded")
-        tokens = tokenize(text)
+        tokens = regex_tokenize(text)
         return text_sequencer(self.dictionary, tokens, self.cfg.max_len).reshape(
             1, self.cfg.max_len
         )
+
+    @classmethod
+    def from_dataset(cls: type[TokenizerType], ds: ray.data.Dataset) -> TokenizerType:
+        """creates tokenizer from ray dataset"""
+        cfg = TokenizerConfig(save_dictionary=False)
+        # Create dictionary from dataset tokens column
+        # ds.iter_rows() yields items. We want the text_col.
+        
+        def gen_docs():
+            for row in ds.iter_rows():
+                yield row[cfg.text_col]
+        
+        dictionary = corpora.Dictionary(gen_docs())
+        dictionary.filter_extremes(
+            no_below=cfg.dict_min,
+            no_above=cfg.no_above,
+            keep_n=cfg.dict_keep,
+        )
+        logger.info("dictionary created...")
+
+        if cfg.save_dictionary:
+            dictionary.save(f"{FileConfig.dictionary_file_path}")
+            logger.info(f"dictionary saved to {FileConfig.dictionary_file_path}...")
+            
+        return cls(dictionary=dictionary)
+
+    @time_decorator
+    def transform_dataset(self, ds: ray.data.Dataset) -> ray.data.Dataset:
+        """transforms ray dataset with text and target"""
+        if self.dictionary is None:
+            raise ValueError("no dictionary loaded")
+
+        # Capture for closure
+        dictionary = self.dictionary
+        cfg = self.cfg
+
+        def transform_batch(batch: dict) -> dict:
+            inputs = []
+            # 'batch' is a dict of columns. 'text_col' should allow access to the list of tokens.
+            # Depending on batch_format (numpy/pandas).
+            # If numpy, column is array of objects (lists).
+            for text in batch[cfg.text_col]:
+                inputs.append(text_sequencer(dictionary, text, cfg.max_len))
+            
+            batch[cfg.inputs] = np.array(inputs)
+            
+            if cfg.label_col in batch:
+                batch[cfg.labels] = np.array([convert_rating(r) for r in batch[cfg.label_col]])
+            
+            return batch
+
+        ds = ds.map_batches(transform_batch, batch_format="numpy")
+        logger.info("converted tokens to numbers...")
+        return ds
 
     def save(self, data: pd.DataFrame) -> None:
         _get_data(data, [self.cfg.inputs] + [self.cfg.labels]).to_parquet(
@@ -130,6 +185,7 @@ class Tokenizer:
         logger.info(
             f"file saved to {FileConfig.processed_reviews_file_path}"
         )  # noqa: E501
+
 
 
 def get_trained_tokenizer() -> Tokenizer:

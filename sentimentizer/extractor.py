@@ -9,71 +9,48 @@ from gensim import corpora
 
 from sentimentizer import new_logger, time_decorator
 from sentimentizer.config import DEFAULT_LOG_LEVEL, EmbeddingsConfig
-from sentimentizer.tokenizer import tokenize
+from sentimentizer.tokenizer import regex_tokenize
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
+import ray
+
 BATCH_SIZE = 100000
-WRITE_BYTES = "wb"
 
 
-def generate_batch(
-    generator_input: Generator[dict, str, None], iter_size: int
-) -> Generator[pa.RecordBatch, list, None]:
-
-    for start in range(0, iter_size, BATCH_SIZE):
-        end = min(start + BATCH_SIZE, iter_size)
-        review_dicts = []
-        review_dicts.extend(islice(generator_input, BATCH_SIZE))
-        yield review_dicts, start, end
-
-
-def process_json(json_file: IO[bytes], stop: int = 0) -> Generator:
+def process_json(
+    json_file: IO[bytes],
+    stop: int = 0,
+    text_field: str = "text",
+    tokenize_func: callable[str, list] = None,
+) -> Generator:
     for i, line in enumerate(json_file):
         if i % 100000 == 0:
             logger.debug(f"processing line {i}")
         dc = json.loads(line)
-        dc["text"] = tokenize(dc.get("text"))
+        if tokenize_func:
+            dc["tokens"] = tokenize_func(dc.get(text_field))
         if i >= stop and stop != 0:
             break
         yield dc
 
 
 @time_decorator
-def extract_data(file_path: str, compressed_file_name: str, stop: int = 0) -> Generator:
+def extract_data(file_path: str, compressed_file_name: str, stop: int = 0) -> ray.data.Dataset:
     "reads from zipped yelp data file"
 
-    with zipfile.ZipFile(file_path) as zfile:
-        inf = zfile.open(compressed_file_name)
-    return process_json(inf, stop)
+    def generate_lines():
+        with zipfile.ZipFile(file_path) as zfile:
+            inf = zfile.open(compressed_file_name)
+            yield from process_json(inf, stop, tokenize_func=None)
 
+    ds = ray.data.from_generators([generate_lines])
+    
+    def tokenize(row):
+        row["tokens"] = regex_tokenize(row["text"])
+        return row
 
-def write_arrow(
-    generator_input: Generator,
-    iter_size: int,
-    write_path: str,
-    schema: pa.Schema = None,
-) -> None:
-    gen = generate_batch(generator_input, iter_size)
-
-    in_schema = schema
-    if schema is None:
-        records, _, _ = next(gen)
-        batch = pa.RecordBatch.from_pylist(records)
-        in_schema = batch.schema
-
-    with pa.OSFile(write_path, WRITE_BYTES) as sink, pa.ipc.RecordBatchFileWriter(
-        sink, in_schema
-    ) as writer:
-        if schema is None:
-            writer.write(batch)
-
-        for records, _, end in gen:
-            try:
-                batch = pa.RecordBatch.from_pylist(records)
-                writer.write(batch)
-            except pa.ArrowInvalid:
-                logger.info(f"file completed, last item count was {end}")
+    return ds.map(tokenize)
 
 
 @time_decorator
@@ -102,7 +79,6 @@ def extract_embeddings(
 def new_embedding_weights(
     dictionary: corpora.Dictionary, cfg: EmbeddingsConfig
 ) -> np.ndarray:
-
     """converts local dictionary to embeddings from glove"""
 
     embeddings_dict: dict = extract_embeddings(dictionary, cfg)

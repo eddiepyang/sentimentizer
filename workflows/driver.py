@@ -2,8 +2,10 @@ import argparse
 import torch
 import pandas as pd
 from gensim import corpora
+import ray
+import shutil
 
-from sentimentizer.extractor import extract_data, write_arrow
+from sentimentizer.extractor import extract_data
 from sentimentizer.trainer import new_trainer
 
 from sentimentizer.loader import load_train_val_corpus_datasets
@@ -78,25 +80,29 @@ def _load_model(args: argparse.Namespace) -> torch.nn.Module:
 
 def run_extract(args: argparse.Namespace) -> None:
 
-    gen = extract_data(
+    ds = extract_data(
         DriverConfig.files.archive_file_path,
         DriverConfig.files.raw_file_path,
         stop=args.stop,
     )
-    write_arrow(gen, args.stop, DriverConfig.files.raw_reviews_file_path)
+    # Remove existing directory if it exists to clean up
+    shutil.rmtree(DriverConfig.files.raw_reviews_file_path, ignore_errors=True)
+    ds.write_parquet(DriverConfig.files.raw_reviews_file_path)
 
 
 def run_tokenize(args: argparse.Namespace) -> None:
-    reviews_data = pd.read_feather(DriverConfig.files.raw_reviews_file_path)
+    reviews_data = ray.data.read_parquet(DriverConfig.files.raw_reviews_file_path)
     if args.type == "new":
-        tokenizer = Tokenizer.from_data(reviews_data)
+        tokenizer = Tokenizer.from_dataset(reviews_data)
     elif args.type == "update":
         dictionary = corpora.Dictionary.load(DriverConfig.files.dictionary_file_path)
         tokenizer = Tokenizer(dictionary=dictionary)
     else:
         raise RunTypeError
-    tokenizer.transform_dataframe(reviews_data)
-    tokenizer.save(reviews_data)
+    
+    processed_ds = tokenizer.transform_dataset(reviews_data)
+    shutil.rmtree(DriverConfig.files.processed_reviews_file_path, ignore_errors=True)
+    processed_ds.write_parquet(DriverConfig.files.processed_reviews_file_path)
 
 
 def run_fit(args: argparse.Namespace) -> None:
@@ -120,7 +126,7 @@ def run_fit(args: argparse.Namespace) -> None:
 
 @time_decorator
 def main():
-
+    ray.init(ignore_reinit_error=True)
     args = new_parser()
     run_extract(args)
     run_tokenize(args)

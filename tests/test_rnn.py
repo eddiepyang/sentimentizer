@@ -1,10 +1,12 @@
 import pandas as pd
 import polars as pl
 import pytest
+import ray
+import shutil
 
-from sentimentizer.tokenizer import Tokenizer, convert_rating, new_logger, tokenize
+from sentimentizer.tokenizer import Tokenizer, convert_rating, new_logger, regex_tokenize
 from sentimentizer.config import DEFAULT_LOG_LEVEL
-from sentimentizer.extractor import extract_data, write_arrow
+from sentimentizer.extractor import extract_data
 from sentimentizer.loader import CorpusDataset
 from sentimentizer.models.rnn import RNN, get_trained_model
 from sentimentizer.tokenizer import get_trained_tokenizer
@@ -16,7 +18,7 @@ logger = new_logger(DEFAULT_LOG_LEVEL)
 def tokenized_df() -> pd.DataFrame:
     return pd.DataFrame(
         {
-            "text": [
+            "tokens": [
                 "the chicken never showed up".split(),
                 "the food was terrific".split(),
             ],
@@ -60,7 +62,7 @@ def test_convert_rating():
 
 def test_tokenize(raw_df):
 
-    output = tokenize(raw_df.text[0])
+    output = regex_tokenize(raw_df.text[0])
 
     for item in output:
         assert isinstance(item, str)
@@ -74,14 +76,19 @@ class TestExtractData:
     stop = 2
 
     def test_success(self, rel_path, relative_root):
-
-        gen = extract_data(
+        ray.init(ignore_reinit_error=True)
+        ds = extract_data(
             compressed_file_name=self.fname, file_path=rel_path, stop=self.stop
         )
-        write_arrow(gen, self.stop, f"{relative_root}/tests/test_data/file.arrow")
-        df = pl.read_ipc(f"{relative_root}/tests/test_data/file.arrow")
-        assert df.shape == (2, 2)
-        assert df.schema['text'] == pl.datatypes.List(pl.datatypes.Utf8)
+        assert isinstance(ds, ray.data.Dataset)
+        
+        path = f"{relative_root}/tests/test_data/file.parquet"
+        shutil.rmtree(path, ignore_errors=True)
+        ds.write_parquet(path)
+        
+        df = pl.read_parquet(path)
+        assert df.shape == (2, 3) # text, tokens, stars (maybe?)
+        assert df.schema['tokens'] == pl.datatypes.List(pl.datatypes.Utf8)
         assert df.schema['stars'] == pl.datatypes.Int64
 
     def test_failure_empty_input(self):
@@ -140,13 +147,13 @@ class TestTokenize:
     """tests regex"""
 
     def test_success(self):
-        result = tokenize("chicken wasn't good")
+        result = regex_tokenize("chicken wasn't good")
 
         assert len(result) == 3
         assert result[0] == "chicken"
         assert result[1] == "wasn't"
 
     def test_success_one(self):
-        result = tokenize("1st place food")
+        result = regex_tokenize("1st place food")
         assert len(result) == 3
         assert result[0] == "1st"

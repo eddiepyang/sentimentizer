@@ -45,7 +45,7 @@ class SchedulerParams:
 
 @dataclass(frozen=True)
 class TokenizerConfig:
-    text_col: str = "text"
+    text_col: str = "tokens"
     label_col: str = "stars"
     inputs: str = "data"
     labels: str = "target"
@@ -62,7 +62,7 @@ class FileConfig:
     archive_file_path: str = f"{data_path}/data/archive.zip"
     raw_file_path: str = "yelp_academic_dataset_review.json"
     dictionary_file_path: str = f"{data_path}/data/yelp.dictionary"
-    raw_reviews_file_path: str = f"{data_path}/data/review_data.arrow"
+    raw_reviews_file_path: str = f"{data_path}/data/review_data_raw.parquet"
     processed_reviews_file_path: str = f"{data_path}/data/review_data.parquet"
     weights_file_path: str = f"{data_path}/data/weights.pth"
 
