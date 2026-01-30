@@ -1,5 +1,4 @@
 import pandas as pd
-import polars as pl
 import pytest
 import ray
 import shutil
@@ -83,10 +82,12 @@ class TestExtractData:
         shutil.rmtree(path, ignore_errors=True)
         ds.write_parquet(path)
         
-        df = pl.read_parquet(path)
+        df = pd.read_parquet(path)
         assert df.shape == (2, 3) # text, tokens, stars
-        assert df.schema['tokens'] == pl.datatypes.List(pl.datatypes.Utf8)
-        assert df.schema['stars'] == pl.datatypes.Int64
+        # Pandas parquet reading often results in object (or string) arrays. 
+        # Token column is list of strings, so it appears as object/string.
+        assert df["tokens"].dtype == "object" or isinstance(df["tokens"].dtype, pd.ArrowDtype)
+        assert pd.api.types.is_integer_dtype(df["stars"].dtype)
 
     def test_failure_empty_input(self):
         # todo

@@ -10,6 +10,7 @@
 *.pyc
 *.ipynb
 *.arrow
+*.parquet
 PKG-INFO
 
 /.ipynb_checkpoints/*
