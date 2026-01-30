@@ -34,8 +34,6 @@ def process_json(json_file: IO[bytes], stop: int = 0) -> Generator:
         if i % 100000 == 0:
             logger.debug(f"processing line {i}")
         dc = json.loads(line)
-        if tokenize_func:
-            dc["tokens"] = tokenize_func(dc.get(text_field))
         if i >= stop and stop != 0:
             break
         yield dc
@@ -45,12 +43,13 @@ def process_json(json_file: IO[bytes], stop: int = 0) -> Generator:
 def extract_data(file_path: str, compressed_file_name: str, stop: int = 0) -> ray.data.Dataset:
     "reads from zipped yelp data file"
 
-    def generate_lines():
+    def generate_lines(x):
         with zipfile.ZipFile(file_path) as zfile:
             inf = zfile.open(compressed_file_name)
-            yield from process_json(inf, stop, tokenize_func=None)
+            yield from process_json(inf, stop)
 
-    ds = ray.data.from_generators([generate_lines])
+    # Use flat_map to read from the single zip file
+    ds = ray.data.range(1).flat_map(generate_lines)
     
     def tokenize(row):
         row["tokens"] = regex_tokenize(row["text"])

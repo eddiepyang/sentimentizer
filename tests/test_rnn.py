@@ -60,7 +60,7 @@ def test_convert_rating():
 
 
 def test_tokenize(raw_df):
-    output = tokenize(raw_df.text[0])
+    output = regex_tokenize(raw_df.text[0])
 
     for item in output:
         assert isinstance(item, str)
@@ -73,14 +73,20 @@ class TestExtractData:
     stop = 2
 
     def test_success(self, rel_path, relative_root):
-        gen = extract_data(
+        ray.init(ignore_reinit_error=True)
+        ds = extract_data(
             compressed_file_name=self.fname, file_path=rel_path, stop=self.stop
         )
-        write_arrow(gen, self.stop, f"{relative_root}/tests/test_data/file.arrow")
-        df = pl.read_ipc(f"{relative_root}/tests/test_data/file.arrow")
-        assert df.shape == (2, 2)
-        assert df.schema["text"] == pl.datatypes.List(pl.datatypes.Utf8)
-        assert df.schema["stars"] == pl.datatypes.Int64
+        assert isinstance(ds, ray.data.Dataset)
+        
+        path = f"{relative_root}/tests/test_data/file.parquet"
+        shutil.rmtree(path, ignore_errors=True)
+        ds.write_parquet(path)
+        
+        df = pl.read_parquet(path)
+        assert df.shape == (2, 3) # text, tokens, stars
+        assert df.schema['tokens'] == pl.datatypes.List(pl.datatypes.Utf8)
+        assert df.schema['stars'] == pl.datatypes.Int64
 
     def test_failure_empty_input(self):
         # todo
