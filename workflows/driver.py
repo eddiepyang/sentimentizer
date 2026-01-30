@@ -78,8 +78,7 @@ def _load_model(args: argparse.Namespace) -> torch.nn.Module:
 
 
 def run_extract(args: argparse.Namespace) -> None:
-
-    ds = extract_data(
+    gen = extract_data(
         DriverConfig.files.archive_file_path,
         DriverConfig.files.raw_file_path,
         stop=args.stop,
@@ -124,7 +123,6 @@ def run_fit(args: argparse.Namespace) -> None:
 
 @time_decorator
 def main():
-    ray.init(ignore_reinit_error=True)
     args = new_parser()
     run_extract(args)
     run_tokenize(args)

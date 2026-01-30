@@ -16,14 +16,20 @@ logger = new_logger(DEFAULT_LOG_LEVEL)
 import ray
 
 BATCH_SIZE = 100000
+WRITE_BYTES = "wb"
 
 
-def process_json(
-    json_file: IO[bytes],
-    stop: int = 0,
-    text_field: str = "text",
-    tokenize_func: callable[str, list] = None,
-) -> Generator:
+def generate_batch(
+    generator_input: Generator[dict, str, None], iter_size: int
+) -> Generator[pa.RecordBatch, list, None]:
+    for start in range(0, iter_size, BATCH_SIZE):
+        end = min(start + BATCH_SIZE, iter_size)
+        review_dicts = []
+        review_dicts.extend(islice(generator_input, BATCH_SIZE))
+        yield review_dicts, start, end
+
+
+def process_json(json_file: IO[bytes], stop: int = 0) -> Generator:
     for i, line in enumerate(json_file):
         if i % 100000 == 0:
             logger.debug(f"processing line {i}")
