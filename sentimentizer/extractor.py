@@ -9,9 +9,11 @@ from gensim import corpora
 
 from sentimentizer import new_logger, time_decorator
 from sentimentizer.config import DEFAULT_LOG_LEVEL, EmbeddingsConfig
-from sentimentizer.tokenizer import tokenize
+from sentimentizer.tokenizer import regex_tokenize
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
+
+import ray
 
 BATCH_SIZE = 100000
 WRITE_BYTES = "wb"
@@ -32,47 +34,28 @@ def process_json(json_file: IO[bytes], stop: int = 0) -> Generator:
         if i % 100000 == 0:
             logger.debug(f"processing line {i}")
         dc = json.loads(line)
-        dc["text"] = tokenize(dc.get("text"))
         if i >= stop and stop != 0:
             break
         yield dc
 
 
 @time_decorator
-def extract_data(file_path: str, compressed_file_name: str, stop: int = 0) -> Generator:
+def extract_data(file_path: str, compressed_file_name: str, stop: int = 0) -> ray.data.Dataset:
     "reads from zipped yelp data file"
 
-    with zipfile.ZipFile(file_path) as zfile:
-        inf = zfile.open(compressed_file_name)
-    return process_json(inf, stop)
+    def generate_lines(x):
+        with zipfile.ZipFile(file_path) as zfile:
+            inf = zfile.open(compressed_file_name)
+            yield from process_json(inf, stop)
 
+    # Use flat_map to read from the single zip file
+    ds = ray.data.range(1).flat_map(generate_lines)
+    
+    def tokenize(row):
+        row["tokens"] = regex_tokenize(row["text"])
+        return row
 
-def write_arrow(
-    generator_input: Generator,
-    iter_size: int,
-    write_path: str,
-    schema: pa.Schema = None,
-) -> None:
-    gen = generate_batch(generator_input, iter_size)
-
-    in_schema = schema
-    if schema is None:
-        records, _, _ = next(gen)
-        batch = pa.RecordBatch.from_pylist(records)
-        in_schema = batch.schema
-
-    with pa.OSFile(write_path, WRITE_BYTES) as sink, pa.ipc.RecordBatchFileWriter(
-        sink, in_schema
-    ) as writer:
-        if schema is None:
-            writer.write(batch)
-
-        for records, _, end in gen:
-            try:
-                batch = pa.RecordBatch.from_pylist(records)
-                writer.write(batch)
-            except pa.ArrowInvalid:
-                logger.info(f"file completed, last item count was {end}")
+    return ds.map(tokenize)
 
 
 @time_decorator

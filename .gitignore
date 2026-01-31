@@ -1,3 +1,4 @@
+.DS_Store
 *.csv
 *.zip
 *.tsv
@@ -9,6 +10,7 @@
 *.pyc
 *.ipynb
 *.arrow
+*.parquet
 PKG-INFO
 
 /.ipynb_checkpoints/*

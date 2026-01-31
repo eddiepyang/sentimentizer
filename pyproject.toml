@@ -24,9 +24,11 @@ dependencies = [
         "pyarrow >= 11.0.0",
         "attrs >= 22.2.0",
         "scikit-learn",
-        "gensim",
+        "gensim >= 4.3.3",
+        "smart_open >= 7.0.1",
         "structlog",
         "psutil",
+        "ray[data]",
 ]
 requires-python = ">=3.11"
 
