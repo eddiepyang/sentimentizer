@@ -18,6 +18,7 @@ keywords = ["rnn", "pytorch", "nlp", "sentiment"]
 dependencies = [
         "numpy >= 1.23.0",
         "pandas >= 1.5.2",
+        "polars >= 1.27.1",
         "torch >= 2.10",
         "orjson >= 3.8.5",
         "pyarrow >= 11.0.0",
