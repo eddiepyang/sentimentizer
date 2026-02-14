@@ -27,6 +27,7 @@ dependencies = [
         "gensim",
         "structlog",
         "psutil",
+        "ray[serve] >= 2.5.0"
 ]
 requires-python = ">=3.11"
 
