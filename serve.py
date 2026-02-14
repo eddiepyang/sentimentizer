@@ -7,7 +7,7 @@ from sentimentizer.models.rnn import get_trained_model
 from sentimentizer import config, tokenizer
 
 
-@serve.deployment(num_replicas=1, ray_actor_options={"num_cpus": 1, "num_gpus": 0})
+@serve.deployment(num_replicas=2, max_ongoing_requests=10, ray_actor_options={"num_cpus": 1, "num_gpus": 0})
 class SentimentDeployment:
     """deployment server for models"""
 
