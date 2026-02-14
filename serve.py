@@ -1,10 +1,8 @@
 import torch
-import numpy as np
 from ray import serve
 from starlette.requests import Request
 from typing import Dict
 
-from gensim import corpora
 from sentimentizer.models.rnn import get_trained_model
 from sentimentizer import config, tokenizer
 
@@ -36,7 +34,6 @@ class SentimentDeployment:
         score = prediction_tensor.item()
 
         return {
-            "text": text,
             "sentiment_score": score,
             "prediction": "positive" if score > 0.5 else "negative",
         }
