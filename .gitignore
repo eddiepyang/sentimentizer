@@ -26,3 +26,4 @@ model_weight.pt
 yelp_nlp.egg-info
 build
 dist
+.venv

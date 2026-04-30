@@ -1,37 +1,61 @@
 [build-system]
-requires      = ["setuptools>=61.0.1", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "sentimentizer"
-version = "0.6.5"
+version = "0.7.0"
 description = "straight forward rnn model"
 readme = "README.md"
 authors = [{ name = "Edward Yang", email = "edwardpyang@gmail.com" }]
-license = { file = "LICENSE" }
+license = "MIT"
+requires-python = ">=3.11"
 classifiers = [
     "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python"
+    "Programming Language :: Python",
 ]
-
 keywords = ["rnn", "pytorch", "nlp", "sentiment"]
+
 dependencies = [
-        "numpy >= 1.23.0",
-        "pandas >= 1.5.2",
-        "polars >= 1.27.1",
-        "torch >= 2.10",
-        "orjson >= 3.8.5",
-        "pyarrow >= 11.0.0",
-        "attrs >= 22.2.0",
-        "scikit-learn",
-        "gensim >= 4.3.3",
-        "smart_open >= 7.0.1",
-        "structlog",
-        "psutil",
-        "ray[data]",
-        "ray[serve] >= 2.5.0"
+    "numpy>=1.23.0",
+    "pandas>=1.5.2",
+    "polars>=1.27.1",
+    "torch>=2.10",
+    "orjson>=3.8.5",
+    "pyarrow>=11.0.0",
+    "attrs>=22.2.0",
+    "scikit-learn",
+    "gensim>=4.3.3",
+    "smart_open>=7.0.1",
+    "structlog",
+    "psutil",
+    "ray[data]>=2.5.0",
+    "ray[serve]>=2.5.0",
+    "ray[train]>=2.5.0",
 ]
-requires-python = ">=3.11"
 
 [project.optional-dependencies]
-dev = ["black", "bumpver", "isort", "pip-tools", "pytest"]
+dev = [
+    "black",
+    "bumpver",
+    "isort",
+    "pip-tools",
+    "pytest",
+    "pytest-cov",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["sentimentizer"]
+
+[dependency-groups]
+dev = [
+    "black",
+    "bumpver",
+    "isort",
+    "pip-tools",
+    "pytest",
+    "pytest-cov",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

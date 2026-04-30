@@ -74,6 +74,7 @@ class TrainerConfig:
     batch_size: int = 64
     epochs: int = 4
     workers: int = 10
+    num_workers: int = 2
     device: str = "cuda"
     memory: bool = True
 

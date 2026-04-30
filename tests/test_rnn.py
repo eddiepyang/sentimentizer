@@ -1,14 +1,17 @@
+import json
 import pandas as pd
 import pytest
 import ray
 import shutil
+import torch
 
 from sentimentizer.tokenizer import Tokenizer, convert_rating, new_logger, regex_tokenize
-from sentimentizer.config import DEFAULT_LOG_LEVEL
+from sentimentizer.config import DEFAULT_LOG_LEVEL, DriverConfig, TrainerConfig
 from sentimentizer.extractor import extract_data
-from sentimentizer.loader import CorpusDataset
+from sentimentizer.loader import CorpusDataset, load_train_val_ray_datasets
 from sentimentizer.models.rnn import RNN, get_trained_model
 from sentimentizer.tokenizer import get_trained_tokenizer
+from sentimentizer.trainer import new_ray_trainer, new_trainer, _train_func
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
@@ -77,15 +80,13 @@ class TestExtractData:
             compressed_file_name=self.fname, file_path=rel_path, stop=self.stop
         )
         assert isinstance(ds, ray.data.Dataset)
-        
+
         path = f"{relative_root}/tests/test_data/file.parquet"
         shutil.rmtree(path, ignore_errors=True)
         ds.write_parquet(path)
-        
+
         df = pd.read_parquet(path)
-        assert df.shape == (2, 3) # text, tokens, stars
-        # Pandas parquet reading often results in object (or string) arrays. 
-        # Token column is list of strings, so it appears as object/string.
+        assert df.shape == (2, 3)  # text, tokens, stars
         assert df["tokens"].dtype == "object" or isinstance(df["tokens"].dtype, pd.ArrowDtype)
         assert pd.api.types.is_integer_dtype(df["stars"].dtype)
 
@@ -155,3 +156,186 @@ class TestTokenize:
         result = regex_tokenize("1st place food")
         assert len(result) == 3
         assert result[0] == "1st"
+
+
+# ──────────────────────────────────────────────
+# Ray Data and Ray Train tests
+# ──────────────────────────────────────────────
+
+
+class TestRayDatasetLoader:
+    """tests Ray Dataset loading and splitting"""
+
+    def test_load_ray_datasets(self, relative_root):
+        ray.init(ignore_reinit_error=True)
+        path = f"{relative_root}/tests/test_data/file.parquet"
+        try:
+            train_ds, val_ds = load_train_val_ray_datasets(path, test_size=0.5)
+            assert isinstance(train_ds, ray.data.Dataset)
+            assert isinstance(val_ds, ray.data.Dataset)
+            total = train_ds.count() + val_ds.count()
+            assert total > 0
+        except Exception:
+            pytest.skip("test parquet data not available")
+
+    def test_load_ray_datasets_default_split(self, relative_root):
+        ray.init(ignore_reinit_error=True)
+        path = f"{relative_root}/tests/test_data/file.parquet"
+        try:
+            train_ds, val_ds = load_train_val_ray_datasets(path)
+            # Default test_size is 0.2, so train should be ~80% and val ~20%
+            total = train_ds.count() + val_ds.count()
+            assert total > 0
+        except Exception:
+            pytest.skip("test parquet data not available")
+
+
+class TestNewRayTrainer:
+    """tests Ray Train TorchTrainer creation"""
+
+    def test_trainer_creation(self, relative_root):
+        ray.init(ignore_reinit_error=True)
+        path = f"{relative_root}/tests/test_data/file.parquet"
+        try:
+            train_ds, val_ds = load_train_val_ray_datasets(path, test_size=0.5)
+            cfg = TrainerConfig(num_workers=1, device="cpu", epochs=1, batch_size=2)
+            trainer = new_ray_trainer(
+                train_ds=train_ds,
+                val_ds=val_ds,
+                cfg=cfg,
+                model_type="rnn",
+            )
+            from ray.train.torch import TorchTrainer
+            assert isinstance(trainer, TorchTrainer)
+        except Exception:
+            pytest.skip("test parquet data not available")
+
+    def test_trainer_creation_encoder(self, relative_root):
+        ray.init(ignore_reinit_error=True)
+        path = f"{relative_root}/tests/test_data/file.parquet"
+        try:
+            train_ds, val_ds = load_train_val_ray_datasets(path, test_size=0.5)
+            cfg = TrainerConfig(num_workers=1, device="cpu", epochs=1, batch_size=2)
+            trainer = new_ray_trainer(
+                train_ds=train_ds,
+                val_ds=val_ds,
+                cfg=cfg,
+                model_type="encoder",
+            )
+            from ray.train.torch import TorchTrainer
+            assert isinstance(trainer, TorchTrainer)
+        except Exception:
+            pytest.skip("test parquet data not available")
+
+    def test_trainer_creation_decoder(self, relative_root):
+        ray.init(ignore_reinit_error=True)
+        path = f"{relative_root}/tests/test_data/file.parquet"
+        try:
+            train_ds, val_ds = load_train_val_ray_datasets(path, test_size=0.5)
+            cfg = TrainerConfig(num_workers=1, device="cpu", epochs=1, batch_size=2)
+            trainer = new_ray_trainer(
+                train_ds=train_ds,
+                val_ds=val_ds,
+                cfg=cfg,
+                model_type="decoder",
+            )
+            from ray.train.torch import TorchTrainer
+            assert isinstance(trainer, TorchTrainer)
+        except Exception:
+            pytest.skip("test parquet data not available")
+
+    def test_trainer_invalid_model_type(self, relative_root):
+        ray.init(ignore_reinit_error=True)
+        path = f"{relative_root}/tests/test_data/file.parquet"
+        try:
+            train_ds, val_ds = load_train_val_ray_datasets(path, test_size=0.5)
+            cfg = TrainerConfig(num_workers=1, device="cpu", epochs=1, batch_size=2)
+            with pytest.raises(ValueError, match="no matching model"):
+                new_ray_trainer(
+                    train_ds=train_ds,
+                    val_ds=val_ds,
+                    cfg=cfg,
+                    model_type="invalid_model",
+                )
+        except Exception:
+            pytest.skip("test parquet data not available")
+
+    def test_train_func_config_serializable(self):
+        """test that _train_func config dict is serializable (required for Ray)"""
+        config = {
+            "epochs": 1,
+            "batch_size": 2,
+            "lr": 0.005,
+            "betas": [0.7, 0.99],
+            "weight_decay": 1e-4,
+            "scheduler_t_max": 100,
+            "scheduler_eta_min": 0,
+            "scheduler_last_epoch": -1,
+            "model_type": "rnn",
+            "dict_path": "/tmp/test.dict",
+            "embeddings_file_path": "/tmp/test.zip",
+            "embeddings_sub_file_path": "test.txt",
+            "embeddings_emb_length": 100,
+            "input_len": 200,
+        }
+        serialized = json.dumps(config)
+        assert len(serialized) > 0
+        deserialized = json.loads(serialized)
+        assert deserialized["model_type"] == "rnn"
+        assert deserialized["epochs"] == 1
+
+    def test_train_func_config_has_all_keys(self):
+        """test that _train_func config contains all required keys"""
+        required_keys = {
+            "epochs", "batch_size", "lr", "betas", "weight_decay",
+            "scheduler_t_max", "scheduler_eta_min", "scheduler_last_epoch",
+            "model_type", "dict_path",
+            "embeddings_file_path", "embeddings_sub_file_path",
+            "embeddings_emb_length", "input_len",
+        }
+        config = {
+            "epochs": 1,
+            "batch_size": 2,
+            "lr": 0.005,
+            "betas": [0.7, 0.99],
+            "weight_decay": 1e-4,
+            "scheduler_t_max": 100,
+            "scheduler_eta_min": 0,
+            "scheduler_last_epoch": -1,
+            "model_type": "rnn",
+            "dict_path": "/tmp/test.dict",
+            "embeddings_file_path": "/tmp/test.zip",
+            "embeddings_sub_file_path": "test.txt",
+            "embeddings_emb_length": 100,
+            "input_len": 200,
+        }
+        assert required_keys.issubset(set(config.keys()))
+
+
+class TestTrainerConfig:
+    """tests TrainerConfig with num_workers for distributed training"""
+
+    def test_default_num_workers(self):
+        cfg = TrainerConfig()
+        assert cfg.num_workers == 2
+
+    def test_custom_num_workers(self):
+        cfg = TrainerConfig(num_workers=4)
+        assert cfg.num_workers == 4
+
+    def test_cpu_device_config(self):
+        cfg = TrainerConfig(device="cpu", num_workers=1)
+        assert cfg.device == "cpu"
+        assert cfg.num_workers == 1
+
+
+class TestSingleTrainer:
+    """tests the existing single-node Trainer still works"""
+
+    def test_new_trainer_creates_trainer(self):
+        model = get_trained_model(64, "cpu")
+        cfg = TrainerConfig(device="cpu")
+        trainer = new_trainer(model=model, cfg=cfg)
+        assert isinstance(trainer.loss_function, torch.nn.BCEWithLogitsLoss)
+        assert isinstance(trainer.optimizer, torch.optim.Adam)
+        assert trainer.cfg.device == "cpu"

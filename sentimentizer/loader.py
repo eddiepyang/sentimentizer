@@ -1,6 +1,7 @@
 from attr import define
 import pandas as pd
 
+import ray
 import torch
 from typing import Tuple
 from torch.utils.data import Dataset
@@ -38,3 +39,18 @@ def load_train_val_corpus_datasets(
     train_df, val_df = train_test_split(df, test_size=test_size)
     del df
     return CorpusDataset(data=train_df), CorpusDataset(val_df)
+
+
+def load_train_val_ray_datasets(
+    data_path: str, test_size: float = 0.2
+) -> Tuple[ray.data.Dataset, ray.data.Dataset]:
+    """Load processed parquet data as Ray Datasets for distributed training.
+
+    Splits into train and validation datasets using random_split.
+    """
+    ds = ray.data.read_parquet(data_path)
+    train_ds, val_ds = ds.random_split([1 - test_size, test_size])
+    logger.info(
+        f"loaded ray datasets: train={train_ds.count()}, val={val_ds.count()}"
+    )
+    return train_ds, val_ds

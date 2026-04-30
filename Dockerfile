@@ -2,19 +2,17 @@ FROM python:3.11-slim AS builder
 
 WORKDIR /app
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 # Copy project files
 COPY pyproject.toml README.md LICENSE ./
 COPY sentimentizer/ ./sentimentizer/
 
 # Install the project + CPU-only PyTorch + Ray Serve
-RUN pip install --no-cache-dir \
+RUN uv pip install --system --no-cache-dir \
     torch --index-url https://download.pytorch.org/whl/cpu \
-    && pip install --no-cache-dir . \
+    && uv pip install --system --no-cache-dir .
 
 # --- Runtime stage ---
 FROM python:3.11-slim

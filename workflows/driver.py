@@ -6,12 +6,12 @@ import ray
 import shutil
 
 from sentimentizer.extractor import extract_data
-from sentimentizer.trainer import new_trainer
+from sentimentizer.trainer import new_trainer, new_ray_trainer
 
-from sentimentizer.loader import load_train_val_corpus_datasets
+from sentimentizer.loader import load_train_val_corpus_datasets, load_train_val_ray_datasets
 from sentimentizer import new_logger, time_decorator
 
-from sentimentizer.config import DriverConfig, DEFAULT_LOG_LEVEL
+from sentimentizer.config import DriverConfig, DEFAULT_LOG_LEVEL, TrainerConfig
 from sentimentizer.tokenizer import Tokenizer
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
@@ -39,6 +39,18 @@ def new_parser() -> argparse.Namespace:
         "--stop", type=int, default=10000, help="how many lines to load"
     )
     parser.add_argument("--save", type=bool, default=False, help="save data and model")
+    parser.add_argument(
+        "--distributed",
+        action="store_true",
+        default=False,
+        help="use Ray Train for distributed training",
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=2,
+        help="number of Ray Train workers for distributed training",
+    )
     args = parser.parse_args()
 
     if args.type not in ("new", "update"):
@@ -48,6 +60,8 @@ def new_parser() -> argparse.Namespace:
         "running with args",
         device=args.device,
         early_stop=args.stop,
+        distributed=args.distributed,
+        num_workers=args.num_workers,
     )
     return args
 
@@ -78,7 +92,7 @@ def _load_model(args: argparse.Namespace) -> torch.nn.Module:
 
 
 def run_extract(args: argparse.Namespace) -> None:
-    gen = extract_data(
+    ds = extract_data(
         DriverConfig.files.archive_file_path,
         DriverConfig.files.raw_file_path,
         stop=args.stop,
@@ -104,6 +118,14 @@ def run_tokenize(args: argparse.Namespace) -> None:
 
 
 def run_fit(args: argparse.Namespace) -> None:
+    if args.distributed:
+        _run_fit_distributed(args)
+    else:
+        _run_fit_single(args)
+
+
+def _run_fit_single(args: argparse.Namespace) -> None:
+    """Single-node training using the existing Trainer class."""
     train_dataset, val_dataset = load_train_val_corpus_datasets(
         DriverConfig.files.processed_reviews_file_path
     )
@@ -118,6 +140,40 @@ def run_fit(args: argparse.Namespace) -> None:
 
     if args.save:
         torch.save(model.state_dict(), DriverConfig.files.weights_file_path)
+        logger.info(f"model weights saved to: {DriverConfig.files.weights_file_path}")
+
+
+def _run_fit_distributed(args: argparse.Namespace) -> None:
+    """Distributed training using Ray Train TorchTrainer."""
+    train_ds, val_ds = load_train_val_ray_datasets(
+        DriverConfig.files.processed_reviews_file_path
+    )
+
+    cfg = DriverConfig.trainer(device=args.device, num_workers=args.num_workers)
+
+    ray_trainer = new_ray_trainer(
+        train_ds=train_ds,
+        val_ds=val_ds,
+        cfg=cfg,
+        model_type=args.model,
+    )
+
+    result = ray_trainer.fit()
+
+    logger.info(
+        "distributed training completed",
+        best_checkpoint=result.checkpoint,
+        metrics=result.metrics,
+    )
+
+    if args.save:
+        # Load best checkpoint and save model weights
+        with result.checkpoint.as_directory() as checkpoint_dir:
+            checkpoint_data = result.checkpoint.to_dict()
+            torch.save(
+                checkpoint_data["model_state_dict"],
+                DriverConfig.files.weights_file_path,
+            )
         logger.info(f"model weights saved to: {DriverConfig.files.weights_file_path}")
 
 
