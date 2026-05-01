@@ -1,16 +1,15 @@
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Tuple
 
 import numpy as np
-import torch
-from torch import optim
-from torch.utils.data import DataLoader
-
 import ray
+import torch
 from ray import train
 from ray.train import Checkpoint, ScalingConfig
 from ray.train.torch import TorchTrainer, prepare_model
+from torch import optim
+from torch.utils.data import DataLoader
 
 from sentimentizer import new_logger
 from sentimentizer.config import (
@@ -27,7 +26,7 @@ logger = new_logger(DEFAULT_LOG_LEVEL)
 
 def _new_loaders(
     train_data: CorpusDataset, val_data: CorpusDataset, cfg: TrainerConfig
-) -> Tuple[DataLoader, DataLoader]:
+) -> tuple[DataLoader, DataLoader]:
     train_loader = DataLoader(
         dataset=train_data,
         batch_size=cfg.batch_size,
@@ -47,20 +46,19 @@ def _new_loaders(
 
 @dataclass
 class Trainer:
-
     """Trainer class helps with creating the data loader,
     tracking the torch optimizer and model fitting"""
 
     loss_function: Callable
     optimizer: optim.Adam
-    scheduler: optim.lr_scheduler._LRScheduler
+    scheduler: optim.lr_scheduler.LRScheduler
     cfg: TrainerConfig
-    losses: List[float] = field(default_factory=lambda: list())
+    losses: list[float] = field(default_factory=lambda: list())
     _mode: str = field(default="training")
 
-    def _train_epoch(self, model: torch.nn.Module, train_loader: DataLoader):
+    def _train_epoch(self, model: torch.nn.Module, train_loader: DataLoader) -> None:
         i = 0
-        n = len(train_loader.dataset)
+        n = len(train_loader.dataset)  # type: ignore[arg-type]
         model.train()
 
         for j, (sent, target) in enumerate(train_loader):
@@ -68,17 +66,13 @@ class Trainer:
 
             # noqa: E501
             log_probs = model(sent.to(self.cfg.device))
-            loss = self.loss_function(
-                log_probs, target.to(self.cfg.device)
-            )  # noqa: E501
+            loss = self.loss_function(log_probs, target.to(self.cfg.device))  # noqa: E501
 
             # gets graident
             loss.backward()
 
             # clips high gradients
-            torch.nn.utils.clip_grad.clip_grad_norm_(
-                model.parameters(), max_norm=0.3, norm_type=2
-            )
+            torch.nn.utils.clip_grad.clip_grad_norm_(model.parameters(), max_norm=0.3, norm_type=2)
 
             # updates with new gradient
             self.optimizer.step()
@@ -89,15 +83,16 @@ class Trainer:
                 if self.scheduler:
                     self.scheduler.step()
                 logger.info(
-                    f"{i/n:.2f} of rows completed in {j + 1} cycles, current loss at {np.mean(self.losses[-60:]):.6f}"
-                )  # noqa: E501
+                    f"{i/n:.2f} of rows completed in "
+                    f"{j + 1} cycles, current loss at {np.mean(self.losses[-60:]):.6f}"
+                )
                 logger.info(
                     f"current learning rate at {self.optimizer.param_groups[0]['lr']:.6f}"
                 )  # noqa: E501
 
     def fit(
         self, model: torch.nn.Module, train_data: CorpusDataset, val_data: CorpusDataset
-    ):
+    ) -> None:
         train_loader, val_loader = _new_loaders(train_data, val_data, self.cfg)
         model.to(self.cfg.device)
         start = time.time()
@@ -115,25 +110,24 @@ class Trainer:
             f"model fitting completed, {time.time()-start:.0f} seconds passed"
         )  # noqa: E501
 
-    def eval(self, model: torch.nn.Module, val_loader: DataLoader):
+    def eval(self, model: torch.nn.Module, val_loader: DataLoader) -> None:
         logger.info("evaluating predictions...")
         losses = []
         i = 0
-        n = len(val_loader.dataset)
+        n = len(val_loader.dataset)  # type: ignore[arg-type]
         model.to(self.cfg.device)
 
         with torch.no_grad():
             model.eval()
             for j, (sent, target) in enumerate(val_loader):
                 preds = model(sent.to(self.cfg.device))
-                losses.append(
-                    self.loss_function(preds, target.to(self.cfg.device)).item()
-                )
+                losses.append(self.loss_function(preds, target.to(self.cfg.device)).item())
                 i += len(target)
                 if i % (self.cfg.batch_size * 100) == 0:
                     logger.info(
-                        f"{i/n:.2f} of rows completed in {j + 1} cycles, training loss at {np.mean(losses[-60:]):.6f}"
-                    )  # noqa: E501
+                        f"{i/n:.2f} of rows completed in "
+                        f"{j + 1} cycles, training loss at {np.mean(losses[-60:]):.6f}"
+                    )
             self.val_loss = np.mean(losses)
             logger.info(f"validation loss at: {self.val_loss: .6f}")
 
@@ -141,7 +135,7 @@ class Trainer:
 def new_trainer(
     model: torch.nn.Module,
     cfg: TrainerConfig,
-):
+) -> Trainer:
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=OptimizationParams.lr,
@@ -171,7 +165,7 @@ def new_trainer(
 # ──────────────────────────────────────────────
 
 
-def _train_func(config: Dict):
+def _train_func(config: dict) -> None:
     """Training function executed on each Ray Train worker.
 
     Creates the model on the worker, wraps it with DDP via prepare_model(),
@@ -263,9 +257,7 @@ def _train_func(config: Dict):
             loss = loss_function(log_probs, target)
             loss.backward()
 
-            torch.nn.utils.clip_grad.clip_grad_norm_(
-                model.parameters(), max_norm=0.3, norm_type=2
-            )
+            torch.nn.utils.clip_grad.clip_grad_norm_(model.parameters(), max_norm=0.3, norm_type=2)
             optimizer.step()
 
             epoch_losses.append(loss.item())
@@ -287,8 +279,7 @@ def _train_func(config: Dict):
         train_loss = np.mean(epoch_losses) if epoch_losses else 0.0
 
         logger.info(
-            f"epoch {epoch} completed, "
-            f"train_loss={train_loss:.6f}, val_loss={val_loss:.6f}"
+            f"epoch {epoch} completed, " f"train_loss={train_loss:.6f}, val_loss={val_loss:.6f}"
         )
 
         # Report metrics and checkpoint to Ray Train
@@ -303,9 +294,7 @@ def _train_func(config: Dict):
             ),
         )
 
-    logger.info(
-        f"model fitting completed, {time.time()-start:.0f} seconds passed"
-    )
+    logger.info(f"model fitting completed, {time.time()-start:.0f} seconds passed")
 
 
 def new_ray_trainer(
@@ -313,7 +302,7 @@ def new_ray_trainer(
     val_ds: ray.data.Dataset,
     cfg: TrainerConfig,
     model_type: str = "rnn",
-    driver_config=DriverConfig,
+    driver_config: type[DriverConfig] = DriverConfig,
 ) -> TorchTrainer:
     """Factory function to create a Ray Train TorchTrainer for distributed training.
 

@@ -9,9 +9,9 @@ from gensim import corpora
 from sentimentizer import new_logger
 from sentimentizer.config import (
     DEFAULT_LOG_LEVEL,
+    Devices,
     EmbeddingsConfig,
     TokenizerConfig,
-    Devices,
 )
 from sentimentizer.extractor import new_embedding_weights
 
@@ -28,7 +28,7 @@ class RNN(nn.Module):
         emb_weights: torch.Tensor,  # weights are vocabsize x embedding length
         verbose: bool = False,
         dropout: float = 0.2,
-    ):
+    ) -> None:
         super().__init__()
         # vocab size in, hidden size out
         self.batch_size = batch_size
@@ -47,25 +47,25 @@ class RNN(nn.Module):
         self.fc2 = nn.Linear(emb_weights.shape[1], 1)
         self.verbose = verbose
 
-    def load_weights(self):
+    def load_weights(self) -> "RNN":
         self.embed_layer.load_state_dict({"weight": self.emb_weights})  # type: ignore
         return self
 
-    def forward(self, inputs: torch.Tensor):
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         embeds = self.embed_layer(inputs)
         self.dropout_layer(embeds)
         if self.verbose:
-            logger.info("embedding shape %s" % (embeds.shape,))
+            logger.info(f"embedding shape {embeds.shape}")
         embeds = F.relu(self.fc0(embeds))
         out, (hidden, cell) = self.lstm(embeds.permute(0, 2, 1))
         if self.verbose:
-            logger.info("lstm out shape %s" % (out.shape,))
+            logger.info(f"lstm out shape {out.shape}")
         out = self.fc1(out)
         if self.verbose:
-            logger.info("fc1 out shape %s" % (out.shape,))
+            logger.info(f"fc1 out shape {out.shape}")
         fout = self.fc2(out.permute(0, 2, 1))
         if self.verbose:
-            logger.info("final %s" % (fout.shape,))
+            logger.info(f"final {fout.shape}")
 
         return torch.squeeze(fout)
 
@@ -78,7 +78,7 @@ class RNN(nn.Module):
 
 def new_model(
     dict_path: str, embeddings_config: EmbeddingsConfig, batch_size: int, input_len: int
-):
+) -> RNN:
     dict_yelp = corpora.Dictionary.load(dict_path)
     embedding_matrix = new_embedding_weights(dict_yelp, embeddings_config)
     emb_t = torch.from_numpy(embedding_matrix)

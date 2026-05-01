@@ -1,16 +1,16 @@
+import re
+from collections.abc import Generator
 from dataclasses import dataclass, field
 from importlib.resources import files
-import re
-from typing import List, TypeVar
+from typing import TypeVar
 
-from gensim import corpora
 import numpy as np
 import pandas as pd
 import ray
+from gensim import corpora
 
 from sentimentizer import new_logger, time_decorator
 from sentimentizer.config import DEFAULT_LOG_LEVEL, FileConfig, TokenizerConfig
-
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
@@ -35,7 +35,7 @@ def convert_rating_linear(rating: int, max_rating: int) -> float:
 
 
 def text_sequencer(
-    dictionary: corpora.Dictionary, text: list, max_len: int = 200
+    dictionary: corpora.Dictionary, text: list[str], max_len: int = 200
 ) -> np.ndarray:
     """
     converts tokens to numeric representation by dictionary;
@@ -50,7 +50,7 @@ def text_sequencer(
     for i, word in enumerate(text):
         if i >= max_len:
             return processed
-        if word in dictionary.token2id.keys():
+        if word in dictionary.token2id:
             # the ids have an offset of 1 for this because
             # 0 represents a padded value in pytorch
             processed[i] = dictionary.token2id[word] + 1
@@ -60,12 +60,12 @@ def text_sequencer(
     return processed
 
 
-def regex_tokenize(x: str) -> List[str]:
+def regex_tokenize(x: str) -> list[str]:
     """regex tokenize, less accurate than spacy"""
     return pattern.findall(x.lower())
 
 
-def _get_data(df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
+def _get_data(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     return df.loc[:, columns].reset_index(drop=True)
 
 
@@ -95,9 +95,7 @@ class Tokenizer:
     @classmethod
     def from_data(cls: type[TokenizerType], data: pd.DataFrame) -> TokenizerType:
         """creates tokenizer from dataframe"""
-        return cls(
-            dictionary=_new_dictionary(data, TokenizerConfig(save_dictionary=False))
-        )
+        return cls(dictionary=_new_dictionary(data, TokenizerConfig(save_dictionary=False)))
 
     @time_decorator
     def transform_dataframe(self, data: pd.DataFrame) -> "Tokenizer":
@@ -106,7 +104,7 @@ class Tokenizer:
             raise ValueError("no dictionary loaded")
 
         data[self.cfg.inputs] = data[self.cfg.text_col].map(
-            lambda text: text_sequencer(self.dictionary, text, self.cfg.max_len)
+            lambda text: text_sequencer(self.dictionary, text, self.cfg.max_len)  # type: ignore[arg-type]
         )
 
         data[self.cfg.labels] = data[self.cfg.label_col].map(convert_rating)
@@ -128,11 +126,11 @@ class Tokenizer:
         cfg = TokenizerConfig(save_dictionary=False)
         # Create dictionary from dataset tokens column
         # ds.iter_rows() yields items. We want the text_col.
-        
-        def gen_docs():
+
+        def gen_docs() -> Generator:
             for row in ds.iter_rows():
                 yield row[cfg.text_col]
-        
+
         dictionary = corpora.Dictionary(gen_docs())
         dictionary.filter_extremes(
             no_below=cfg.dict_min,
@@ -144,7 +142,7 @@ class Tokenizer:
         if cfg.save_dictionary:
             dictionary.save(f"{FileConfig.dictionary_file_path}")
             logger.info(f"dictionary saved to {FileConfig.dictionary_file_path}...")
-            
+
         return cls(dictionary=dictionary)
 
     @time_decorator
@@ -164,12 +162,12 @@ class Tokenizer:
             # If numpy, column is array of objects (lists).
             for text in batch[cfg.text_col]:
                 inputs.append(text_sequencer(dictionary, text, cfg.max_len))
-            
+
             batch[cfg.inputs] = np.array(inputs)
-            
+
             if cfg.label_col in batch:
                 batch[cfg.labels] = np.array([convert_rating(r) for r in batch[cfg.label_col]])
-            
+
             return batch
 
         ds = ds.map_batches(transform_batch, batch_format="numpy")
@@ -180,10 +178,7 @@ class Tokenizer:
         _get_data(data, [self.cfg.inputs] + [self.cfg.labels]).to_parquet(
             f"{FileConfig.processed_reviews_file_path}", index=False
         )
-        logger.info(
-            f"file saved to {FileConfig.processed_reviews_file_path}"
-        )  # noqa: E501
-
+        logger.info(f"file saved to {FileConfig.processed_reviews_file_path}")  # noqa: E501
 
 
 def get_trained_tokenizer() -> Tokenizer:

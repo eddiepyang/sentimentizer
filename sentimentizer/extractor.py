@@ -1,22 +1,19 @@
 import zipfile
+from collections.abc import Generator
 from itertools import islice
-from typing import IO, Generator
+from typing import IO
 
 import numpy as np
 import orjson as json
 import pyarrow as pa
+import ray
 from gensim import corpora
 
 from sentimentizer import new_logger, time_decorator
-from sentimentizer.config import DEFAULT_LOG_LEVEL, EmbeddingsConfig
+from sentimentizer.config import BATCH_SIZE, DEFAULT_LOG_LEVEL, EmbeddingsConfig
 from sentimentizer.tokenizer import regex_tokenize
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
-
-import ray
-
-BATCH_SIZE = 100000
-WRITE_BYTES = "wb"
 
 
 def generate_batch(
@@ -43,15 +40,15 @@ def process_json(json_file: IO[bytes], stop: int = 0) -> Generator:
 def extract_data(file_path: str, compressed_file_name: str, stop: int = 0) -> ray.data.Dataset:
     "reads from zipped yelp data file"
 
-    def generate_lines(x):
+    def generate_lines(x: int) -> Generator:
         with zipfile.ZipFile(file_path) as zfile:
             inf = zfile.open(compressed_file_name)
             yield from process_json(inf, stop)
 
     # Use flat_map to read from the single zip file
     ds = ray.data.range(1).flat_map(generate_lines)
-    
-    def tokenize(row):
+
+    def tokenize(row: dict) -> dict:
         row["tokens"] = regex_tokenize(row["text"])
         return row
 
@@ -81,9 +78,7 @@ def extract_embeddings(
 
 
 @time_decorator
-def new_embedding_weights(
-    dictionary: corpora.Dictionary, cfg: EmbeddingsConfig
-) -> np.ndarray:
+def new_embedding_weights(dictionary: corpora.Dictionary, cfg: EmbeddingsConfig) -> np.ndarray:
     """converts local dictionary to embeddings from glove"""
 
     embeddings_dict: dict = extract_embeddings(dictionary, cfg)

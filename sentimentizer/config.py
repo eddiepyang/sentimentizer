@@ -1,22 +1,20 @@
-import os
 import enum
-
+import os
 from dataclasses import dataclass
-from logging import NOTSET, DEBUG, INFO, WARN, ERROR, CRITICAL
+from logging import INFO
 
-from typing import Tuple, Callable
 from sentimentizer import root
 
 data_path = os.path.join(root, "sentimentizer")
 
 DEFAULT_LOG_LEVEL = INFO
 
-BATCH_SIZE = 100000
-WRITE_BYTES = "wb"
-READ_BYTES = "rb"
-TEXT_COLUMN = "text"
+BATCH_SIZE: int = 100000
+WRITE_BYTES: str = "wb"
+READ_BYTES: str = "rb"
+TEXT_COLUMN: str = "text"
 
-Devices = set(("cpu", "cuda", "mps"))
+Devices: frozenset[str] = frozenset(("cpu", "cuda", "mps"))
 
 
 class Device(enum.Enum):
@@ -34,7 +32,7 @@ class FitModes(enum.Enum):
 @dataclass
 class OptimizationParams:
     lr: float = 0.005
-    betas: Tuple[float, float] = (0.7, 0.99)
+    betas: tuple[float, float] = (0.7, 0.99)
     weight_decay: float = 1e-4
 
 
@@ -88,7 +86,7 @@ class EmbeddingsConfig:
 
 @dataclass
 class DriverConfig:
-    files: Callable = FileConfig
-    embeddings: Callable = EmbeddingsConfig
-    tokenizer: Callable = TokenizerConfig
-    trainer: Callable = TrainerConfig
+    files: type[FileConfig] = FileConfig
+    embeddings: type[EmbeddingsConfig] = EmbeddingsConfig
+    tokenizer: type[TokenizerConfig] = TokenizerConfig
+    trainer: type[TrainerConfig] = TrainerConfig

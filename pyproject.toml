@@ -42,6 +42,7 @@ dev = [
     "pip-tools",
     "pytest",
     "pytest-cov",
+    "ruff",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -55,7 +56,34 @@ dev = [
     "pip-tools",
     "pytest",
     "pytest-cov",
+    "ruff",
 ]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade
+    "ANN",  # flake8-annotations (type hints)
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+]
+ignore = [
+    "ANN401",  # Any is acceptable in some cases
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

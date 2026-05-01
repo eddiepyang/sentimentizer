@@ -1,17 +1,23 @@
 import json
+import shutil
+
 import pandas as pd
 import pytest
 import ray
-import shutil
 import torch
 
-from sentimentizer.tokenizer import Tokenizer, convert_rating, new_logger, regex_tokenize
-from sentimentizer.config import DEFAULT_LOG_LEVEL, DriverConfig, TrainerConfig
+from sentimentizer.config import DEFAULT_LOG_LEVEL, TrainerConfig
 from sentimentizer.extractor import extract_data
 from sentimentizer.loader import CorpusDataset, load_train_val_ray_datasets
 from sentimentizer.models.rnn import RNN, get_trained_model
-from sentimentizer.tokenizer import get_trained_tokenizer
-from sentimentizer.trainer import new_ray_trainer, new_trainer, _train_func
+from sentimentizer.tokenizer import (
+    Tokenizer,
+    convert_rating,
+    get_trained_tokenizer,
+    new_logger,
+    regex_tokenize,
+)
+from sentimentizer.trainer import new_ray_trainer, new_trainer
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
@@ -21,8 +27,8 @@ def tokenized_df() -> pd.DataFrame:
     return pd.DataFrame(
         {
             "tokens": [
-                "the chicken never showed up".split(),
-                "the food was terrific".split(),
+                ["the", "chicken", "never", "showed", "up"],
+                ["the", "food", "was", "terrific"],
             ],
             "stars": [2, 5],
         }
@@ -56,8 +62,8 @@ def processed_df() -> pd.DataFrame:
 
 
 def test_convert_rating():
-    assert 1 == convert_rating(5)
-    assert 0 == convert_rating(1)
+    assert convert_rating(5) == 1
+    assert convert_rating(1) == 0
     assert convert_rating(3) == 0.5
 
 
@@ -76,9 +82,7 @@ class TestExtractData:
 
     def test_success(self, rel_path, relative_root):
         ray.init(ignore_reinit_error=True)
-        ds = extract_data(
-            compressed_file_name=self.fname, file_path=rel_path, stop=self.stop
-        )
+        ds = extract_data(compressed_file_name=self.fname, file_path=rel_path, stop=self.stop)
         assert isinstance(ds, ray.data.Dataset)
 
         path = f"{relative_root}/tests/test_data/file.parquet"
@@ -206,6 +210,7 @@ class TestNewRayTrainer:
                 model_type="rnn",
             )
             from ray.train.torch import TorchTrainer
+
             assert isinstance(trainer, TorchTrainer)
         except Exception:
             pytest.skip("test parquet data not available")
@@ -223,6 +228,7 @@ class TestNewRayTrainer:
                 model_type="encoder",
             )
             from ray.train.torch import TorchTrainer
+
             assert isinstance(trainer, TorchTrainer)
         except Exception:
             pytest.skip("test parquet data not available")
@@ -240,6 +246,7 @@ class TestNewRayTrainer:
                 model_type="decoder",
             )
             from ray.train.torch import TorchTrainer
+
             assert isinstance(trainer, TorchTrainer)
         except Exception:
             pytest.skip("test parquet data not available")
@@ -287,11 +294,20 @@ class TestNewRayTrainer:
     def test_train_func_config_has_all_keys(self):
         """test that _train_func config contains all required keys"""
         required_keys = {
-            "epochs", "batch_size", "lr", "betas", "weight_decay",
-            "scheduler_t_max", "scheduler_eta_min", "scheduler_last_epoch",
-            "model_type", "dict_path",
-            "embeddings_file_path", "embeddings_sub_file_path",
-            "embeddings_emb_length", "input_len",
+            "epochs",
+            "batch_size",
+            "lr",
+            "betas",
+            "weight_decay",
+            "scheduler_t_max",
+            "scheduler_eta_min",
+            "scheduler_last_epoch",
+            "model_type",
+            "dict_path",
+            "embeddings_file_path",
+            "embeddings_sub_file_path",
+            "embeddings_emb_length",
+            "input_len",
         }
         config = {
             "epochs": 1,

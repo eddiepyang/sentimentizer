@@ -1,13 +1,13 @@
 from importlib.resources import files
 
-from gensim import corpora
 import numpy as np
 import torch
-from torch import nn
 import torch.nn.functional as F
+from gensim import corpora
+from torch import nn
 
 from sentimentizer import new_logger
-from sentimentizer.config import DEFAULT_LOG_LEVEL, EmbeddingsConfig
+from sentimentizer.config import DEFAULT_LOG_LEVEL, Devices, EmbeddingsConfig
 from sentimentizer.extractor import new_embedding_weights
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
@@ -25,7 +25,7 @@ class Encoder(nn.Module):
         emb_weights: torch.Tensor,  # weights are vocabsize x embedding length
         verbose: bool = True,
         dropout: float = 0.2,
-    ):
+    ) -> None:
         super().__init__()
         # vocab size in, hidden size out
         self.batch_size = batch_size
@@ -49,23 +49,23 @@ class Encoder(nn.Module):
         self.fc2 = nn.Linear(emb_weights.shape[1], 1)
         self.verbose = verbose
 
-    def load_weights(self):
+    def load_weights(self) -> "Encoder":
         self.embed_layer.load_state_dict({"weight": self.emb_weights})  # type: ignore
         return self
 
-    def forward(self, inputs: torch.Tensor):
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         embeds = self.embed_layer(inputs)
         self.dropout_layer(embeds)
 
-        logger.debug("embedding shape %s" % (embeds.shape,))
+        logger.debug(f"embedding shape {embeds.shape}")
         embeds = F.relu(self.fc0(embeds))
         encoded_out = self.encoder(embeds.permute(0, 2, 1))
 
-        logger.debug("lstm out shape %s" % (encoded_out.shape,))
+        logger.debug(f"lstm out shape {encoded_out.shape}")
         out = self.fc1(encoded_out)
-        logger.debug("fc1 out shape %s" % (out.shape,))
+        logger.debug(f"fc1 out shape {out.shape}")
         fout = self.fc2(out.permute(0, 2, 1))
-        logger.debug("final %s" % (fout.shape,))
+        logger.debug(f"final {fout.shape}")
 
         return torch.squeeze(fout)
 
@@ -78,7 +78,7 @@ class Encoder(nn.Module):
 
 def new_model(
     dict_path: str, embeddings_config: EmbeddingsConfig, batch_size: int, input_len: int
-):
+) -> Encoder:
     dict_yelp = corpora.Dictionary.load(dict_path)
     embedding_matrix = new_embedding_weights(dict_yelp, embeddings_config)
     emb_t = torch.from_numpy(embedding_matrix)
