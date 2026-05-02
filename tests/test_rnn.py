@@ -150,9 +150,15 @@ class TestGetTrainedModel:
         output = model(tokens)
         assert output.shape == (2,)
 
-    def test_incompatible_weights(self):
-        """tests that loading incompatible weights raises a helpful error"""
-        with pytest.raises(RuntimeError, match="incompatible"):
+    def test_missing_weights_file(self):
+        """tests that loading from a missing weights file raises FileNotFoundError"""
+        from unittest.mock import patch
+
+        mock_path = "sentimentizer.models.rnn.torch.load"
+        with (
+            patch(mock_path, side_effect=FileNotFoundError("No weights")),
+            pytest.raises(FileNotFoundError),
+        ):
             get_trained_model(64, "cpu")
 
     def test_failure(self):
@@ -453,5 +459,5 @@ class TestSingleTrainer:
         cfg = TrainerConfig(device="cpu")
         trainer = new_trainer(model=model, cfg=cfg)
         assert isinstance(trainer.loss_function, torch.nn.BCEWithLogitsLoss)
-        assert isinstance(trainer.optimizer, torch.optim.Adam)
+        assert isinstance(trainer.optimizer, torch.optim.AdamW)
         assert trainer.cfg.device == "cpu"

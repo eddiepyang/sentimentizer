@@ -3,6 +3,9 @@ import os
 from dataclasses import dataclass
 from logging import INFO
 
+import numpy as np
+import torch
+
 from sentimentizer import root
 
 data_path = os.path.join(root, "sentimentizer")
@@ -15,7 +18,47 @@ WRITE_BYTES: str = "wb"
 READ_BYTES: str = "rb"
 TEXT_COLUMN: str = "text"
 
-Devices: frozenset[str] = frozenset(("cpu", "cuda", "mps"))
+# Embedding constants
+EMBEDDING_DTYPE = np.float32
+EMBEDDING_RANDOM_MEAN: float = 0.0
+EMBEDDING_RANDOM_STD: float = 0.32
+
+# Logging constants
+EXTRACT_LOG_INTERVAL: int = 100000
+
+
+def auto_detect_device() -> str:
+    """Detect the best available compute device: cuda > mps > cpu."""
+    if torch.cuda.is_available():
+        return "cuda"
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+def default_epochs(model_type: str) -> int:
+    """Return default epochs for the model type.
+
+    RNNs converge faster with simple patterns.
+    Transformers need more epochs for attention patterns to develop.
+    """
+    if model_type in ("encoder", "decoder"):
+        return 8
+    return 4
+
+
+def default_dataloader_workers(device: str) -> int:
+    """Return optimal DataLoader workers for the device.
+
+    MPS has issues with multiprocessing, so use 0 workers.
+    CUDA and CPU benefit from multiple workers for data loading.
+    """
+    if device == "mps":
+        return 0
+    return min(os.cpu_count() or 4, 10)
+
+
+Devices: frozenset[str] = frozenset(("auto", "cpu", "cuda", "mps"))
 
 
 class Device(enum.Enum):
@@ -32,16 +75,51 @@ class FitModes(enum.Enum):
 
 @dataclass
 class OptimizationParams:
-    lr: float = 0.005
-    betas: tuple[float, float] = (0.7, 0.99)
+    """Default optimization params (used for RNN).
+
+    Encoder and Decoder models override these via their config.
+    """
+
+    lr: float = 0.001
+    betas: tuple[float, float] = (0.9, 0.999)
     weight_decay: float = 1e-4
 
 
 @dataclass
+class EncoderOptimizationParams:
+    """Optimization params for Transformer models (Encoder, Decoder).
+
+    Uses lower LR and AdamW-style weight decay for stable training.
+    """
+
+    lr: float = 0.0005
+    betas: tuple[float, float] = (0.9, 0.999)
+    weight_decay: float = 0.01
+
+
+@dataclass
 class SchedulerParams:
-    T_max: int = 100
-    eta_min: int = 0
+    """Default scheduler params (used for RNN).
+
+    Encoder and Decoder models override these via their config.
+    """
+
+    T_max: int = 4
+    eta_min: float = 1e-6
     last_epoch: int = -1
+
+
+@dataclass
+class EncoderSchedulerParams:
+    """Scheduler params for Transformer models.
+
+    Includes warmup_epochs for linear LR warmup at the start of training.
+    """
+
+    T_max: int = 4
+    eta_min: float = 1e-6
+    last_epoch: int = -1
+    warmup_epochs: int = 1  # linear warmup for this many epochs
 
 
 @dataclass(frozen=True)
@@ -71,10 +149,11 @@ class FileConfig:
 @dataclass
 class TrainerConfig:
     batch_size: int = 64
-    epochs: int = 4
-    dataloader_workers: int = 10  # DataLoader subprocesses for data loading
+    epochs: int = -1  # -1 means use model-specific default (4 for RNN, 8 for encoder/decoder)
+    early_stopping_patience: int = 2  # stop if val_loss doesn't improve for this many epochs
+    dataloader_workers: int = -1  # -1 means auto-detect based on device
     ray_workers: int = 2  # Ray Train workers (only used with --distributed)
-    device: str = "cuda"
+    device: str = "auto"  # "auto" detects best available: cuda > mps > cpu
     memory: bool = True
 
 

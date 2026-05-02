@@ -11,7 +11,15 @@ import ray
 from gensim import corpora
 
 from sentimentizer import new_logger, time_decorator
-from sentimentizer.config import BATCH_SIZE, DEFAULT_LOG_LEVEL, EmbeddingsConfig
+from sentimentizer.config import (
+    BATCH_SIZE,
+    DEFAULT_LOG_LEVEL,
+    EMBEDDING_DTYPE,
+    EMBEDDING_RANDOM_MEAN,
+    EMBEDDING_RANDOM_STD,
+    EXTRACT_LOG_INTERVAL,
+    EmbeddingsConfig,
+)
 from sentimentizer.tokenizer import regex_tokenize
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
@@ -29,7 +37,7 @@ def generate_batch(
 
 def process_json(json_file: IO[bytes], stop: int = 0) -> Generator:
     for i, line in enumerate(json_file):
-        if i % 100000 == 0:
+        if i % EXTRACT_LOG_INTERVAL == 0:
             logger.debug(f"processing line {i}")
         dc = json.loads(line)
         if i >= stop and stop != 0:
@@ -83,7 +91,7 @@ def extract_embeddings(
             if key in dictionary.token2id:
                 embeddings_dict.setdefault(
                     dictionary.token2id[key] + 1,
-                    np.asarray(values[1:], dtype=np.float32),  # noqa: E501
+                    np.asarray(values[1:], dtype=EMBEDDING_DTYPE),
                 )
 
     return embeddings_dict
@@ -98,7 +106,8 @@ def new_embedding_weights(dictionary: corpora.Dictionary, cfg: EmbeddingsConfig)
     for word in dictionary.values():
         if word not in embeddings_dict:
             embeddings_dict.setdefault(
-                dictionary.token2id[word] + 1, np.random.normal(0, 0.32, cfg.emb_length)
+                dictionary.token2id[word] + 1,
+                np.random.normal(EMBEDDING_RANDOM_MEAN, EMBEDDING_RANDOM_STD, cfg.emb_length),
             )
 
     return np.vstack(
