@@ -40,7 +40,9 @@ def new_parser() -> argparse.Namespace:
         default="rnn",
         help="model loaded, must be rnn or transformer",
     )  # noqa: E501
-    parser.add_argument("--type", default="new", help="type of run, must be new or update")  # noqa: E501
+    parser.add_argument(
+        "--type", default="new", help="type of run, must be new or update"
+    )  # noqa: E501
     parser.add_argument("--stop", type=int, default=10000, help="how many lines to load")
     parser.add_argument("--save", type=bool, default=False, help="save data and model")
     parser.add_argument(

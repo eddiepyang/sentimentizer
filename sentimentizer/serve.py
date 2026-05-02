@@ -1,4 +1,5 @@
 import time
+from typing import Any
 
 import torch
 from ray import serve
@@ -6,8 +7,49 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from sentimentizer import logger
-from sentimentizer.models.rnn import RNN, get_trained_model
+from sentimentizer.models.decoder import Decoder
+from sentimentizer.models.decoder import get_trained_model as get_decoder
+from sentimentizer.models.encoder import Encoder
+from sentimentizer.models.encoder import get_trained_model as get_encoder
+from sentimentizer.models.rnn import RNN
+from sentimentizer.models.rnn import get_trained_model as get_rnn
 from sentimentizer.tokenizer import Tokenizer, get_trained_tokenizer
+
+# ---------------------------------------------------------------------------
+# Model registry — maps model names to their loader functions and classes
+# ---------------------------------------------------------------------------
+
+MODEL_REGISTRY: dict[str, dict[str, Any]] = {
+    "rnn": {
+        "loader": get_rnn,
+        "class": RNN,
+        "architecture": "Bidirectional LSTM",
+        "embedding_dim": 100,
+        "hidden_size": 256,
+        "num_layers": 2,
+    },
+    "encoder": {
+        "loader": get_encoder,
+        "class": Encoder,
+        "architecture": "Transformer Encoder (CLS token)",
+        "embedding_dim": 100,
+        "d_model": 256,
+        "n_heads": 4,
+        "n_layers": 4,
+    },
+    "decoder": {
+        "loader": get_decoder,
+        "class": Decoder,
+        "architecture": "Encoder-Decoder Transformer (cross-attention)",
+        "embedding_dim": 100,
+        "d_model": 256,
+        "n_heads": 4,
+        "n_encoder_layers": 2,
+        "n_decoder_layers": 4,
+    },
+}
+
+DEFAULT_MODEL = "rnn"
 
 # ---------------------------------------------------------------------------
 # Metrics helpers (lightweight Prometheus-compatible counters/histograms)
@@ -50,7 +92,11 @@ metrics = Metrics()
 # Shared health state — set by deployment __init__, read by /health route
 # ---------------------------------------------------------------------------
 
-_health_state: dict = {"loaded": False, "device": "unknown", "model": "RNN"}
+_health_state: dict = {
+    "loaded": False,
+    "device": "unknown",
+    "models": list(MODEL_REGISTRY.keys()),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -70,28 +116,46 @@ _health_state: dict = {"loaded": False, "device": "unknown", "model": "RNN"}
     ray_actor_options={"num_cpus": 1, "num_gpus": 0},
 )
 class SentimentDeployment:
-    """deployment server for the RNN sentiment model"""
+    """Deployment server for all sentiment models (RNN, Encoder, Decoder)."""
 
     def __init__(self) -> None:
         self.device: str = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model: RNN = get_trained_model(batch_size=1, device=self.device)
-        self.model.to(self.device)
-        self.model.eval()
         self.tokenizer: Tokenizer = get_trained_tokenizer()
+
+        # Load all models at startup
+        self.models: dict[str, torch.nn.Module] = {}
+        for model_name, registry_entry in MODEL_REGISTRY.items():
+            loader = registry_entry["loader"]
+            model = loader(batch_size=1, device=self.device)
+            model.to(self.device)
+            model.eval()
+            self.models[model_name] = model
 
         # Update shared health state
         _health_state["loaded"] = True
         _health_state["device"] = self.device
 
+    def _get_model(self, model_name: str | None) -> tuple[torch.nn.Module, str]:
+        """Resolve the model to use, returning (model, resolved_name).
+
+        Falls back to DEFAULT_MODEL if model_name is None or unknown.
+        """
+        name = (model_name or DEFAULT_MODEL).lower().strip()
+        if name not in self.models:
+            name = DEFAULT_MODEL
+        return self.models[name], name
+
     # ---- Core prediction logic ------------------------------------------------
 
-    def _predict_single(self, text: str) -> dict:
+    def _predict_single(self, text: str, model_name: str | None = None) -> dict:
         """Run inference on a single text string."""
+        model, resolved_name = self._get_model(model_name)
         processed_input = self.tokenizer.tokenize_text(text)
-        prediction_tensor = self.model.predict(processed_input)
+        prediction_tensor = model.predict(processed_input)
         score = prediction_tensor.item()
         return {
             "text": text,
+            "model": resolved_name,
             "sentiment_score": score,
             "prediction": "positive" if score > 0.5 else "negative",
         }
@@ -123,17 +187,27 @@ class SentimentDeployment:
         try:
             json_input = await http_request.json()
             text = json_input.get("text", "")
+            model_name = json_input.get("model")
 
             if not text or not isinstance(text, str):
                 return JSONResponse(
                     {"error": "No text provided or text is not a string"}, status_code=400
                 )
 
-            result = self._predict_single(text)
+            # Validate model name if provided
+            if model_name and model_name.lower().strip() not in MODEL_REGISTRY:
+                available = list(MODEL_REGISTRY.keys())
+                return JSONResponse(
+                    {"error": f"Unknown model: {model_name}. Available: {available}"},
+                    status_code=400,
+                )
+
+            result = self._predict_single(text, model_name)
             latency = time.perf_counter() - start
             metrics.record_request(latency)
             logger.info(  # type: ignore[call-arg]
                 "prediction completed",
+                model=result["model"],
                 input_length=len(text),
                 prediction=result["prediction"],
                 score=result["sentiment_score"],
@@ -152,6 +226,7 @@ class SentimentDeployment:
         try:
             json_input = await http_request.json()
             texts = json_input.get("texts", [])
+            model_name = json_input.get("model")
 
             if not isinstance(texts, list) or len(texts) == 0:
                 return JSONResponse(
@@ -159,11 +234,20 @@ class SentimentDeployment:
                     status_code=400,
                 )
 
-            results = [self._predict_single(t) for t in texts]
+            # Validate model name if provided
+            if model_name and model_name.lower().strip() not in MODEL_REGISTRY:
+                available = list(MODEL_REGISTRY.keys())
+                return JSONResponse(
+                    {"error": f"Unknown model: {model_name}. Available: {available}"},
+                    status_code=400,
+                )
+
+            results = [self._predict_single(t, model_name) for t in texts]
             latency = time.perf_counter() - start
             metrics.record_request(latency)
             logger.info(  # type: ignore[call-arg]
                 "batch prediction completed",
+                model=results[0]["model"] if results else "unknown",
                 batch_size=len(texts),
                 latency_s=f"{latency:.4f}",
             )
@@ -205,15 +289,38 @@ class SentimentDeployment:
             return JSONResponse({"error": f"Internal error: {exc}"}, status_code=500)
 
     async def _handle_models(self, http_request: Request) -> JSONResponse:
-        """GET /models — metadata about the loaded model."""
+        """GET /models — metadata about all available models."""
+        models_info = {}
+        for name, registry_entry in MODEL_REGISTRY.items():
+            model = self.models[name]
+            param_count = sum(p.numel() for p in model.parameters())
+            info: dict[str, Any] = {
+                "architecture": registry_entry["architecture"],
+                "device": self.device,
+                "max_sequence_length": self.tokenizer.cfg.max_len,
+                "embedding_dim": registry_entry["embedding_dim"],
+                "parameters": param_count,
+                "status": "loaded",
+            }
+            # Add model-specific metadata
+            if name == "rnn":
+                info["hidden_size"] = registry_entry["hidden_size"]
+                info["num_layers"] = registry_entry["num_layers"]
+            elif name == "encoder":
+                info["d_model"] = registry_entry["d_model"]
+                info["n_heads"] = registry_entry["n_heads"]
+                info["n_layers"] = registry_entry["n_layers"]
+            elif name == "decoder":
+                info["d_model"] = registry_entry["d_model"]
+                info["n_heads"] = registry_entry["n_heads"]
+                info["n_encoder_layers"] = registry_entry["n_encoder_layers"]
+                info["n_decoder_layers"] = registry_entry["n_decoder_layers"]
+            models_info[name] = info
+
         return JSONResponse(
             {
-                "model": "RNN",
-                "architecture": "LSTM",
-                "device": self.device,
-                "max_sequence_length": 200,
-                "embedding_dim": 100,
-                "status": "loaded",
+                "models": models_info,
+                "default": DEFAULT_MODEL,
             }
         )
 
