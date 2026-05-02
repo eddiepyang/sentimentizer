@@ -49,19 +49,13 @@ Each module exposes `get_trained_model(batch_size, device)` to load pre-trained 
 
 ### Ray Serve (Python)
 
-The `serve.py` entry point deploys a Ray Serve application with 2 replicas using the **RNN** model by default:
+The `serve.py` entry point deploys a Ray Serve application that loads **all three models** (RNN, Encoder, Decoder) at startup. You can select which model to use per request via the `model` field.
 
 ```bash
 serve run serve:app --host 0.0.0.0 --port 8000
 ```
 
-To switch to the Encoder model, update the import in `serve.py`:
-
-```python
-from sentimentizer.models.encoder import Encoder, get_trained_model
-```
-
-Send a prediction request:
+Send a prediction request (defaults to RNN):
 
 ```bash
 curl -X POST http://localhost:8000 \
@@ -69,13 +63,35 @@ curl -X POST http://localhost:8000 \
   -d '{"text": "the food was terrific"}'
 ```
 
+Use a specific model:
+
+```bash
+# Transformer Encoder (recommended)
+curl -X POST http://localhost:8000 \
+  -H "Content-Type: application/json" \
+  -d '{"text": "the food was terrific", "model": "encoder"}'
+
+# Encoder-Decoder Transformer
+curl -X POST http://localhost:8000 \
+  -H "Content-Type: application/json" \
+  -d '{"text": "the food was terrific", "model": "decoder"}'
+```
+
 Response:
 
 ```json
 {
+  "text": "the food was terrific",
+  "model": "encoder",
   "sentiment_score": 0.9701,
   "prediction": "positive"
 }
+```
+
+List all available models:
+
+```bash
+curl http://localhost:8000/models
 ```
 
 ### Go CLI Client
