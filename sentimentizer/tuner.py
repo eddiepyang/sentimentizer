@@ -100,8 +100,7 @@ def load_search_space(
     if model_type not in tuner_config.search_spaces:
         available = list(tuner_config.search_spaces.keys())
         raise ValueError(
-            f"No search space defined for model type '{model_type}'. "
-            f"Available: {available}"
+            f"No search space defined for model type '{model_type}'. " f"Available: {available}"
         )
 
     return tuner_config.search_spaces[model_type]
@@ -190,8 +189,7 @@ def _get_scheduler(
         )
     else:
         raise ValueError(
-            f"Unknown scheduler: {tuner_config.scheduler}. "
-            "Use 'asha', 'hyperband', or 'median'."
+            f"Unknown scheduler: {tuner_config.scheduler}. " "Use 'asha', 'hyperband', or 'median'."
         )
 
 
@@ -285,7 +283,9 @@ def _trainable_wrapper(config: dict) -> None:
     )
 
     train_loader, val_loader = _new_loaders(
-        train_dataset, val_dataset, trainer_config,
+        train_dataset,
+        val_dataset,
+        trainer_config,
     )
     model.to(device)
 
@@ -405,15 +405,14 @@ def tune_model(
     search_space["device"] = "cpu"
     search_space["dict_path"] = DriverConfig.files.dictionary_file_path
     search_space["embeddings_file_path"] = DriverConfig.embeddings.file_path
-    search_space["embeddings_sub_file_path"] = (
-        DriverConfig.embeddings.sub_file_path
-    )
+    search_space["embeddings_sub_file_path"] = DriverConfig.embeddings.sub_file_path
     search_space["embeddings_emb_length"] = DriverConfig.embeddings.emb_length
     search_space["input_len"] = DriverConfig.tokenizer.max_len
 
     scheduler = _get_scheduler(tuner_config)
     search_alg = OptunaSearch(
-        metric=tuner_config.metric, mode=tuner_config.mode,
+        metric=tuner_config.metric,
+        mode=tuner_config.mode,
     )
 
     reporter = CLIReporter(
@@ -458,16 +457,11 @@ def tune_model(
         "embeddings_emb_length",
         "input_len",
     }
-    clean_config = {
-        k: v for k, v in best_config.items() if k not in internal_keys
-    }
+    clean_config = {k: v for k, v in best_config.items() if k not in internal_keys}
 
     all_results = []
     for trial_result in result:
-        trial_config = {
-            k: v for k, v in trial_result.config.items()
-            if k not in internal_keys
-        }
+        trial_config = {k: v for k, v in trial_result.config.items() if k not in internal_keys}
         all_results.append(
             {"config": trial_config, "metrics": trial_result.metrics},
         )
