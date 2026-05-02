@@ -286,7 +286,7 @@ def _check_convergence(
         recent = history[-3:]
         improvements = [h.get("improvement_over_last", 0.0) for h in recent]
         avg_improvement = sum(improvements) / len(improvements)
-        if abs(avg_improvement) < threshold:
+        if avg_improvement < threshold:
             logger.info(
                 "converged_threshold",
                 avg_improvement=avg_improvement,

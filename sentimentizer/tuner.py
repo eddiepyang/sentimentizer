@@ -198,7 +198,7 @@ def _get_scheduler(
 # ---------------------------------------------------------------------------
 
 
-def _trainable_wrapper(config: dict) -> None:
+def _trainable_wrapper(config: dict, train_dataset: Any = None, val_dataset: Any = None) -> None:
     """Ray Tune trainable that wraps sentimentizer training.
 
     This function is executed by each Ray Tune trial. It:
@@ -222,7 +222,6 @@ def _trainable_wrapper(config: dict) -> None:
         TrainerConfig,
         default_epochs,
     )
-    from sentimentizer.loader import load_train_val_corpus_datasets
     from sentimentizer.trainer import _new_loaders, new_trainer
 
     model_type = config["model_type"]
@@ -278,9 +277,11 @@ def _trainable_wrapper(config: dict) -> None:
         model_type=model_type,
     )
 
-    train_dataset, val_dataset = load_train_val_corpus_datasets(
-        DriverConfig.files.processed_reviews_file_path
-    )
+    if train_dataset is None or val_dataset is None:
+        from sentimentizer.loader import load_train_val_corpus_datasets
+        train_dataset, val_dataset = load_train_val_corpus_datasets(
+            DriverConfig.files.processed_reviews_file_path
+        )
 
     train_loader, val_loader = _new_loaders(
         train_dataset,
@@ -409,6 +410,13 @@ def tune_model(
     search_space["embeddings_emb_length"] = DriverConfig.embeddings.emb_length
     search_space["input_len"] = DriverConfig.tokenizer.max_len
 
+    from sentimentizer.loader import load_train_val_corpus_datasets
+    
+    logger.info("loading_datasets_for_tuning")
+    train_dataset, val_dataset = load_train_val_corpus_datasets(
+        DriverConfig.files.processed_reviews_file_path
+    )
+
     scheduler = _get_scheduler(tuner_config)
     search_alg = OptunaSearch(
         metric=tuner_config.metric,
@@ -429,7 +437,11 @@ def tune_model(
 
     result = tune.Tuner(
         tune.with_resources(
-            _trainable_wrapper,
+            tune.with_parameters(
+                _trainable_wrapper,
+                train_dataset=train_dataset,
+                val_dataset=val_dataset,
+            ),
             resources={"cpu": 1, "gpu": 1 if _gpu_available() else 0},
         ),
         param_space=search_space,
