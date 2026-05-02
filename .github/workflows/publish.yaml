@@ -11,6 +11,9 @@ permissions:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    env:
+      UV_INDEX_URL: https://download.pytorch.org/whl/cpu
+      UV_EXTRA_INDEX_URL: https://pypi.org/simple
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
@@ -26,6 +29,8 @@ jobs:
     env:
       TZ: UTC
       RAY_DISABLE_IMPORT_WARNING: 1
+      UV_INDEX_URL: https://download.pytorch.org/whl/cpu
+      UV_EXTRA_INDEX_URL: https://pypi.org/simple
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
@@ -42,6 +47,9 @@ jobs:
     permissions:
       id-token: write
       contents: read
+    env:
+      UV_INDEX_URL: https://download.pytorch.org/whl/cpu
+      UV_EXTRA_INDEX_URL: https://pypi.org/simple
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
