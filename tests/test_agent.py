@@ -50,7 +50,8 @@ class TestConfigLoader:
 
     def test_rnn_search_space_has_expected_params(self):
         """RNN search space should contain lr, hidden_size, etc."""
-        from sentimentizer.agent.loader import load_agent_config, load_search_space
+        from sentimentizer.agent.loader import load_agent_config
+        from sentimentizer.tuner import load_search_space
 
         _, tuner_cfg = load_agent_config()
         space = load_search_space("rnn", tuner_config=tuner_cfg)
@@ -63,7 +64,8 @@ class TestConfigLoader:
 
     def test_encoder_search_space(self):
         """Encoder search space should have transformer-specific params."""
-        from sentimentizer.agent.loader import load_agent_config, load_search_space
+        from sentimentizer.agent.loader import load_agent_config
+        from sentimentizer.tuner import load_search_space
 
         _, tuner_cfg = load_agent_config()
         space = load_search_space("encoder", tuner_config=tuner_cfg)
@@ -74,7 +76,8 @@ class TestConfigLoader:
 
     def test_decoder_search_space(self):
         """Decoder search space should have encoder/decoder layer counts."""
-        from sentimentizer.agent.loader import load_agent_config, load_search_space
+        from sentimentizer.agent.loader import load_agent_config
+        from sentimentizer.tuner import load_search_space
 
         _, tuner_cfg = load_agent_config()
         space = load_search_space("decoder", tuner_config=tuner_cfg)
@@ -83,7 +86,7 @@ class TestConfigLoader:
 
     def test_invalid_model_type_raises(self):
         """Loading search space for unknown model type should raise ValueError."""
-        from sentimentizer.agent.loader import load_search_space
+        from sentimentizer.tuner import load_search_space
 
         with pytest.raises(ValueError, match="No search space defined"):
             load_search_space("transformer")
@@ -137,7 +140,7 @@ class TestConfigLoader:
 
     def test_env_var_config_path(self):
         """get_config_path should read from environment variable."""
-        from sentimentizer.agent.loader import get_config_path
+        from sentimentizer.tuner import get_config_path
 
         original = os.environ.get("SENTIMENTIZER_AGENT_CONFIG")
         try:
@@ -152,7 +155,7 @@ class TestConfigLoader:
 
     def test_env_var_not_set(self):
         """get_config_path should return None when env var is not set."""
-        from sentimentizer.agent.loader import get_config_path
+        from sentimentizer.tuner import get_config_path
 
         original = os.environ.pop("SENTIMENTIZER_AGENT_CONFIG", None)
         try:
