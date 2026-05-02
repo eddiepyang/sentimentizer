@@ -31,6 +31,11 @@ dependencies = [
     "ray[data]>=2.5.0",
     "ray[serve]>=2.5.0",
     "ray[train]>=2.5.0",
+    "ray[tune]>=2.5.0",
+    "optuna>=3.5",
+    "pyyaml>=6.0",
+    "pydantic-ai-slim[openai]>=0.0.36",
+    "langgraph>=0.2",
 ]
 
 [project.optional-dependencies]

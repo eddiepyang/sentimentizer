@@ -2,6 +2,8 @@ import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 import ray
@@ -113,6 +115,13 @@ class Trainer:
 
         best_val_loss = float("inf")
         patience_counter = 0
+        checkpoint_dir = self.cfg.checkpoint_dir
+        checkpoint_every = self.cfg.checkpoint_every
+        checkpoint_best = self.cfg.checkpoint_best
+
+        # Create checkpoint directory if checkpointing is enabled
+        if checkpoint_dir:
+            Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
 
         for epoch in range(epochs):
             self._train_epoch(model, train_loader)
@@ -120,6 +129,20 @@ class Trainer:
 
             if self.scheduler:
                 self.scheduler.step()
+
+            # Save periodic checkpoint
+            if checkpoint_dir and checkpoint_every > 0 and (epoch + 1) % checkpoint_every == 0:
+                ckpt_path = Path(checkpoint_dir) / f"checkpoint_epoch_{epoch + 1}.pth"
+                save_checkpoint(model, self.optimizer, epoch + 1, ckpt_path)
+                logger.info(f"saved checkpoint: {ckpt_path}")
+
+            # Save best model checkpoint
+            if checkpoint_dir and checkpoint_best and self.val_loss < best_val_loss:
+                best_path = Path(checkpoint_dir) / "best_model.pth"
+                save_checkpoint(model, self.optimizer, epoch + 1, best_path)
+                logger.info(
+                    f"saved best model checkpoint (val_loss={self.val_loss:.6f}): {best_path}"
+                )
 
             # Early stopping based on validation loss
             if self.cfg.early_stopping_patience > 0:
@@ -385,6 +408,114 @@ def _train_func(config: dict) -> None:
         )
 
     logger.info(f"model fitting completed, {time.time()-start:.0f} seconds passed")
+
+
+# ──────────────────────────────────────────────
+# Checkpoint save / load
+# ──────────────────────────────────────────────
+
+
+def save_checkpoint(
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    epoch: int,
+    path: str | Path,
+    scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
+    val_loss: float | None = None,
+) -> None:
+    """Save a training checkpoint to disk.
+
+    Saves model state_dict, optimizer state_dict, scheduler state_dict
+    (if provided), epoch number, and optionally val_loss.
+
+    Args:
+        model: The model to checkpoint.
+        optimizer: The optimizer to checkpoint.
+        epoch: Current epoch number (1-based).
+        path: File path to save the checkpoint (.pth).
+        scheduler: Optional LR scheduler to include in the checkpoint.
+        val_loss: Optional validation loss to include in the checkpoint.
+    """
+    checkpoint: dict[str, Any] = {
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "epoch": epoch,
+    }
+    if scheduler is not None:
+        checkpoint["scheduler_state_dict"] = scheduler.state_dict()
+    if val_loss is not None:
+        checkpoint["val_loss"] = val_loss
+
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    torch.save(checkpoint, path)
+    logger.info(f"checkpoint saved: {path} (epoch={epoch})")
+
+
+def load_checkpoint(
+    path: str | Path,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer | None = None,
+    scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
+    device: str = "cpu",
+) -> dict[str, Any]:
+    """Load a training checkpoint from disk.
+
+    Restores model weights, optimizer state, and scheduler state
+    (if present in the checkpoint). Returns the checkpoint dict
+    with metadata (epoch, val_loss, etc.).
+
+    Args:
+        path: File path to the checkpoint (.pth).
+        model: Model to load weights into.
+        optimizer: Optional optimizer to restore state into.
+        scheduler: Optional scheduler to restore state into.
+        device: Device to map tensors to when loading.
+
+    Returns:
+        Dict with checkpoint metadata (epoch, val_loss, etc.).
+    """
+    checkpoint = torch.load(path, map_location=device, weights_only=False)
+
+    model.load_state_dict(checkpoint["model_state_dict"])
+
+    if optimizer is not None and "optimizer_state_dict" in checkpoint:
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+    if scheduler is not None and "scheduler_state_dict" in checkpoint:
+        scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+
+    logger.info(
+        f"checkpoint loaded: {path} (epoch={checkpoint.get('epoch', '?')})"
+    )
+
+    return checkpoint
+
+
+def list_checkpoints(checkpoint_dir: str | Path) -> list[Path]:
+    """List all checkpoint files in a directory, sorted by epoch.
+
+    Returns:
+        List of Path objects for each .pth checkpoint file.
+    """
+    ckpt_dir = Path(checkpoint_dir)
+    if not ckpt_dir.exists():
+        return []
+    return sorted(ckpt_dir.glob("checkpoint_epoch_*.pth"))
+
+
+def latest_checkpoint(checkpoint_dir: str | Path) -> Path | None:
+    """Find the latest checkpoint in a directory.
+
+    Returns:
+        Path to the latest checkpoint, or None if no checkpoints found.
+    """
+    checkpoints = list_checkpoints(checkpoint_dir)
+    return checkpoints[-1] if checkpoints else None
+
+
+# ──────────────────────────────────────────────
+# Ray Train distributed training
+# ──────────────────────────────────────────────
 
 
 def new_ray_trainer(

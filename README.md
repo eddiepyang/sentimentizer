@@ -179,6 +179,125 @@ The `--distributed` flag enables Ray Train, which distributes data and model tra
 | `--save` | `False` | Save model weights after training |
 | `--distributed` | `False` | Enable distributed training with Ray Train |
 | `--num-workers` | `2` | Ray Train workers (distributed mode only; single-node ignores this) |
+| `--agent-tune` | `False` | Use Pydantic AI + LangGraph agent for hyperparameter tuning (GLM 5.1 via Ollama) |
+| `--agent-config` | `None` | Path to agent config YAML (default: `sentimentizer/agent/config.yaml`) |
+| `--checkpoint-dir` | `""` | Directory to save training checkpoints (empty = no checkpointing) |
+| `--resume` | `False` | Resume training from the latest checkpoint in `--checkpoint-dir` |
+
+## Checkpointing
+
+Model checkpoints save the full training state (model weights, optimizer state, scheduler state, epoch number) so you can resume training after interruptions.
+
+### Enable checkpointing
+
+```bash
+# Save checkpoints every epoch to a directory
+python workflows/driver.py --device mps --type new --checkpoint-dir checkpoints/
+
+# Save checkpoints every N epochs (e.g., every 2 epochs)
+python workflows/driver.py --device cuda --type new --checkpoint-dir checkpoints/ --checkpoint-every 2
+```
+
+This creates two types of checkpoints in `--checkpoint-dir`:
+- **Periodic checkpoints**: `checkpoint_epoch_1.pth`, `checkpoint_epoch_2.pth`, etc.
+- **Best model checkpoint**: `best_model.pth` (lowest validation loss seen so far)
+
+### Resume from a checkpoint
+
+```bash
+# Resume from the latest checkpoint
+python workflows/driver.py --device mps --type new --checkpoint-dir checkpoints/ --resume
+```
+
+The `--resume` flag loads the latest periodic checkpoint and restores model weights, optimizer state, and scheduler state before continuing training.
+
+### Programmatic API
+
+```python
+from sentimentizer.trainer import save_checkpoint, load_checkpoint, latest_checkpoint
+
+# Save a checkpoint
+save_checkpoint(model, optimizer, epoch=5, path="checkpoints/ckpt.pth", val_loss=0.32)
+
+# Find the latest checkpoint
+ckpt_path = latest_checkpoint("checkpoints/")
+
+# Load and resume
+checkpoint = load_checkpoint(ckpt_path, model, optimizer, scheduler, device="cpu")
+print(f"Resuming from epoch {checkpoint['epoch']}")
+```
+
+## Agent Tuning
+
+An LLM-guided hyperparameter tuning agent that uses **Pydantic AI Slim** (GLM 5.1 via Ollama) for reasoning, **LangGraph** for workflow orchestration, and **Ray Tune + Optuna** for the search backend.
+
+### Architecture
+
+```
+analyze (GLM 5.1) → decide (GLM 5.1) → tune (Ray Tune + Optuna) → evaluate
+     ↑                                                              │
+     └──────────────────────────────────────────────────────────────┘
+                          (loop until converged)
+```
+
+1. **analyze** — GLM 5.1 examines training metrics, detects overfitting/underfitting, assesses learning rate
+2. **decide** — GLM 5.1 chooses a strategy (widen, narrow, change_focus, increase_epochs, stop) and produces a validated `TuningDecision` with an updated search space
+3. **tune** — Ray Tune + Optuna executes the hyperparameter search with ASHA scheduling
+4. **evaluate** — Checks convergence (improvement below threshold for 3 iterations, max iterations reached, or agent decides to stop)
+
+### Prerequisites
+
+Install [Ollama](https://ollama.ai) and pull the GLM 5.1 model:
+
+```bash
+ollama pull glm5.1
+```
+
+### Usage
+
+```bash
+# Run the tuning agent with default config
+python workflows/driver.py --model rnn --agent-tune
+
+# With a custom agent config
+python workflows/driver.py --model encoder --agent-tune --agent-config path/to/custom.yaml
+
+# Save the best configuration to JSON
+python workflows/driver.py --model rnn --agent-tune --save
+```
+
+### Configuration
+
+Agent settings are defined in `sentimentizer/agent/config.yaml`:
+
+```yaml
+agent:
+  model_name: glm5.1                    # Ollama model name
+  ollama_base_url: http://localhost:11434/v1
+  max_iterations: 5                      # Max agent loop iterations
+  convergence_threshold: 0.005           # Stop if avg improvement < threshold over 3 iterations
+  temperature: 0.3                       # LLM sampling temperature
+  max_tokens: 2048                       # Max LLM output tokens
+  checkpointing:
+    enabled: true
+    db_path: agent_checkpoints.db
+  human_in_the_loop: false               # Require human approval (future)
+
+tuner:
+  scheduler: asha                        # asha, hyperband, or median
+  metric: val_accuracy
+  mode: max
+  num_samples: 20                        # Trials per tuning iteration
+  grace_period: 2
+  reduction_factor: 3
+  search_spaces:
+    rnn:
+      lr: { type: loguniform, low: 1e-5, high: 1e-2 }
+      hidden_size: { type: choice, values: [128, 256, 512] }
+      ...
+```
+
+Override the config path via the `SENTIMENTIZER_AGENT_CONFIG` environment variable.
 
 ## Model Configuration
 
@@ -289,8 +408,19 @@ sentimentizer/
 ├── loader.py            # Data loading utilities
 ├── tokenizer.py         # Text tokenizer with pre-trained support
 ├── trainer.py           # Training logic
+├── tuner.py             # Ray Tune + Optuna hyperparameter search
 ├── serve.py             # Ray Serve deployment app
 ├── data/                # Training data (Yelp, GloVe)
+├── agent/               # LLM-guided tuning agent
+│   ├── __init__.py      # Package exports
+│   ├── config.yaml      # Agent + tuner configuration (YAML)
+│   ├── loader.py        # YAML → dataclass config loader
+│   ├── models.py        # Pydantic models (AnalysisResult, TuningDecision, etc.)
+│   ├── agents.py        # Pydantic AI agents (GLM 5.1 via Ollama)
+│   ├── prompts.py       # System prompts for analysis & strategy agents
+│   ├── state.py         # LangGraph AgentState TypedDict
+│   ├── nodes.py         # LangGraph node functions (analyze, decide, tune, evaluate)
+│   └── graph.py         # LangGraph StateGraph + run_agent_tuning() entry point
 └── models/
     ├── __init__.py
     ├── rnn.py           # RNN model with GloVe embeddings

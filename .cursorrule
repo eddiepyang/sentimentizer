@@ -1,6 +1,6 @@
 # Project Rules
 
-## After making code changes, always run tests
+## After making code changes, always run tests and lint
 
 After modifying any source file in `sentimentizer/` or `workflows/`, run the test suite to verify nothing is broken:
 
@@ -13,6 +13,15 @@ If the change affects Ray Train or distributed training specifically, also run:
 ```bash
 uv run pytest tests/ -v -k "Ray"
 ```
+
+After running tests, always run the linter and fix any issues before considering the task complete:
+
+```bash
+uv run ruff check .
+uv run ruff check --fix .
+```
+
+If you add new features, modules, or change CLI arguments, update `README.md` accordingly — specifically the CLI arguments table, project structure, and any relevant usage sections.
 
 ## Dependency management
 
@@ -57,8 +66,9 @@ Both ruff and black are run in CI — PRs must pass lint and format checks befor
 
 ## Project structure
 
-- `sentimentizer/` — Core library (models, trainer, tokenizer, extractor, loader, config)
-- `workflows/` — CLI driver for the extract → tokenize → train pipeline
+- `sentimentizer/` — Core library (models, trainer, tokenizer, extractor, loader, config, tuner)
+- `sentimentizer/agent/` — LLM-guided tuning agent (Pydantic AI + LangGraph + Ray Tune/Optuna)
+- `workflows/` — CLI driver for the extract → tokenize → train → agent-tune pipeline
 - `tests/` — Pytest tests
 - `serve.py` — Ray Serve deployment
 - `k8s/` — Kubernetes manifests

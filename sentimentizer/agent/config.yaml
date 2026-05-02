@@ -1,0 +1,116 @@
+# Sentimentizer Agent Configuration
+# Controls the hyperparameter tuning agent powered by GLM 5.1 via Ollama
+
+agent:
+  # LLM configuration (Ollama OpenAI-compatible endpoint)
+  model_name: "glm5.1"
+  ollama_base_url: "http://localhost:11434/v1"
+  temperature: 0.3
+  max_tokens: 2048
+
+  # Agent loop configuration
+  max_iterations: 5
+  convergence_threshold: 0.005  # Stop if improvement < this over last 3 iterations
+  initial_search_strategy: "bayesian"  # bayesian | grid | random
+
+  # LangGraph checkpointing (resume interrupted tuning sessions)
+  checkpointing:
+    enabled: true
+    db_path: "agent_checkpoints.db"
+
+  # Human-in-the-loop (pause before expensive training runs)
+  human_in_the_loop: false
+
+tuner:
+  # Ray Tune + Optuna scheduler configuration
+  scheduler: "asha"  # asha | hyperband | median
+  metric: "val_accuracy"
+  mode: "max"
+  num_samples: 20
+  grace_period: 2
+  reduction_factor: 3
+
+  # Search spaces per model type
+  # Each parameter supports: loguniform, uniform, choice, randint
+  search_spaces:
+    rnn:
+      lr:
+        type: "loguniform"
+        low: 1.0e-5
+        high: 1.0e-2
+      hidden_size:
+        type: "choice"
+        values: [128, 256, 512]
+      num_layers:
+        type: "randint"
+        low: 1
+        high: 4
+      dropout:
+        type: "uniform"
+        low: 0.1
+        high: 0.5
+      weight_decay:
+        type: "loguniform"
+        low: 1.0e-6
+        high: 1.0e-2
+      batch_size:
+        type: "choice"
+        values: [32, 64, 128]
+
+    encoder:
+      lr:
+        type: "loguniform"
+        low: 1.0e-5
+        high: 5.0e-3
+      d_model:
+        type: "choice"
+        values: [128, 256, 512]
+      n_heads:
+        type: "choice"
+        values: [2, 4, 8]
+      n_layers:
+        type: "randint"
+        low: 1
+        high: 6
+      dropout:
+        type: "uniform"
+        low: 0.1
+        high: 0.5
+      weight_decay:
+        type: "loguniform"
+        low: 1.0e-6
+        high: 1.0e-2
+      batch_size:
+        type: "choice"
+        values: [32, 64, 128]
+
+    decoder:
+      lr:
+        type: "loguniform"
+        low: 1.0e-5
+        high: 1.0e-2
+      d_model:
+        type: "choice"
+        values: [128, 256, 512]
+      n_heads:
+        type: "choice"
+        values: [2, 4, 8]
+      n_encoder_layers:
+        type: "randint"
+        low: 1
+        high: 4
+      n_decoder_layers:
+        type: "randint"
+        low: 2
+        high: 6
+      dropout:
+        type: "uniform"
+        low: 0.1
+        high: 0.5
+      weight_decay:
+        type: "loguniform"
+        low: 1.0e-6
+        high: 1.0e-2
+      batch_size:
+        type: "choice"
+        values: [32, 64, 128]
