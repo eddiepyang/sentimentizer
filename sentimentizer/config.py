@@ -3,6 +3,8 @@ import os
 from dataclasses import dataclass
 from logging import INFO
 
+import torch
+
 from sentimentizer import root
 
 data_path = os.path.join(root, "sentimentizer")
@@ -15,7 +17,28 @@ WRITE_BYTES: str = "wb"
 READ_BYTES: str = "rb"
 TEXT_COLUMN: str = "text"
 
-Devices: frozenset[str] = frozenset(("cpu", "cuda", "mps"))
+
+def auto_detect_device() -> str:
+    """Detect the best available compute device: cuda > mps > cpu."""
+    if torch.cuda.is_available():
+        return "cuda"
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+def default_dataloader_workers(device: str) -> int:
+    """Return optimal DataLoader workers for the device.
+
+    MPS has issues with multiprocessing, so use 0 workers.
+    CUDA and CPU benefit from multiple workers for data loading.
+    """
+    if device == "mps":
+        return 0
+    return min(os.cpu_count() or 4, 10)
+
+
+Devices: frozenset[str] = frozenset(("auto", "cpu", "cuda", "mps"))
 
 
 class Device(enum.Enum):
@@ -72,9 +95,9 @@ class FileConfig:
 class TrainerConfig:
     batch_size: int = 64
     epochs: int = 4
-    dataloader_workers: int = 10  # DataLoader subprocesses for data loading
+    dataloader_workers: int = -1  # -1 means auto-detect based on device
     ray_workers: int = 2  # Ray Train workers (only used with --distributed)
-    device: str = "cuda"
+    device: str = "auto"  # "auto" detects best available: cuda > mps > cpu
     memory: bool = True
 
 

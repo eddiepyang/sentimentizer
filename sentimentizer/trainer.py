@@ -1,15 +1,10 @@
 import time
 from collections.abc import Callable
-from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import numpy as np
 import ray
-import ray
 import torch
-from ray import train
-from ray.train import Checkpoint, ScalingConfig
-from ray.train.torch import TorchTrainer, prepare_model
 from ray import train
 from ray.train import Checkpoint, ScalingConfig
 from ray.train.torch import TorchTrainer, prepare_model
@@ -20,10 +15,10 @@ from sentimentizer import new_logger
 from sentimentizer.config import (
     DEFAULT_LOG_LEVEL,
     DriverConfig,
-    DriverConfig,
     OptimizationParams,
     SchedulerParams,
     TrainerConfig,
+    default_dataloader_workers,
 )
 from sentimentizer.loader import CorpusDataset
 
@@ -33,23 +28,25 @@ logger = new_logger(DEFAULT_LOG_LEVEL)
 def _new_loaders(
     train_data: CorpusDataset, val_data: CorpusDataset, cfg: TrainerConfig
 ) -> tuple[DataLoader, DataLoader]:
-) -> tuple[DataLoader, DataLoader]:
+    # Resolve auto-detect dataloader_workers (-1 means auto)
+    workers = cfg.dataloader_workers
+    if workers == -1:
+        workers = default_dataloader_workers(cfg.device)
+
+    pin_mem = cfg.memory if cfg.device != "mps" else False
+
     train_loader = DataLoader(
         dataset=train_data,
         batch_size=cfg.batch_size,
-        num_workers=cfg.dataloader_workers,
-        pin_memory=cfg.memory if cfg.device != "mps" else False,
-        num_workers=cfg.dataloader_workers,
-        pin_memory=cfg.memory if cfg.device != "mps" else False,
+        num_workers=workers,
+        pin_memory=pin_mem,
     )
 
     val_loader = DataLoader(
         val_data,
         batch_size=cfg.batch_size,
-        num_workers=cfg.dataloader_workers,
-        pin_memory=cfg.memory if cfg.device != "mps" else False,
-        num_workers=cfg.dataloader_workers,
-        pin_memory=cfg.memory if cfg.device != "mps" else False,
+        num_workers=workers,
+        pin_memory=pin_mem,
     )
 
     return train_loader, val_loader
@@ -63,28 +60,22 @@ class Trainer:
     loss_function: Callable
     optimizer: optim.Adam
     scheduler: optim.lr_scheduler.LRScheduler
-    scheduler: optim.lr_scheduler.LRScheduler
     cfg: TrainerConfig
-    losses: list[float] = field(default_factory=lambda: list())
     losses: list[float] = field(default_factory=lambda: list())
     _mode: str = field(default="training")
 
     def _train_epoch(self, model: torch.nn.Module, train_loader: DataLoader) -> None:
-    def _train_epoch(self, model: torch.nn.Module, train_loader: DataLoader) -> None:
         i = 0
-        n = len(train_loader.dataset)  # type: ignore[arg-type]
         n = len(train_loader.dataset)  # type: ignore[arg-type]
         model.train()
 
         for j, (sent, target) in enumerate(train_loader):
             self.optimizer.zero_grad()
 
-            # noqa: E501
             log_probs = model(sent.to(self.cfg.device))
-            loss = self.loss_function(log_probs, target.to(self.cfg.device))  # noqa: E501
-            loss = self.loss_function(log_probs, target.to(self.cfg.device))  # noqa: E501
+            loss = self.loss_function(log_probs, target.to(self.cfg.device))
 
-            # gets graident
+            # gets gradient
             loss.backward()
 
             # clips high gradients
@@ -100,16 +91,10 @@ class Trainer:
                     f"{i/n:.2f} of rows completed in "
                     f"{j + 1} cycles, current loss at {np.mean(self.losses[-60:]):.6f}"
                 )
-                    f"{i/n:.2f} of rows completed in "
-                    f"{j + 1} cycles, current loss at {np.mean(self.losses[-60:]):.6f}"
-                )
-                logger.info(
-                    f"current learning rate at {self.optimizer.param_groups[0]['lr']:.6f}"
-                )  # noqa: E501
+                logger.info(f"current learning rate at {self.optimizer.param_groups[0]['lr']:.6f}")
 
     def fit(
         self, model: torch.nn.Module, train_data: CorpusDataset, val_data: CorpusDataset
-    ) -> None:
     ) -> None:
         train_loader, val_loader = _new_loaders(train_data, val_data, self.cfg)
         model.to(self.cfg.device)
@@ -124,16 +109,12 @@ class Trainer:
             if self.scheduler:
                 self.scheduler.step()
             logger.info(f"epoch {epoch} completed")
-        logger.info(
-            f"model fitting completed, {time.time()-start:.0f} seconds passed"
-        )  # noqa: E501
+        logger.info(f"model fitting completed, {time.time()-start:.0f} seconds passed")
 
-    def eval(self, model: torch.nn.Module, val_loader: DataLoader) -> None:
     def eval(self, model: torch.nn.Module, val_loader: DataLoader) -> None:
         logger.info("evaluating predictions...")
         losses = []
         i = 0
-        n = len(val_loader.dataset)  # type: ignore[arg-type]
         n = len(val_loader.dataset)  # type: ignore[arg-type]
         model.to(self.cfg.device)
 
@@ -142,15 +123,11 @@ class Trainer:
             for j, (sent, target) in enumerate(val_loader):
                 preds = model(sent.to(self.cfg.device))
                 losses.append(self.loss_function(preds, target.to(self.cfg.device)).item())
-                losses.append(self.loss_function(preds, target.to(self.cfg.device)).item())
                 i += len(target)
                 if i % (self.cfg.batch_size * 100) == 0:
                     logger.info(
                         f"{i/n:.2f} of rows completed in "
-                        f"{j + 1} cycles, training loss at {np.mean(losses[-60:]):.6f}"
-                    )
-                        f"{i/n:.2f} of rows completed in "
-                        f"{j + 1} cycles, training loss at {np.mean(losses[-60:]):.6f}"
+                        f"{j + 1} cycles, validation loss at {np.mean(losses[-60:]):.6f}"
                     )
             self.val_loss = np.mean(losses)
             logger.info(f"validation loss at: {self.val_loss: .6f}")
@@ -159,7 +136,6 @@ class Trainer:
 def new_trainer(
     model: torch.nn.Module,
     cfg: TrainerConfig,
-) -> Trainer:
 ) -> Trainer:
     optimizer = torch.optim.Adam(
         model.parameters(),
@@ -304,7 +280,7 @@ def _train_func(config: dict) -> None:
         train_loss = np.mean(epoch_losses) if epoch_losses else 0.0
 
         logger.info(
-            f"epoch {epoch} completed, " f"train_loss={train_loss:.6f}, val_loss={val_loss:.6f}"
+            f"epoch {epoch} completed, train_loss={train_loss:.6f}, val_loss={val_loss:.6f}"
         )
 
         # Report metrics and checkpoint to Ray Train
