@@ -26,7 +26,7 @@ class TestConfigLoader:
         from sentimentizer.agent.loader import load_agent_config
 
         agent_cfg, tuner_cfg = load_agent_config()
-        assert agent_cfg.model_name == "glm5.1"
+        assert agent_cfg.model_name == "glm-5.1:cloud"
         assert agent_cfg.ollama_base_url == "http://localhost:11434/v1"
         assert agent_cfg.max_iterations == 5
         assert agent_cfg.convergence_threshold == 0.005

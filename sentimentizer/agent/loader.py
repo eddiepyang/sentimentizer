@@ -34,7 +34,7 @@ class AgentConfig:
     Connects to GLM 5.1 (or any model) via Ollama's OpenAI-compatible API.
     """
 
-    model_name: str = "glm5.1"
+    model_name: str = "glm-5.1:cloud"
     ollama_base_url: str = "http://localhost:11434/v1"
     temperature: float = 0.3
     max_tokens: int = 2048
