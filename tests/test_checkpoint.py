@@ -103,9 +103,7 @@ class TestSaveLoadCheckpoint:
 
         # Save and reload
         save_checkpoint(model, optimizer, epoch=2, path=path, scheduler=scheduler)
-        checkpoint = load_checkpoint(
-            path, new_model, new_optimizer, new_scheduler, device="cpu"
-        )
+        checkpoint = load_checkpoint(path, new_model, new_optimizer, new_scheduler, device="cpu")
 
         assert "scheduler_state_dict" in checkpoint
         assert checkpoint["epoch"] == 2
@@ -130,9 +128,7 @@ class TestSaveLoadCheckpoint:
         save_checkpoint(model, optimizer, epoch=1, path=nested_path)
         assert Path(nested_path).exists()
 
-    def test_load_nonexistent_raises(
-        self, model: SimpleModel, optimizer: torch.optim.Adam
-    ) -> None:
+    def test_load_nonexistent_raises(self, model: SimpleModel, optimizer: torch.optim.Adam) -> None:
         """Loading from a nonexistent path should raise an error."""
         with pytest.raises((FileNotFoundError, RuntimeError)):
             load_checkpoint("/nonexistent/path/ckpt.pth", model, optimizer, device="cpu")

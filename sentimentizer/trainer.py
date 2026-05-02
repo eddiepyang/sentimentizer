@@ -94,7 +94,7 @@ class Trainer:
             self.losses.append(loss.item())
             if i % (self.cfg.batch_size * 100) == 0:
                 logger.info(
-                    f"{i/n:.2f} of rows completed in "
+                    f"{i / n:.2f} of rows completed in "
                     f"{j + 1} cycles, current loss at {np.mean(self.losses[-60:]):.6f}"
                 )
                 logger.info(f"current learning rate at {self.optimizer.param_groups[0]['lr']:.6f}")
@@ -159,7 +159,7 @@ class Trainer:
                         break
 
             logger.info(f"epoch {epoch} completed")
-        logger.info(f"model fitting completed, {time.time()-start:.0f} seconds passed")
+        logger.info(f"model fitting completed, {time.time() - start:.0f} seconds passed")
 
     def eval(self, model: torch.nn.Module, val_loader: DataLoader) -> None:
         logger.info("evaluating predictions...")
@@ -176,7 +176,7 @@ class Trainer:
                 i += len(target)
                 if i % (self.cfg.batch_size * 100) == 0:
                     logger.info(
-                        f"{i/n:.2f} of rows completed in "
+                        f"{i / n:.2f} of rows completed in "
                         f"{j + 1} cycles, validation loss at {np.mean(losses[-60:]):.6f}"
                     )
             self.val_loss = np.mean(losses)
@@ -407,7 +407,7 @@ def _train_func(config: dict) -> None:
             ),
         )
 
-    logger.info(f"model fitting completed, {time.time()-start:.0f} seconds passed")
+    logger.info(f"model fitting completed, {time.time() - start:.0f} seconds passed")
 
 
 # ──────────────────────────────────────────────
@@ -484,9 +484,7 @@ def load_checkpoint(
     if scheduler is not None and "scheduler_state_dict" in checkpoint:
         scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
 
-    logger.info(
-        f"checkpoint loaded: {path} (epoch={checkpoint.get('epoch', '?')})"
-    )
+    logger.info(f"checkpoint loaded: {path} (epoch={checkpoint.get('epoch', '?')})")
 
     return checkpoint
 

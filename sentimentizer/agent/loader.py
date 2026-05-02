@@ -139,8 +139,7 @@ def load_search_space(
     if model_type not in tuner_config.search_spaces:
         available = list(tuner_config.search_spaces.keys())
         raise ValueError(
-            f"No search space defined for model type '{model_type}'. "
-            f"Available: {available}"
+            f"No search space defined for model type '{model_type}'. Available: {available}"
         )
 
     return tuner_config.search_spaces[model_type]
