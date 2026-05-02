@@ -100,8 +100,7 @@ def _get_scheduler(
         )
     else:
         raise ValueError(
-            f"Unknown scheduler: {tuner_config.scheduler}. "
-            f"Use 'asha', 'hyperband', or 'median'."
+            f"Unknown scheduler: {tuner_config.scheduler}. Use 'asha', 'hyperband', or 'median'."
         )
 
 
@@ -208,9 +207,7 @@ def _trainable_wrapper(config: dict) -> None:
         )
 
 
-def _build_model_config(
-    model_type: str, config: dict
-) -> Any:
+def _build_model_config(model_type: str, config: dict) -> Any:
     """Build a model config dataclass from the trial hyperparameters."""
     if model_type == "rnn":
         from sentimentizer.config import RNNConfig
@@ -245,9 +242,7 @@ def _build_model_config(
         raise ValueError(f"Unknown model type: {model_type}")
 
 
-def _compute_accuracy(
-    model: Any, dataloader: Any, device: str
-) -> float:
+def _compute_accuracy(model: Any, dataloader: Any, device: str) -> float:
     """Compute validation accuracy from a model and dataloader."""
     import torch
 
@@ -356,22 +351,26 @@ def tune_model(
 
     # Remove internal config keys from best_config
     internal_keys = {
-        "model_type", "device", "dict_path",
-        "embeddings_file_path", "embeddings_sub_file_path",
-        "embeddings_emb_length", "input_len",
+        "model_type",
+        "device",
+        "dict_path",
+        "embeddings_file_path",
+        "embeddings_sub_file_path",
+        "embeddings_emb_length",
+        "input_len",
     }
     clean_config = {k: v for k, v in best_config.items() if k not in internal_keys}
 
     # Collect all trial results
     all_results = []
     for trial_result in result:
-        trial_config = {
-            k: v for k, v in trial_result.config.items() if k not in internal_keys
-        }
-        all_results.append({
-            "config": trial_config,
-            "metrics": trial_result.metrics,
-        })
+        trial_config = {k: v for k, v in trial_result.config.items() if k not in internal_keys}
+        all_results.append(
+            {
+                "config": trial_config,
+                "metrics": trial_result.metrics,
+            }
+        )
 
     output = {
         "best_config": clean_config,
@@ -396,6 +395,7 @@ def _gpu_available() -> bool:
     """Check if a GPU is available for Ray Tune trials."""
     try:
         import torch
+
         return torch.cuda.is_available()
     except ImportError:
         return False

@@ -35,11 +35,9 @@ class TuningDecision(BaseModel):
         ...,
         description="Brief explanation of why this strategy was chosen",
     )
-    strategy: Literal["widen", "narrow", "change_focus", "increase_epochs", "stop"] = (
-        Field(
-            ...,
-            description="The tuning strategy to apply next",
-        )
+    strategy: Literal["widen", "narrow", "change_focus", "increase_epochs", "stop"] = Field(
+        ...,
+        description="The tuning strategy to apply next",
     )
     search_space: dict[str, SearchSpaceParam] = Field(
         ...,
@@ -76,9 +74,7 @@ class AnalysisResult(BaseModel):
     The LLM produces this after examining training metrics and history.
     """
 
-    summary: str = Field(
-        ..., description="Brief summary of the training results"
-    )
+    summary: str = Field(..., description="Brief summary of the training results")
     overfitting: bool = Field(
         default=False, description="Whether the model appears to be overfitting"
     )

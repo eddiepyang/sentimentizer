@@ -50,10 +50,10 @@ def time_decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         logger.info(
             event,
             function=func.__name__,
-            run_time=f"{te-ts: 2.4f} seconds",
-            available_memory=f"{psutil.virtual_memory().available/1024**3: .2f} GBs",
-            free_memory=f"{psutil.virtual_memory().free/1024**3: .2f} GBs",
-            used_memory=f"{psutil.virtual_memory().used/1024**3: .2f} GBs",
+            run_time=f"{te - ts: 2.4f} seconds",
+            available_memory=f"{psutil.virtual_memory().available / 1024**3: .2f} GBs",
+            free_memory=f"{psutil.virtual_memory().free / 1024**3: .2f} GBs",
+            used_memory=f"{psutil.virtual_memory().used / 1024**3: .2f} GBs",
         )
         return result
 
