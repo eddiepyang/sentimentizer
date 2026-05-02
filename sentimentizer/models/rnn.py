@@ -47,8 +47,7 @@ class RNN(nn.Module):
         dropout: float = RNNConfig.dropout,
     ) -> None:
         super().__init__()
-        self.batch_size = batch_size
-        self.emb_weights = emb_weights
+        _ = batch_size  # batch_size not stored; runtime uses inputs.size(0)
         emb_dim = emb_weights.shape[1]
 
         # Embedding layer with pre-trained GloVe weights
@@ -56,7 +55,7 @@ class RNN(nn.Module):
         self.fc0 = nn.Linear(emb_dim, emb_dim)
 
         self.dropout = dropout
-        self.dropout_layer = nn.Dropout(p=self.dropout)
+        self.dropout_layer = nn.Dropout1d(p=self.dropout, inplace=True)
 
         # Bidirectional LSTM with batch_first=True
         # Processes tokens in sequence order — word 1, word 2, ..., word 200
@@ -73,17 +72,15 @@ class RNN(nn.Module):
         # hidden_size * 2 because bidirectional (forward + backward)
         self.classifier = nn.Sequential(
             nn.Linear(hidden_size * 2, hidden_size),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
             nn.Dropout(dropout),
             nn.Linear(hidden_size, 1),
         )
 
         self.verbose = verbose
 
-    def load_weights(self) -> "RNN":
-        """Load pre-trained GloVe embeddings into the embedding layer."""
-        self.embed_layer.load_state_dict({"weight": self.emb_weights})  # type: ignore
-        return self
+        # Load embedding weights immediately
+        self.embed_layer.load_state_dict({"weight": emb_weights})  # type: ignore
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         """Forward pass producing raw logits.
@@ -95,11 +92,11 @@ class RNN(nn.Module):
             Logits of shape (batch,)
         """
         embeds = self.embed_layer(inputs)  # (B, seq_len, emb_dim)
-        embeds = self.dropout_layer(embeds)
+        self.dropout_layer(embeds)
         if self.verbose:
             logger.info(f"embedding shape {embeds.shape}")
 
-        embeds = F.relu(self.fc0(embeds))  # (B, seq_len, emb_dim)
+        embeds = F.relu(self.fc0(embeds), inplace=True)  # (B, seq_len, emb_dim)
 
         # LSTM processes tokens in order — no permute needed
         out, (hidden, cell) = self.lstm(embeds)  # out: (B, seq_len, hidden*2)
@@ -159,7 +156,6 @@ def new_model(
         num_layers=model_config.num_layers,
         dropout=model_config.dropout,
     )
-    model.load_weights()
     return model
 
 

@@ -12,6 +12,9 @@ from sentimentizer.config import (
     DriverConfig,
     EncoderConfig,
     RNNConfig,
+    auto_detect_device,
+    default_dataloader_workers,
+    default_epochs,
 )
 from sentimentizer.extractor import extract_data
 from sentimentizer.loader import load_train_val_corpus_datasets, load_train_val_ray_datasets
@@ -29,7 +32,7 @@ class RunTypeError(Exception):
 def new_parser() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--device", default="cuda", help="run model on cuda, mps, or cpu"
+        "--device", default="auto", help="device to use: auto (detect), cuda, mps, or cpu"
     )  # noqa: E501
     parser.add_argument(
         "--model",
@@ -57,6 +60,10 @@ def new_parser() -> argparse.Namespace:
 
     if args.type not in ("new", "update"):
         raise RunTypeError
+
+    # Resolve auto-detect device
+    if args.device == "auto":
+        args.device = auto_detect_device()
 
     logger.info(  # type: ignore[call-arg]
         "running with args",
@@ -155,9 +162,16 @@ def _run_fit_single(args: argparse.Namespace) -> None:
 
     model = _load_model(args)
 
+    epochs = default_epochs(args.model)
+    cfg = DriverConfig.trainer(
+        device=args.device,
+        epochs=epochs,
+        dataloader_workers=default_dataloader_workers(args.device),
+    )
     trainer = new_trainer(
         model=model,
-        cfg=DriverConfig.trainer(device=args.device),
+        cfg=cfg,
+        model_type=args.model,
     )
     trainer.fit(model, train_data=train_dataset, val_data=val_dataset)
 

@@ -79,8 +79,7 @@ class Encoder(nn.Module):
         ff_multiplier: int = EncoderConfig.ff_multiplier,
     ) -> None:
         super().__init__()
-        self.batch_size = batch_size
-        self.emb_weights = emb_weights
+        _ = batch_size  # batch_size not stored; runtime uses inputs.size(0)
         self.d_model = d_model
 
         # Embedding layer (vocab_size, emb_dim)
@@ -111,17 +110,13 @@ class Encoder(nn.Module):
         # Classification head: CLS token → logits
         self.classifier = nn.Sequential(
             nn.Linear(d_model, d_model),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
             nn.Dropout(dropout),
             nn.Linear(d_model, 1),
         )
 
-        self.verbose = verbose
-
-    def load_weights(self) -> "Encoder":
-        """Load pre-trained GloVe embeddings into the embedding layer."""
-        self.embed_layer.load_state_dict({"weight": self.emb_weights})  # type: ignore
-        return self
+        # Load embedding weights immediately
+        self.embed_layer.load_state_dict({"weight": emb_weights})  # type: ignore
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         """Forward pass producing raw logits.
@@ -201,7 +196,6 @@ def new_model(
         dropout=model_config.dropout,
         ff_multiplier=model_config.ff_multiplier,
     )
-    model.load_weights()
     return model
 
 
