@@ -2,7 +2,6 @@ import numpy as np
 import pandas as pd
 import ray
 import torch
-from attr import define
 from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset
 
@@ -12,28 +11,31 @@ from sentimentizer.config import DEFAULT_LOG_LEVEL
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
 
-@define
 class CorpusDataset(Dataset):
-    """Dataset class required for pytorch to output items by index"""
+    """Dataset class required for pytorch to output items by index.
 
-    data: pd.DataFrame
-    x_labels: str = "data"
-    y_labels: str = "target"
+    Pre-converts DataFrame columns to tensors at init time for faster
+    iteration during training. Avoids per-sample numpy/tensor conversion.
+    """
 
-    def __attr_pre__init__(self) -> None:
+    def __init__(
+        self, data: pd.DataFrame, x_labels: str = "data", y_labels: str = "target"
+    ) -> None:
         super().__init__()
+        # Pre-convert columns to lists of tensors at init time
+        # This avoids per-__getitem__ numpy/tensor conversion overhead
+        self._x_data = [
+            torch.tensor(np.asarray(val), dtype=torch.long) for val in data[x_labels].values
+        ]
+        self._y_data = [
+            torch.tensor(np.asarray(val), dtype=torch.float32) for val in data[y_labels].values
+        ]
 
     def __len__(self) -> int:
-        return self.data.__len__()
+        return len(self._x_data)
 
     def __getitem__(self, i: int) -> tuple[torch.Tensor, torch.Tensor]:
-        x = self.data[self.x_labels].iat[i]
-        y = self.data[self.y_labels].iat[i]
-        # Convert via numpy to handle Arrow TensorArrayElement types
-        # that Ray Data writes to parquet
-        return torch.tensor(np.asarray(x), dtype=torch.long), torch.tensor(
-            np.asarray(y), dtype=torch.float32
-        )
+        return self._x_data[i], self._y_data[i]
 
 
 def load_train_val_corpus_datasets(

@@ -2809,7 +2809,6 @@ name = "sentimentizer"
 version = "0.8.0"
 source = { editable = "." }
 dependencies = [
-    { name = "attrs" },
     { name = "gensim" },
     { name = "numpy" },
     { name = "orjson" },
@@ -2848,7 +2847,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "attrs", specifier = ">=22.2.0" },
     { name = "black", marker = "extra == 'dev'" },
     { name = "bumpver", marker = "extra == 'dev'" },
     { name = "gensim", specifier = ">=4.3.3" },

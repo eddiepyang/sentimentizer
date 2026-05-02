@@ -3,6 +3,7 @@ import os
 from dataclasses import dataclass
 from logging import INFO
 
+import numpy as np
 import torch
 
 from sentimentizer import root
@@ -16,6 +17,14 @@ BATCH_SIZE: int = 100000
 WRITE_BYTES: str = "wb"
 READ_BYTES: str = "rb"
 TEXT_COLUMN: str = "text"
+
+# Embedding constants
+EMBEDDING_DTYPE = np.float32
+EMBEDDING_RANDOM_MEAN: float = 0.0
+EMBEDDING_RANDOM_STD: float = 0.32
+
+# Logging constants
+EXTRACT_LOG_INTERVAL: int = 100000
 
 
 def auto_detect_device() -> str:
