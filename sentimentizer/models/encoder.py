@@ -1,75 +1,171 @@
+import math
 from importlib.resources import files
 
-from gensim import corpora
 import numpy as np
 import torch
+from gensim import corpora
 from torch import nn
-import torch.nn.functional as F
 
 from sentimentizer import new_logger
-from sentimentizer.config import DEFAULT_LOG_LEVEL, EmbeddingsConfig
+from sentimentizer.config import DEFAULT_LOG_LEVEL, Devices, EmbeddingsConfig, EncoderConfig
 from sentimentizer.extractor import new_embedding_weights
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
+# Module-level singleton for B008 compliance — used as default in function signatures
+_DEFAULT_ENCODER_CONFIG = EncoderConfig()
+
+
+class PositionalEncoding(nn.Module):
+    """Sinusoidal positional encoding from 'Attention Is All You Need'.
+
+    Injects position information into the input so the Transformer can
+    distinguish word order — critical for sentiment (e.g. "not good" vs "good not").
+    """
+
+    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 500) -> None:
+        super().__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        position = torch.arange(max_len).unsqueeze(1)  # (max_len, 1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        pe = torch.zeros(max_len, d_model)  # (max_len, d_model)
+        pe[:, 0::2] = torch.sin(position * div_term)  # even indices
+        pe[:, 1::2] = torch.cos(position * div_term)  # odd indices
+        self.register_buffer("pe", pe.unsqueeze(0))  # (1, max_len, d_model)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Add positional encoding to input.
+
+        Args:
+            x: Tensor of shape (batch, seq_len, d_model)
+
+        Returns:
+            Tensor of shape (batch, seq_len, d_model) with position info added
+        """
+        x = x + self.pe[:, : x.size(1), :]
+        return self.dropout(x)
+
 
 class Encoder(nn.Module):
-    """model class"""
+    """Transformer encoder for sentiment classification.
+
+    Uses full self-attention over the token sequence, a learnable CLS token
+    for sentence-level representation, sinusoidal positional encoding, and
+    a multi-layer Transformer encoder with batch_first=True.
+
+    Args:
+        batch_size: Batch size (used for CLS token initialization)
+        input_len: Maximum sequence length (number of tokens)
+        d_model: Internal Transformer dimension (projected from embeddings)
+        n_heads: Number of attention heads
+        emb_weights: Pre-trained embedding weights of shape (vocab_size, emb_dim)
+        n_layers: Number of Transformer encoder layers
+        verbose: Whether to log debug shapes
+        dropout: Dropout probability
+        ff_multiplier: Feed-forward dim = d_model * ff_multiplier
+    """
 
     def __init__(
         self,
         batch_size: int,
         input_len: int,
-        d_model: int,
-        n_heads: int,
-        emb_weights: torch.Tensor,  # weights are vocabsize x embedding length
+        emb_weights: torch.Tensor,
+        d_model: int = EncoderConfig.d_model,
+        n_heads: int = EncoderConfig.n_heads,
+        n_layers: int = EncoderConfig.n_layers,
         verbose: bool = True,
-        dropout: float = 0.2,
-    ):
+        dropout: float = EncoderConfig.dropout,
+        ff_multiplier: int = EncoderConfig.ff_multiplier,
+    ) -> None:
         super().__init__()
-        # vocab size in, hidden size out
         self.batch_size = batch_size
         self.emb_weights = emb_weights
+        self.d_model = d_model
 
+        # Embedding layer (vocab_size, emb_dim)
         self.embed_layer = nn.Embedding(emb_weights.shape[0], emb_weights.shape[1])
-        self.fc0 = nn.Linear(emb_weights.shape[1], emb_weights.shape[1])
 
-        self.dropout = dropout
-        self.dropout_layer = nn.Dropout1d(p=self.dropout, inplace=True)
-        # input of shape (seq_len, batch, input_size)
-        # https://pytorch.org/docs/stable/nn.html
+        # Project GloVe embeddings to d_model dimension
+        self.proj = nn.Linear(emb_weights.shape[1], d_model)
 
-        encoder_layer = nn.TransformerEncoderLayer(d_model, n_heads)
-        layer_norm = nn.LayerNorm(d_model)
+        # Learnable CLS token prepended to the sequence
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
+
+        # Positional encoding (max_len = input_len + 1 for CLS token)
+        self.pos_encoder = PositionalEncoding(d_model, dropout=dropout, max_len=input_len + 1)
+
+        # Transformer encoder with batch_first=True
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=n_heads,
+            dim_feedforward=d_model * ff_multiplier,
+            dropout=dropout,
+            batch_first=True,
+        )
         self.encoder = nn.TransformerEncoder(
-            encoder_layer=encoder_layer, num_layers=1, norm=layer_norm
+            encoder_layer=encoder_layer,
+            num_layers=n_layers,
         )
 
-        self.fc1 = nn.Linear(input_len, 1)
-        self.fc2 = nn.Linear(emb_weights.shape[1], 1)
+        # Classification head: CLS token → logits
+        self.classifier = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_model, 1),
+        )
+
         self.verbose = verbose
 
-    def load_weights(self):
+    def load_weights(self) -> "Encoder":
+        """Load pre-trained GloVe embeddings into the embedding layer."""
         self.embed_layer.load_state_dict({"weight": self.emb_weights})  # type: ignore
         return self
 
-    def forward(self, inputs: torch.Tensor):
-        embeds = self.embed_layer(inputs)
-        self.dropout_layer(embeds)
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        """Forward pass producing raw logits.
 
-        logger.debug("embedding shape %s" % (embeds.shape,))
-        embeds = F.relu(self.fc0(embeds))
-        encoded_out = self.encoder(embeds.permute(0, 2, 1))
+        Args:
+            inputs: Token IDs of shape (batch, seq_len)
 
-        logger.debug("lstm out shape %s" % (encoded_out.shape,))
-        out = self.fc1(encoded_out)
-        logger.debug("fc1 out shape %s" % (out.shape,))
-        fout = self.fc2(out.permute(0, 2, 1))
-        logger.debug("final %s" % (fout.shape,))
+        Returns:
+            Logits of shape (batch,)
+        """
+        embeds = self.embed_layer(inputs)  # (B, seq_len, emb_dim)
+        logger.debug(f"embedding shape {embeds.shape}")
 
-        return torch.squeeze(fout)
+        # Project to d_model
+        projected = self.proj(embeds)  # (B, seq_len, d_model)
+
+        # Prepend CLS token
+        cls = self.cls_token.expand(inputs.size(0), -1, -1)  # (B, 1, d_model)
+        x = torch.cat([cls, projected], dim=1)  # (B, seq_len+1, d_model)
+
+        # Add positional encoding
+        x = self.pos_encoder(x)  # (B, seq_len+1, d_model)
+
+        # Transformer encoder — self-attention over all tokens including CLS
+        encoded = self.encoder(x)  # (B, seq_len+1, d_model)
+        logger.debug(f"encoder out shape {encoded.shape}")
+
+        # Pool from CLS token position
+        cls_out = encoded[:, 0, :]  # (B, d_model)
+        logger.debug(f"cls out shape {cls_out.shape}")
+
+        # Classify
+        logits = self.classifier(cls_out)  # (B, 1)
+        return torch.squeeze(logits)  # (B,)
 
     def predict(self, converted_text: np.ndarray) -> torch.Tensor:
+        """Run inference with sigmoid activation.
+
+        Args:
+            converted_text: Token IDs as numpy array
+
+        Returns:
+            Sentiment score between 0 (negative) and 1 (positive)
+        """
         with torch.no_grad():
             self.eval()
             output = torch.from_numpy(converted_text)
@@ -77,38 +173,74 @@ class Encoder(nn.Module):
 
 
 def new_model(
-    dict_path: str, embeddings_config: EmbeddingsConfig, batch_size: int, input_len: int
-):
+    dict_path: str,
+    embeddings_config: EmbeddingsConfig,
+    batch_size: int,
+    input_len: int,
+    model_config: EncoderConfig = _DEFAULT_ENCODER_CONFIG,
+) -> Encoder:
+    """Create a new Encoder model with pre-trained GloVe embeddings.
+
+    Args:
+        dict_path: Path to the gensim dictionary file
+        embeddings_config: Configuration for GloVe embeddings
+        batch_size: Batch size
+        input_len: Maximum sequence length
+        model_config: Encoder architecture configuration (defaults from EncoderConfig)
+    """
     dict_yelp = corpora.Dictionary.load(dict_path)
     embedding_matrix = new_embedding_weights(dict_yelp, embeddings_config)
     emb_t = torch.from_numpy(embedding_matrix)
     model = Encoder(
         batch_size=batch_size,
-        d_model=200,
-        n_heads=4,
+        d_model=model_config.d_model,
+        n_heads=model_config.n_heads,
         input_len=input_len,
         emb_weights=emb_t,
+        n_layers=model_config.n_layers,
+        dropout=model_config.dropout,
+        ff_multiplier=model_config.ff_multiplier,
     )
     model.load_weights()
     return model
 
 
-def get_trained_model(batch_size: int, device: str) -> Encoder:
-    """loads pre-trained model"""
+def get_trained_model(
+    batch_size: int,
+    device: str,
+    model_config: EncoderConfig = _DEFAULT_ENCODER_CONFIG,
+) -> Encoder:
+    """Load a pre-trained Encoder model from saved weights.
+
+    Args:
+        batch_size: Batch size for the model
+        device: Device to load weights onto ("cpu", "cuda", or "mps")
+        model_config: Encoder architecture configuration (must match saved weights)
+
+    Returns:
+        Encoder model with loaded weights
+    """
     if device not in Devices:
         raise ValueError("device must be cpu, cuda, or mps")
 
     weights = torch.load(
-        str(files("sentimentizer.data").joinpath("embed_weights.pth")),
+        str(files("sentimentizer.data").joinpath("encoder_weights.pth")),
         map_location=torch.device(device=device),
     )
-    empty_embeddings = torch.zeros(weights["embed_layer.weight"].shape)
+    # Infer vocab size and d_model from saved weights
+    emb_shape = weights["embed_layer.weight"].shape
+    d_model = weights["proj.weight"].shape[0]  # output dim of proj layer
+
+    empty_embeddings = torch.zeros(emb_shape)
     model = Encoder(
         batch_size=batch_size,
-        d_model=200,
-        n_heads=4,
+        d_model=d_model,
+        n_heads=model_config.n_heads,
         input_len=200,
         emb_weights=empty_embeddings,
+        n_layers=model_config.n_layers,
+        dropout=model_config.dropout,
+        ff_multiplier=model_config.ff_multiplier,
     )
 
     model.load_state_dict(weights)

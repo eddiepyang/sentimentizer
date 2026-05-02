@@ -1,22 +1,28 @@
 import argparse
+import shutil
+
+import ray
 import torch
-import pandas as pd
 from gensim import corpora
 
-from sentimentizer.extractor import extract_data, write_arrow
-from sentimentizer.trainer import new_trainer
-
-from sentimentizer.loader import load_train_val_corpus_datasets
 from sentimentizer import new_logger, time_decorator
-
-from sentimentizer.config import DriverConfig, DEFAULT_LOG_LEVEL
+from sentimentizer.config import (
+    DEFAULT_LOG_LEVEL,
+    DecoderConfig,
+    DriverConfig,
+    EncoderConfig,
+    RNNConfig,
+)
+from sentimentizer.extractor import extract_data
+from sentimentizer.loader import load_train_val_corpus_datasets, load_train_val_ray_datasets
 from sentimentizer.tokenizer import Tokenizer
+from sentimentizer.trainer import new_ray_trainer, new_trainer
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
 
 class RunTypeError(Exception):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__("incorrect run type found")
 
 
@@ -33,30 +39,58 @@ def new_parser() -> argparse.Namespace:
     parser.add_argument(
         "--type", default="new", help="type of run, must be new or update"
     )  # noqa: E501
-    parser.add_argument(
-        "--stop", type=int, default=10000, help="how many lines to load"
-    )
+    parser.add_argument("--stop", type=int, default=10000, help="how many lines to load")
     parser.add_argument("--save", type=bool, default=False, help="save data and model")
+    parser.add_argument(
+        "--distributed",
+        action="store_true",
+        default=False,
+        help="use Ray Train for distributed training",
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=2,
+        help="number of Ray Train workers for distributed training (--distributed only)",
+    )
     args = parser.parse_args()
 
     if args.type not in ("new", "update"):
         raise RunTypeError
 
-    logger.info(
+    logger.info(  # type: ignore[call-arg]
         "running with args",
         device=args.device,
         early_stop=args.stop,
+        distributed=args.distributed,
+        ray_workers=args.num_workers,
     )
     return args
 
 
+def _get_model_config(
+    model_type: str,
+) -> RNNConfig | EncoderConfig | DecoderConfig:
+    """Get the model config class for the given model type."""
+    if model_type == "rnn":
+        return DriverConfig.rnn()
+    elif model_type == "encoder":
+        return DriverConfig.encoder()
+    elif model_type == "decoder":
+        return DriverConfig.decoder()
+    else:
+        raise ValueError(f"no matching model config for {model_type}")
+
+
 def _load_model(args: argparse.Namespace) -> torch.nn.Module:
+    model_config = _get_model_config(args.model)
+
     if args.model == "rnn":
-        from sentimentizer.models.rnn import new_model, get_trained_model
+        from sentimentizer.models.rnn import get_trained_model, new_model
     elif args.model == "encoder":
-        from sentimentizer.models.encoder import new_model, get_trained_model
+        from sentimentizer.models.encoder import get_trained_model, new_model
     elif args.model == "decoder":
-        from sentimentizer.models.decoder import new_model, get_trained_model
+        from sentimentizer.models.decoder import get_trained_model, new_model
     else:
         raise ValueError(f"no matching model for {args.model}")
 
@@ -66,9 +100,14 @@ def _load_model(args: argparse.Namespace) -> torch.nn.Module:
             embeddings_config=DriverConfig.embeddings(),
             batch_size=DriverConfig.trainer.batch_size,
             input_len=DriverConfig.tokenizer.max_len,
+            model_config=model_config,
         )
     elif args.type == "update":
-        model = get_trained_model(DriverConfig.trainer.batch_size, args.device)
+        model = get_trained_model(
+            DriverConfig.trainer.batch_size,
+            args.device,
+            model_config=model_config,
+        )
     else:
         raise RunTypeError
 
@@ -76,28 +115,40 @@ def _load_model(args: argparse.Namespace) -> torch.nn.Module:
 
 
 def run_extract(args: argparse.Namespace) -> None:
-    gen = extract_data(
+    ds = extract_data(
         DriverConfig.files.archive_file_path,
         DriverConfig.files.raw_file_path,
         stop=args.stop,
     )
-    write_arrow(gen, args.stop, DriverConfig.files.raw_reviews_file_path)
+    # Remove existing directory if it exists to clean up
+    shutil.rmtree(DriverConfig.files.raw_reviews_file_path, ignore_errors=True)
+    ds.write_parquet(DriverConfig.files.raw_reviews_file_path)
 
 
 def run_tokenize(args: argparse.Namespace) -> None:
-    reviews_data = pd.read_feather(DriverConfig.files.raw_reviews_file_path)
+    reviews_data = ray.data.read_parquet(DriverConfig.files.raw_reviews_file_path)
     if args.type == "new":
-        tokenizer = Tokenizer.from_data(reviews_data)
+        tokenizer = Tokenizer.from_dataset(reviews_data)
     elif args.type == "update":
         dictionary = corpora.Dictionary.load(DriverConfig.files.dictionary_file_path)
         tokenizer = Tokenizer(dictionary=dictionary)
     else:
         raise RunTypeError
-    tokenizer.transform_dataframe(reviews_data)
-    tokenizer.save(reviews_data)
+
+    processed_ds = tokenizer.transform_dataset(reviews_data)
+    shutil.rmtree(DriverConfig.files.processed_reviews_file_path, ignore_errors=True)
+    processed_ds.write_parquet(DriverConfig.files.processed_reviews_file_path)
 
 
 def run_fit(args: argparse.Namespace) -> None:
+    if args.distributed:
+        _run_fit_distributed(args)
+    else:
+        _run_fit_single(args)
+
+
+def _run_fit_single(args: argparse.Namespace) -> None:
+    """Single-node training using the existing Trainer class."""
     train_dataset, val_dataset = load_train_val_corpus_datasets(
         DriverConfig.files.processed_reviews_file_path
     )
@@ -115,8 +166,40 @@ def run_fit(args: argparse.Namespace) -> None:
         logger.info(f"model weights saved to: {DriverConfig.files.weights_file_path}")
 
 
+def _run_fit_distributed(args: argparse.Namespace) -> None:
+    """Distributed training using Ray Train TorchTrainer."""
+    train_ds, val_ds = load_train_val_ray_datasets(DriverConfig.files.processed_reviews_file_path)
+
+    cfg = DriverConfig.trainer(device=args.device, ray_workers=args.num_workers)
+
+    ray_trainer = new_ray_trainer(
+        train_ds=train_ds,
+        val_ds=val_ds,
+        cfg=cfg,
+        model_type=args.model,
+    )
+
+    result = ray_trainer.fit()
+
+    logger.info(  # type: ignore[call-arg]
+        "distributed training completed",
+        best_checkpoint=result.checkpoint,
+        metrics=result.metrics,
+    )
+
+    if args.save:
+        # Load best checkpoint and save model weights
+        with result.checkpoint.as_directory():
+            checkpoint_data = result.checkpoint.to_dict()
+            torch.save(
+                checkpoint_data["model_state_dict"],
+                DriverConfig.files.weights_file_path,
+            )
+        logger.info(f"model weights saved to: {DriverConfig.files.weights_file_path}")
+
+
 @time_decorator
-def main():
+def main() -> None:
     args = new_parser()
     run_extract(args)
     run_tokenize(args)
