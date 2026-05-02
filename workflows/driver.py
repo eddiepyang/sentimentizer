@@ -1,6 +1,10 @@
 import argparse
 import asyncio
+import os
 import shutil
+
+# Disable Ray's automatic uv runtime environment to prevent VIRTUAL_ENV warnings
+os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
 
 import ray
 import torch
@@ -74,6 +78,12 @@ def new_parser() -> argparse.Namespace:
         type=str,
         default="",
         help="directory to save training checkpoints (empty = no checkpointing)",
+    )
+    parser.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=1,
+        help="save checkpoint every N epochs (0 = disabled, default: 1)",
     )
     parser.add_argument(
         "--resume",
@@ -193,6 +203,7 @@ def _run_fit_single(args: argparse.Namespace) -> None:
         epochs=epochs,
         dataloader_workers=default_dataloader_workers(args.device),
         checkpoint_dir=args.checkpoint_dir,
+        checkpoint_every=args.checkpoint_every,
     )
 
     trainer = new_trainer(
@@ -225,7 +236,12 @@ def _run_fit_distributed(args: argparse.Namespace) -> None:
     """Distributed training using Ray Train TorchTrainer."""
     train_ds, val_ds = load_train_val_ray_datasets(DriverConfig.files.processed_reviews_file_path)
 
-    cfg = DriverConfig.trainer(device=args.device, ray_workers=args.num_workers)
+    cfg = DriverConfig.trainer(
+        device=args.device,
+        ray_workers=args.num_workers,
+        checkpoint_dir=args.checkpoint_dir,
+        checkpoint_every=args.checkpoint_every,
+    )
 
     ray_trainer = new_ray_trainer(
         train_ds=train_ds,
