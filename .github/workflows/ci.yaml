@@ -26,9 +26,11 @@ jobs:
       with:
         enable-cache: true
 
-    - name: install dependencies
-      run: |
-        uv sync --extra dev
+    - name: install dependencies (CPU-only torch)
+      run: uv sync --extra dev
+      env:
+        UV_INDEX_URL: https://download.pytorch.org/whl/cpu
+        UV_EXTRA_INDEX_URL: https://pypi.org/simple
 
     - name: ruff lint
       run: uv run ruff check .
@@ -60,9 +62,11 @@ jobs:
       with:
         enable-cache: true
 
-    - name: install dependencies
-      run: |
-        uv sync --extra dev
+    - name: install dependencies (CPU-only torch)
+      run: uv sync --extra dev
+      env:
+        UV_INDEX_URL: https://download.pytorch.org/whl/cpu
+        UV_EXTRA_INDEX_URL: https://pypi.org/simple
 
     - name: list directory
       run: |
@@ -101,9 +105,11 @@ jobs:
       with:
         enable-cache: true
 
-    - name: install dependencies
-      run: |
-        uv sync --extra dev
+    - name: install dependencies (CPU-only torch)
+      run: uv sync --extra dev
+      env:
+        UV_INDEX_URL: https://download.pytorch.org/whl/cpu
+        UV_EXTRA_INDEX_URL: https://pypi.org/simple
 
     - name: run ray train tests
       run: |
