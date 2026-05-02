@@ -3,28 +3,112 @@
 Translates the YAML-driven search space configuration into Ray Tune
 search spaces, runs trials with ASHA scheduling, and returns the best
 configuration found.
+
+This module has NO dependency on the agent package — it is a standalone
+tuning library that the agent calls into.
 """
 
 from __future__ import annotations
 
+import os
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import yaml
 from ray import tune
 from ray.tune import CLIReporter, RunConfig
 from ray.tune.schedulers import ASHAScheduler, HyperBandScheduler, MedianStoppingRule
 from ray.tune.search.optuna import OptunaSearch
 
 from sentimentizer import new_logger
-from sentimentizer.agent.loader import (
-    AgentConfig,
-    TunerConfig,
-    load_agent_config,
-    load_search_space,
-)
 from sentimentizer.config import DEFAULT_LOG_LEVEL
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
+
+
+# ---------------------------------------------------------------------------
+# Configuration dataclasses
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class TunerConfig:
+    """Ray Tune + Optuna hyperparameter search configuration."""
+
+    scheduler: str = "asha"
+    metric: str = "val_accuracy"
+    mode: str = "max"
+    num_samples: int = 20
+    grace_period: int = 2
+    reduction_factor: int = 3
+    search_spaces: dict[str, dict[str, dict[str, Any]]] = field(
+        default_factory=dict,
+    )
+
+
+def _get_default_config_path() -> Path:
+    """Return path to the default config.yaml bundled with the agent package."""
+    return Path(__file__).parent / "agent" / "config.yaml"
+
+
+def load_tuner_config(path: str | Path | None = None) -> TunerConfig:
+    """Load tuner configuration from a YAML file.
+
+    Args:
+        path: Path to YAML config file. If None, uses the default
+              config.yaml bundled with the package.
+
+    Returns:
+        TunerConfig with all settings populated.
+    """
+    path = _get_default_config_path() if path is None else Path(path)
+
+    if not path.exists():
+        raise FileNotFoundError(f"Config file not found: {path}")
+
+    with open(path) as f:
+        raw = yaml.safe_load(f)
+
+    return TunerConfig(**raw.get("tuner", {}))
+
+
+def load_search_space(
+    model_type: str,
+    tuner_config: TunerConfig | None = None,
+    config_path: str | Path | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Load the raw search space for a specific model type.
+
+    Args:
+        model_type: One of 'rnn', 'encoder', 'decoder'.
+        tuner_config: Optional pre-loaded TunerConfig. If None, loads
+                      from config_path.
+        config_path: Path to YAML config file (only used if
+                     tuner_config is None).
+
+    Returns:
+        Dict mapping parameter names to their search space specs,
+        e.g. {'lr': {'type': 'loguniform', 'low': 1e-5, 'high': 1e-2}}
+
+    Raises:
+        ValueError: If model_type is not found in the search spaces.
+    """
+    if tuner_config is None:
+        tuner_config = load_tuner_config(config_path)
+
+    if model_type not in tuner_config.search_spaces:
+        available = list(tuner_config.search_spaces.keys())
+        raise ValueError(
+            f"No search space defined for model type '{model_type}'. " f"Available: {available}"
+        )
+
+    return tuner_config.search_spaces[model_type]
+
+
+# ---------------------------------------------------------------------------
+# Search space builder
+# ---------------------------------------------------------------------------
 
 
 def build_search_space(
@@ -39,7 +123,7 @@ def build_search_space(
         overrides: Optional dict of parameter overrides from the agent.
                    Keys are parameter names, values are search space dicts
                    (same format as YAML). These override the YAML defaults.
-        config_path: Path to agent config YAML (uses default if None).
+        config_path: Path to config YAML (uses default if None).
 
     Returns:
         Dict mapping parameter names to Ray Tune search space objects.
@@ -68,6 +152,11 @@ def build_search_space(
             raise ValueError(f"Unknown search space type: {param_type}")
 
     return search_space
+
+
+# ---------------------------------------------------------------------------
+# Scheduler factory
+# ---------------------------------------------------------------------------
 
 
 def _get_scheduler(
@@ -100,8 +189,13 @@ def _get_scheduler(
         )
     else:
         raise ValueError(
-            f"Unknown scheduler: {tuner_config.scheduler}. Use 'asha', 'hyperband', or 'median'."
+            f"Unknown scheduler: {tuner_config.scheduler}. " "Use 'asha', 'hyperband', or 'median'."
         )
+
+
+# ---------------------------------------------------------------------------
+# Ray Tune trainable
+# ---------------------------------------------------------------------------
 
 
 def _trainable_wrapper(config: dict) -> None:
@@ -122,9 +216,14 @@ def _trainable_wrapper(config: dict) -> None:
     - 'embeddings_emb_length': int
     - 'input_len': int
     """
-    from sentimentizer.config import DriverConfig, EmbeddingsConfig, TrainerConfig
+    from sentimentizer.config import (
+        DriverConfig,
+        EmbeddingsConfig,
+        TrainerConfig,
+        default_epochs,
+    )
     from sentimentizer.loader import load_train_val_corpus_datasets
-    from sentimentizer.trainer import new_trainer
+    from sentimentizer.trainer import _new_loaders, new_trainer
 
     model_type = config["model_type"]
     dict_path = config["dict_path"]
@@ -135,6 +234,16 @@ def _trainable_wrapper(config: dict) -> None:
     )
     input_len = config["input_len"]
     device = config.get("device", "cpu")
+
+    # Validate d_model divisible by n_heads for transformer models
+    if model_type in ("encoder", "decoder"):
+        d_model = config.get("d_model", 256)
+        n_heads = config.get("n_heads", 4)
+        if d_model % n_heads != 0:
+            for nh in sorted([2, 4, 8], reverse=True):
+                if d_model % nh == 0:
+                    config["n_heads"] = nh
+                    break
 
     # Create model with trial hyperparameters
     model_config = _build_model_config(model_type, config)
@@ -156,12 +265,11 @@ def _trainable_wrapper(config: dict) -> None:
         model_config=model_config,
     )
 
-    # Set up trainer with trial hyperparameters
     trainer_config = TrainerConfig(
         batch_size=config.get("batch_size", 64),
         epochs=config.get("epochs", 4),
         device=device,
-        dataloader_workers=0,  # Use 0 for Ray Tune workers to avoid multiprocessing issues
+        dataloader_workers=0,  # Avoid multiprocessing in Ray workers
     )
 
     trainer = new_trainer(
@@ -170,18 +278,16 @@ def _trainable_wrapper(config: dict) -> None:
         model_type=model_type,
     )
 
-    # Load data
     train_dataset, val_dataset = load_train_val_corpus_datasets(
         DriverConfig.files.processed_reviews_file_path
     )
 
-    # Create data loaders
-    from sentimentizer.trainer import _new_loaders
-
-    train_loader, val_loader = _new_loaders(train_dataset, val_dataset, trainer_config)
+    train_loader, val_loader = _new_loaders(
+        train_dataset,
+        val_dataset,
+        trainer_config,
+    )
     model.to(device)
-
-    from sentimentizer.config import default_epochs
 
     epochs = config.get("epochs", default_epochs(model_type))
     best_val_loss = float("inf")
@@ -190,15 +296,12 @@ def _trainable_wrapper(config: dict) -> None:
         trainer._train_epoch(model, train_loader)  # noqa: SLF001
         trainer.eval(model, val_loader)
 
-        # Compute validation accuracy
         val_accuracy = _compute_accuracy(model, val_loader, device)
         val_loss = trainer.val_loss
 
-        # Track best loss for early stopping within the trial
         if val_loss < best_val_loss:
             best_val_loss = val_loss
 
-        # Report metrics to Ray Tune
         tune.report(
             val_accuracy=val_accuracy,
             val_loss=val_loss,
@@ -259,9 +362,13 @@ def _compute_accuracy(model: Any, dataloader: Any, device: str) -> float:
     return correct / max(total, 1)
 
 
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
 def tune_model(
     model_type: str,
-    agent_config: AgentConfig | None = None,
     tuner_config: TunerConfig | None = None,
     search_space_overrides: dict[str, dict[str, Any]] | None = None,
     config_path: str | Path | None = None,
@@ -270,10 +377,10 @@ def tune_model(
 
     Args:
         model_type: One of 'rnn', 'encoder', 'decoder'.
-        agent_config: Agent configuration (loaded from YAML if None).
         tuner_config: Tuner configuration (loaded from YAML if None).
-        search_space_overrides: Optional overrides from the agent's TuningDecision.
-        config_path: Path to agent config YAML.
+        search_space_overrides: Optional overrides from the agent's
+            TuningDecision.
+        config_path: Path to config YAML.
 
     Returns:
         Dict with keys:
@@ -283,35 +390,31 @@ def tune_model(
         - 'trial_count': int
         - 'results': list of all trial results
     """
-    # Load configs if not provided
-    if agent_config is None or tuner_config is None:
-        loaded_agent_cfg, loaded_tuner_cfg = load_agent_config(config_path)
-        agent_config = agent_config or loaded_agent_cfg
-        tuner_config = tuner_config or loaded_tuner_cfg
+    if tuner_config is None:
+        tuner_config = load_tuner_config(config_path)
 
-    # Build search space
     search_space = build_search_space(
         model_type,
         overrides=search_space_overrides,
         config_path=config_path,
     )
 
-    # Add fixed config that trials need
     from sentimentizer.config import DriverConfig
 
     search_space["model_type"] = model_type
-    search_space["device"] = tuner_config.mode  # will be overridden by device arg
+    search_space["device"] = "cpu"
     search_space["dict_path"] = DriverConfig.files.dictionary_file_path
     search_space["embeddings_file_path"] = DriverConfig.embeddings.file_path
     search_space["embeddings_sub_file_path"] = DriverConfig.embeddings.sub_file_path
     search_space["embeddings_emb_length"] = DriverConfig.embeddings.emb_length
     search_space["input_len"] = DriverConfig.tokenizer.max_len
 
-    # Create scheduler and search algorithm
     scheduler = _get_scheduler(tuner_config)
-    search_alg = OptunaSearch(metric=tuner_config.metric, mode=tuner_config.mode)
+    search_alg = OptunaSearch(
+        metric=tuner_config.metric,
+        mode=tuner_config.mode,
+    )
 
-    # Reporter for CLI output
     reporter = CLIReporter(
         metric_columns=["val_accuracy", "val_loss", "train_loss", "epoch"],
     )
@@ -324,7 +427,6 @@ def tune_model(
         search_algorithm="optuna",
     )
 
-    # Run Ray Tune
     result = tune.Tuner(
         tune.with_resources(
             _trainable_wrapper,
@@ -335,8 +437,6 @@ def tune_model(
             scheduler=scheduler,
             search_alg=search_alg,
             num_samples=tuner_config.num_samples,
-            metric=tuner_config.metric,
-            mode=tuner_config.mode,
         ),
         run_config=RunConfig(
             progress_reporter=reporter,
@@ -344,12 +444,10 @@ def tune_model(
         ),
     ).fit()
 
-    # Extract best results
     best_result = result.get_best_result()
     best_config = best_result.config
     best_metrics = best_result.metrics
 
-    # Remove internal config keys from best_config
     internal_keys = {
         "model_type",
         "device",
@@ -361,15 +459,11 @@ def tune_model(
     }
     clean_config = {k: v for k, v in best_config.items() if k not in internal_keys}
 
-    # Collect all trial results
     all_results = []
     for trial_result in result:
         trial_config = {k: v for k, v in trial_result.config.items() if k not in internal_keys}
         all_results.append(
-            {
-                "config": trial_config,
-                "metrics": trial_result.metrics,
-            }
+            {"config": trial_config, "metrics": trial_result.metrics},
         )
 
     output = {
@@ -399,3 +493,15 @@ def _gpu_available() -> bool:
         return torch.cuda.is_available()
     except ImportError:
         return False
+
+
+# Allow overriding config path via environment variable
+CONFIG_PATH_ENV = "SENTIMENTIZER_AGENT_CONFIG"
+
+
+def get_config_path() -> Path | None:
+    """Get config path from environment variable, or None for default."""
+    env_path = os.environ.get(CONFIG_PATH_ENV)
+    if env_path:
+        return Path(env_path)
+    return None
