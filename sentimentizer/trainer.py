@@ -1,3 +1,4 @@
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -15,6 +16,8 @@ from sentimentizer import new_logger
 from sentimentizer.config import (
     DEFAULT_LOG_LEVEL,
     DriverConfig,
+    EncoderOptimizationParams,
+    EncoderSchedulerParams,
     OptimizationParams,
     SchedulerParams,
     TrainerConfig,
@@ -133,23 +136,75 @@ class Trainer:
             logger.info(f"validation loss at: {self.val_loss: .6f}")
 
 
+def _get_opt_params(model_type: str) -> OptimizationParams | EncoderOptimizationParams:
+    """Return optimization params appropriate for the model type."""
+    if model_type in ("encoder", "decoder"):
+        return EncoderOptimizationParams()
+    return OptimizationParams()
+
+
+def _get_sched_params(model_type: str) -> SchedulerParams | EncoderSchedulerParams:
+    """Return scheduler params appropriate for the model type."""
+    if model_type in ("encoder", "decoder"):
+        return EncoderSchedulerParams()
+    return SchedulerParams()
+
+
+class _LinearWarmupCosineScheduler(torch.optim.lr_scheduler.LambdaLR):
+    """Linear warmup followed by cosine decay.
+
+    During warmup, LR increases linearly from 0 to base_lr.
+    After warmup, follows CosineAnnealing decay to eta_min.
+    """
+
+    def __init__(
+        self,
+        optimizer: torch.optim.Optimizer,
+        warmup_steps: int,
+        total_steps: int,
+        eta_min: float = 1e-6,
+    ) -> None:
+        def lr_lambda(step: int) -> float:
+            if step < warmup_steps:
+                return step / max(1, warmup_steps)
+            progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+            return eta_min + (1.0 - eta_min) * 0.5 * (1.0 + math.cos(math.pi * progress))
+
+        super().__init__(optimizer, lr_lambda)
+
+
 def new_trainer(
     model: torch.nn.Module,
     cfg: TrainerConfig,
+    model_type: str = "rnn",
 ) -> Trainer:
-    optimizer = torch.optim.Adam(
+    opt = _get_opt_params(model_type)
+    sched = _get_sched_params(model_type)
+
+    optimizer = torch.optim.AdamW(
         model.parameters(),
-        lr=OptimizationParams.lr,
-        betas=OptimizationParams.betas,
-        weight_decay=OptimizationParams.weight_decay,
+        lr=opt.lr,
+        betas=opt.betas,
+        weight_decay=opt.weight_decay,
     )
 
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer,
-        T_max=SchedulerParams.T_max,
-        eta_min=SchedulerParams.eta_min,
-        last_epoch=SchedulerParams.last_epoch,
-    )
+    # Use warmup+cosine for transformer models, simple cosine for RNN
+    if isinstance(sched, EncoderSchedulerParams) and sched.warmup_epochs > 0:
+        warmup_steps = sched.warmup_epochs * cfg.epochs  # approximate
+        total_steps = sched.T_max * cfg.epochs
+        scheduler = _LinearWarmupCosineScheduler(
+            optimizer,
+            warmup_steps=warmup_steps,
+            total_steps=total_steps,
+            eta_min=sched.eta_min,
+        )
+    else:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=sched.T_max,
+            eta_min=sched.eta_min,
+            last_epoch=sched.last_epoch,
+        )
 
     trainer = Trainer(
         loss_function=torch.nn.BCEWithLogitsLoss(),
@@ -180,9 +235,10 @@ def _train_func(config: dict) -> None:
     lr = config["lr"]
     betas = tuple(config["betas"])
     weight_decay = config["weight_decay"]
-    scheduler_t_max = config["scheduler_t_max"]
-    scheduler_eta_min = config["scheduler_eta_min"]
-    scheduler_last_epoch = config["scheduler_last_epoch"]
+    use_warmup = config.get("use_warmup", False)
+    warmup_steps = config.get("warmup_steps", 0)
+    total_steps = config.get("total_steps", 0)
+    scheduler_eta_min = config.get("scheduler_eta_min", 1e-6)
 
     # Unpack model config
     model_type = config["model_type"]
@@ -223,19 +279,28 @@ def _train_func(config: dict) -> None:
     # Determine device from model (set by prepare_model)
     device = next(model.parameters()).device
 
-    # Set up optimizer and scheduler
-    optimizer = torch.optim.Adam(
+    # Set up optimizer (AdamW for all models)
+    optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=lr,
         betas=betas,
         weight_decay=weight_decay,
     )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer,
-        T_max=scheduler_t_max,
-        eta_min=scheduler_eta_min,
-        last_epoch=scheduler_last_epoch,
-    )
+
+    # Set up scheduler (warmup+cosine for transformers, cosine for RNN)
+    if use_warmup and warmup_steps > 0:
+        scheduler = _LinearWarmupCosineScheduler(
+            optimizer,
+            warmup_steps=warmup_steps,
+            total_steps=total_steps,
+            eta_min=scheduler_eta_min,
+        )
+    else:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=epochs,
+            eta_min=scheduler_eta_min,
+        )
     loss_function = torch.nn.BCEWithLogitsLoss()
 
     # Get dataset shards for this worker
@@ -318,17 +383,30 @@ def new_ray_trainer(
         Configured TorchTrainer ready to call .fit()
     """
 
+    # Get model-specific optimization and scheduler params
+    opt = _get_opt_params(model_type)
+    sched = _get_sched_params(model_type)
+
+    use_warmup = isinstance(sched, EncoderSchedulerParams) and sched.warmup_epochs > 0
+    if isinstance(sched, EncoderSchedulerParams):
+        warmup_steps = sched.warmup_epochs * cfg.epochs
+        total_steps = sched.T_max * cfg.epochs
+    else:
+        warmup_steps = 0
+        total_steps = 0
+
     # Build train_loop_config with everything the worker needs to
     # create the model and run training (models cannot be passed across workers)
     train_loop_config = {
         "epochs": cfg.epochs,
         "batch_size": cfg.batch_size,
-        "lr": OptimizationParams.lr,
-        "betas": list(OptimizationParams.betas),
-        "weight_decay": OptimizationParams.weight_decay,
-        "scheduler_t_max": SchedulerParams.T_max,
-        "scheduler_eta_min": SchedulerParams.eta_min,
-        "scheduler_last_epoch": SchedulerParams.last_epoch,
+        "lr": opt.lr,
+        "betas": list(opt.betas),
+        "weight_decay": opt.weight_decay,
+        "use_warmup": use_warmup,
+        "warmup_steps": warmup_steps,
+        "total_steps": total_steps,
+        "scheduler_eta_min": sched.eta_min,
         "model_type": model_type,
         "dict_path": driver_config.files.dictionary_file_path,
         "embeddings_file_path": driver_config.embeddings.file_path,

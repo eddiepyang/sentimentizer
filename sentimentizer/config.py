@@ -55,16 +55,51 @@ class FitModes(enum.Enum):
 
 @dataclass
 class OptimizationParams:
+    """Default optimization params (used for RNN).
+
+    Encoder and Decoder models override these via their config.
+    """
+
     lr: float = 0.001
     betas: tuple[float, float] = (0.9, 0.999)
     weight_decay: float = 1e-4
 
 
 @dataclass
+class EncoderOptimizationParams:
+    """Optimization params for Transformer models (Encoder, Decoder).
+
+    Uses lower LR and AdamW-style weight decay for stable training.
+    """
+
+    lr: float = 0.0005
+    betas: tuple[float, float] = (0.9, 0.999)
+    weight_decay: float = 0.01
+
+
+@dataclass
 class SchedulerParams:
+    """Default scheduler params (used for RNN).
+
+    Encoder and Decoder models override these via their config.
+    """
+
     T_max: int = 4
     eta_min: float = 1e-6
     last_epoch: int = -1
+
+
+@dataclass
+class EncoderSchedulerParams:
+    """Scheduler params for Transformer models.
+
+    Includes warmup_epochs for linear LR warmup at the start of training.
+    """
+
+    T_max: int = 4
+    eta_min: float = 1e-6
+    last_epoch: int = -1
+    warmup_epochs: int = 1  # linear warmup for this many epochs
 
 
 @dataclass(frozen=True)

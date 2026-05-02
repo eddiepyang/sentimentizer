@@ -168,6 +168,7 @@ def _run_fit_single(args: argparse.Namespace) -> None:
     trainer = new_trainer(
         model=model,
         cfg=cfg,
+        model_type=args.model,
     )
     trainer.fit(model, train_data=train_dataset, val_data=val_dataset)
 
