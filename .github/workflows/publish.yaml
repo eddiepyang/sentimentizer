@@ -1,0 +1,53 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  id-token: write  # Required for Trusted Publishing (OIDC)
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+      - run: uv sync --extra dev
+      - run: uv run ruff check .
+      - run: uv run black --check .
+
+  test:
+    needs: lint
+    runs-on: ubuntu-latest
+    env:
+      TZ: UTC
+      RAY_DISABLE_IMPORT_WARNING: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+      - run: uv sync --extra dev
+      - run: uv run pytest --exitfirst --verbose --failed-first --cov=. --cov-report html
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    environment: pypi
+    if: github.event.release.target_commitish == 'master'
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+      - run: uv sync --extra dev
+      - run: uv build
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

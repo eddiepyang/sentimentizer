@@ -32,15 +32,15 @@ class FitModes(enum.Enum):
 
 @dataclass
 class OptimizationParams:
-    lr: float = 0.005
-    betas: tuple[float, float] = (0.7, 0.99)
+    lr: float = 0.001
+    betas: tuple[float, float] = (0.9, 0.999)
     weight_decay: float = 1e-4
 
 
 @dataclass
 class SchedulerParams:
-    T_max: int = 100
-    eta_min: int = 0
+    T_max: int = 4
+    eta_min: float = 1e-6
     last_epoch: int = -1
 
 

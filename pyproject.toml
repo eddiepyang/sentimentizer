@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sentimentizer"
-version = "0.7.0"
+version = "0.8.0"
 description = "straight forward rnn model"
 readme = "README.md"
 authors = [{ name = "Edward Yang", email = "edwardpyang@gmail.com" }]

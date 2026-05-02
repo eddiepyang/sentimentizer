@@ -72,7 +72,7 @@ class Trainer:
             loss.backward()
 
             # clips high gradients
-            torch.nn.utils.clip_grad.clip_grad_norm_(model.parameters(), max_norm=0.3, norm_type=2)
+            torch.nn.utils.clip_grad.clip_grad_norm_(model.parameters(), max_norm=1.0, norm_type=2)
 
             # updates with new gradient
             self.optimizer.step()
@@ -80,8 +80,6 @@ class Trainer:
             i += len(target)
             self.losses.append(loss.item())
             if i % (self.cfg.batch_size * 100) == 0:
-                if self.scheduler:
-                    self.scheduler.step()
                 logger.info(
                     f"{i/n:.2f} of rows completed in "
                     f"{j + 1} cycles, current loss at {np.mean(self.losses[-60:]):.6f}"
@@ -257,7 +255,7 @@ def _train_func(config: dict) -> None:
             loss = loss_function(log_probs, target)
             loss.backward()
 
-            torch.nn.utils.clip_grad.clip_grad_norm_(model.parameters(), max_norm=0.3, norm_type=2)
+            torch.nn.utils.clip_grad.clip_grad_norm_(model.parameters(), max_norm=1.0, norm_type=2)
             optimizer.step()
 
             epoch_losses.append(loss.item())
