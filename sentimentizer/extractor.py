@@ -1,20 +1,20 @@
+import tarfile
 import zipfile
+from collections.abc import Generator
 from itertools import islice
-from typing import IO, Generator
+from typing import IO
 
 import numpy as np
 import orjson as json
 import pyarrow as pa
+import ray
 from gensim import corpora
 
 from sentimentizer import new_logger, time_decorator
-from sentimentizer.config import DEFAULT_LOG_LEVEL, EmbeddingsConfig
-from sentimentizer.tokenizer import tokenize
+from sentimentizer.config import BATCH_SIZE, DEFAULT_LOG_LEVEL, EmbeddingsConfig
+from sentimentizer.tokenizer import regex_tokenize
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
-
-BATCH_SIZE = 100000
-WRITE_BYTES = "wb"
 
 
 def generate_batch(
@@ -32,47 +32,39 @@ def process_json(json_file: IO[bytes], stop: int = 0) -> Generator:
         if i % 100000 == 0:
             logger.debug(f"processing line {i}")
         dc = json.loads(line)
-        dc["text"] = tokenize(dc.get("text"))
         if i >= stop and stop != 0:
             break
         yield dc
 
 
 @time_decorator
-def extract_data(file_path: str, compressed_file_name: str, stop: int = 0) -> Generator:
-    "reads from zipped yelp data file"
+def extract_data(file_path: str, compressed_file_name: str, stop: int = 0) -> ray.data.Dataset:
+    """Reads from zipped or tarred yelp data file.
 
-    with zipfile.ZipFile(file_path) as zfile:
-        inf = zfile.open(compressed_file_name)
-    return process_json(inf, stop)
+    Supports both .zip and .tar/.tar.gz archives.
+    """
 
+    def generate_lines(x: int) -> Generator:
+        if file_path.endswith((".tar", ".tar.gz", ".tgz")):
+            with tarfile.open(file_path, "r:*") as tar:
+                member = tar.getmember(compressed_file_name)
+                f = tar.extractfile(member)
+                if f is None:
+                    raise ValueError(f"Could not extract {compressed_file_name} from {file_path}")
+                yield from process_json(f, stop)
+        else:
+            with zipfile.ZipFile(file_path) as zfile:
+                inf = zfile.open(compressed_file_name)
+                yield from process_json(inf, stop)
 
-def write_arrow(
-    generator_input: Generator,
-    iter_size: int,
-    write_path: str,
-    schema: pa.Schema = None,
-) -> None:
-    gen = generate_batch(generator_input, iter_size)
+    # Use flat_map to read from the archive
+    ds = ray.data.range(1).flat_map(generate_lines)
 
-    in_schema = schema
-    if schema is None:
-        records, _, _ = next(gen)
-        batch = pa.RecordBatch.from_pylist(records)
-        in_schema = batch.schema
+    def tokenize(row: dict) -> dict:
+        row["tokens"] = regex_tokenize(row["text"])
+        return row
 
-    with pa.OSFile(write_path, WRITE_BYTES) as sink, pa.ipc.RecordBatchFileWriter(
-        sink, in_schema
-    ) as writer:
-        if schema is None:
-            writer.write(batch)
-
-        for records, _, end in gen:
-            try:
-                batch = pa.RecordBatch.from_pylist(records)
-                writer.write(batch)
-            except pa.ArrowInvalid:
-                logger.info(f"file completed, last item count was {end}")
+    return ds.map(tokenize)
 
 
 @time_decorator
@@ -98,9 +90,7 @@ def extract_embeddings(
 
 
 @time_decorator
-def new_embedding_weights(
-    dictionary: corpora.Dictionary, cfg: EmbeddingsConfig
-) -> np.ndarray:
+def new_embedding_weights(dictionary: corpora.Dictionary, cfg: EmbeddingsConfig) -> np.ndarray:
     """converts local dictionary to embeddings from glove"""
 
     embeddings_dict: dict = extract_embeddings(dictionary, cfg)

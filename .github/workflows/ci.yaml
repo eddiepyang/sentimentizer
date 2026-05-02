@@ -1,45 +1,114 @@
 name: ci
-on:  
+on:
   push:
     branches:
       - master
   pull_request:
     branches:
       - master
- 
+
 jobs:
+  lint:
+    name: lint and format check
+    runs-on: ubuntu-latest
+
+    steps:
+
+    - uses: actions/checkout@v4
+
+    - name: set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: install uv
+      uses: astral-sh/setup-uv@v4
+      with:
+        enable-cache: true
+
+    - name: install dependencies
+      run: |
+        uv sync --extra dev
+
+    - name: ruff lint
+      run: uv run ruff check .
+
+    - name: black format check
+      run: uv run black --check .
+
   build:
     name: run python tests
     runs-on: ubuntu-latest
- 
+    needs: lint
+
     steps:
- 
-    - uses: actions/checkout@v2
- 
+
+    - uses: actions/checkout@v4
+
     - name: setup timezone
       uses: zcong1993/setup-timezone@master
       with:
         timezone: UTC
- 
+
     - name: set up Python 3.11
-      uses: actions/setup-python@v2
+      uses: actions/setup-python@v5
       with:
         python-version: "3.11"
- 
-    - name: install python dependencies
-      run: |
-        sudo apt-get install -y $(grep -o ^[^#][[:alnum:]-]* "packages.list")
-        python3 -m pip install --upgrade pip
-        pip3 install .
-        pip3 install pytest pytest-cov
 
-    - name: list directory 
+    - name: install uv
+      uses: astral-sh/setup-uv@v4
+      with:
+        enable-cache: true
+
+    - name: install dependencies
+      run: |
+        uv sync --extra dev
+
+    - name: list directory
       run: |
         pwd
         ls
 
     - name: test with pytest
       run: |
-        pytest --exitfirst --verbose --failed-first \
+        uv run pytest --exitfirst --verbose --failed-first \
         --cov=. --cov-report html
       working-directory: .
+      env:
+        RAY_DISABLE_IMPORT_WARNING: "1"
+
+  distributed:
+    name: run distributed training tests
+    runs-on: ubuntu-latest
+    needs: lint
+
+    steps:
+
+    - uses: actions/checkout@v4
+
+    - name: setup timezone
+      uses: zcong1993/setup-timezone@master
+      with:
+        timezone: UTC
+
+    - name: set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: install uv
+      uses: astral-sh/setup-uv@v4
+      with:
+        enable-cache: true
+
+    - name: install dependencies
+      run: |
+        uv sync --extra dev
+
+    - name: run ray train tests
+      run: |
+        uv run pytest tests/test_rnn.py -v -k "Ray" \
+        --cov=sentimentizer.trainer --cov-report=term-missing
+      working-directory: .
+      env:
+        RAY_DISABLE_IMPORT_WARNING: "1"
