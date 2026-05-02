@@ -163,7 +163,9 @@ class TrainerConfig:
 @dataclass
 class EmbeddingsConfig:
     file_path: str = str(external_data / "glove.6B.zip")
-    sub_file_path: str = "glove.6B.zip/glove.6B.100d.txt"
+    # sub_file_path: str = "glove.6B.zip/glove.6B.100d.txt"
+    sub_file_path: str = "glove.6B.100d.txt"
+
     emb_length: int = 100
 
 

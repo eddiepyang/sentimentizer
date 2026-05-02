@@ -3426,7 +3426,7 @@ wheels = [
 
 [[package]]
 name = "sentimentizer"
-version = "0.8.0"
+version = "0.99.0"
 source = { editable = "." }
 dependencies = [
     { name = "gensim" },

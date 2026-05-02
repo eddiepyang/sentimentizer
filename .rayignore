@@ -1,0 +1,15 @@
+.git/
+.venv/
+.venv312/
+vendor/
+
+__pycache__/
+*.pyc
+build/
+dist/
+*.egg-info/
+
+checkpoints/
+agent_checkpoints.db
+model_weight.pt
+.DS_Store
