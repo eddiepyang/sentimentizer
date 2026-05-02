@@ -155,6 +155,9 @@ class TrainerConfig:
     ray_workers: int = 2  # Ray Train workers (only used with --distributed)
     device: str = "auto"  # "auto" detects best available: cuda > mps > cpu
     memory: bool = True
+    checkpoint_dir: str = ""  # directory to save checkpoints (empty = no checkpointing)
+    checkpoint_every: int = 1  # save checkpoint every N epochs (0 = disabled)
+    checkpoint_best: bool = True  # save the best model (lowest val loss) separately
 
 
 @dataclass

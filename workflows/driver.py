@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import shutil
 
 import ray
@@ -19,7 +20,7 @@ from sentimentizer.config import (
 from sentimentizer.extractor import extract_data
 from sentimentizer.loader import load_train_val_corpus_datasets, load_train_val_ray_datasets
 from sentimentizer.tokenizer import Tokenizer
-from sentimentizer.trainer import new_ray_trainer, new_trainer
+from sentimentizer.trainer import latest_checkpoint, load_checkpoint, new_ray_trainer, new_trainer
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
@@ -55,6 +56,30 @@ def new_parser() -> argparse.Namespace:
         type=int,
         default=2,
         help="number of Ray Train workers for distributed training (--distributed only)",
+    )
+    parser.add_argument(
+        "--agent-tune",
+        action="store_true",
+        default=False,
+        help="use Pydantic AI + LangGraph agent for hyperparameter tuning (GLM 5.1 via Ollama)",
+    )
+    parser.add_argument(
+        "--agent-config",
+        type=str,
+        default=None,
+        help="path to agent config YAML file (default: sentimentizer/agent/config.yaml)",
+    )
+    parser.add_argument(
+        "--checkpoint-dir",
+        type=str,
+        default="",
+        help="directory to save training checkpoints (empty = no checkpointing)",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        default=False,
+        help="resume training from the latest checkpoint in --checkpoint-dir",
     )
     args = parser.parse_args()
 
@@ -167,12 +192,28 @@ def _run_fit_single(args: argparse.Namespace) -> None:
         device=args.device,
         epochs=epochs,
         dataloader_workers=default_dataloader_workers(args.device),
+        checkpoint_dir=args.checkpoint_dir,
     )
+
     trainer = new_trainer(
         model=model,
         cfg=cfg,
         model_type=args.model,
     )
+
+    # Resume from checkpoint if requested
+    if args.resume:
+        ckpt_path = latest_checkpoint(args.checkpoint_dir)
+        if ckpt_path is None:
+            logger.info("no checkpoint found, starting from scratch")
+        else:
+            checkpoint = load_checkpoint(
+                ckpt_path, model, trainer.optimizer, trainer.scheduler, device=args.device
+            )
+            logger.info(
+                f"resumed from checkpoint: {ckpt_path}, epoch={checkpoint.get('epoch', '?')}"
+            )
+
     trainer.fit(model, train_data=train_dataset, val_data=val_dataset)
 
     if args.save:
@@ -212,12 +253,67 @@ def _run_fit_distributed(args: argparse.Namespace) -> None:
         logger.info(f"model weights saved to: {DriverConfig.files.weights_file_path}")
 
 
+def run_agent_tune(args: argparse.Namespace) -> None:
+    """Run the Pydantic AI + LangGraph tuning agent.
+
+    Uses GLM 5.1 (via Ollama) for LLM reasoning about hyperparameter
+    tuning, Ray Tune + Optuna for the actual search, and LangGraph
+    for workflow orchestration with checkpointing.
+    """
+    from sentimentizer.agent import run_agent_tuning
+
+    logger.info(  # type: ignore[call-arg]
+        "starting_agent_tuning",
+        model=args.model,
+        agent_config=args.agent_config,
+    )
+
+    result = asyncio.run(run_agent_tuning(
+        model_type=args.model,
+        config_path=args.agent_config,
+    ))
+
+    logger.info(  # type: ignore[call-arg]
+        "agent_tuning_complete",
+        best_accuracy=result.best_accuracy,
+        best_loss=result.best_loss,
+        iterations=result.iterations_completed,
+        converged=result.converged,
+        best_config=result.best_config,
+    )
+
+    if args.save:
+        import json
+        from pathlib import Path
+
+        output_path = Path("best_config.json")
+        with open(output_path, "w") as f:
+            json.dump(
+                {
+                    "best_config": result.best_config,
+                    "best_accuracy": result.best_accuracy,
+                    "best_loss": result.best_loss,
+                    "iterations": result.iterations_completed,
+                    "converged": result.converged,
+                },
+                f,
+                indent=2,
+            )
+        logger.info(f"best config saved to: {output_path}")
+
+
 @time_decorator
 def main() -> None:
     args = new_parser()
-    run_extract(args)
-    run_tokenize(args)
-    run_fit(args)
+
+    if args.agent_tune:
+        # Agent tuning mode: uses LLM-guided hyperparameter search
+        run_agent_tune(args)
+    else:
+        # Standard training mode
+        run_extract(args)
+        run_tokenize(args)
+        run_fit(args)
 
 
 if __name__ == "__main__":
