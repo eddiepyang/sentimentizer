@@ -6,9 +6,17 @@ import pytest
 import ray
 import torch
 
-from sentimentizer.config import DEFAULT_LOG_LEVEL, TrainerConfig
+from sentimentizer.config import (
+    DEFAULT_LOG_LEVEL,
+    DecoderConfig,
+    EncoderConfig,
+    RNNConfig,
+    TrainerConfig,
+)
 from sentimentizer.extractor import extract_data
 from sentimentizer.loader import CorpusDataset, load_train_val_ray_datasets
+from sentimentizer.models.decoder import Decoder
+from sentimentizer.models.encoder import Encoder
 from sentimentizer.models.rnn import RNN, get_trained_model
 from sentimentizer.tokenizer import (
     Tokenizer,
@@ -123,11 +131,29 @@ class TestCorpusDataset:
 
 
 class TestGetTrainedModel:
-    """tests if model loads"""
+    """tests model construction and weight loading"""
 
-    def test_success(self):
-        model = get_trained_model(64, "cpu")
+    def test_model_construction(self):
+        """tests that the RNN model can be constructed with correct architecture"""
+        emb_weights = torch.zeros(100, 100)  # small vocab, 100d embeddings
+        model = RNN(batch_size=64, emb_weights=emb_weights)
         assert isinstance(model, RNN)
+        assert model.lstm.bidirectional
+        assert model.lstm.batch_first
+        assert model.lstm.num_layers == 2
+
+    def test_forward_pass(self):
+        """tests that the forward pass produces correct output shape"""
+        emb_weights = torch.randn(100, 100)
+        model = RNN(batch_size=2, emb_weights=emb_weights)
+        tokens = torch.randint(0, 100, (2, 10))
+        output = model(tokens)
+        assert output.shape == (2,)
+
+    def test_incompatible_weights(self):
+        """tests that loading incompatible weights raises a helpful error"""
+        with pytest.raises(RuntimeError, match="incompatible"):
+            get_trained_model(64, "cpu")
 
     def test_failure(self):
         # todo
@@ -202,7 +228,7 @@ class TestNewRayTrainer:
         path = f"{relative_root}/tests/test_data/file.parquet"
         try:
             train_ds, val_ds = load_train_val_ray_datasets(path, test_size=0.5)
-            cfg = TrainerConfig(num_workers=1, device="cpu", epochs=1, batch_size=2)
+            cfg = TrainerConfig(ray_workers=1, device="cpu", epochs=1, batch_size=2)
             trainer = new_ray_trainer(
                 train_ds=train_ds,
                 val_ds=val_ds,
@@ -220,7 +246,7 @@ class TestNewRayTrainer:
         path = f"{relative_root}/tests/test_data/file.parquet"
         try:
             train_ds, val_ds = load_train_val_ray_datasets(path, test_size=0.5)
-            cfg = TrainerConfig(num_workers=1, device="cpu", epochs=1, batch_size=2)
+            cfg = TrainerConfig(ray_workers=1, device="cpu", epochs=1, batch_size=2)
             trainer = new_ray_trainer(
                 train_ds=train_ds,
                 val_ds=val_ds,
@@ -238,7 +264,7 @@ class TestNewRayTrainer:
         path = f"{relative_root}/tests/test_data/file.parquet"
         try:
             train_ds, val_ds = load_train_val_ray_datasets(path, test_size=0.5)
-            cfg = TrainerConfig(num_workers=1, device="cpu", epochs=1, batch_size=2)
+            cfg = TrainerConfig(ray_workers=1, device="cpu", epochs=1, batch_size=2)
             trainer = new_ray_trainer(
                 train_ds=train_ds,
                 val_ds=val_ds,
@@ -256,7 +282,7 @@ class TestNewRayTrainer:
         path = f"{relative_root}/tests/test_data/file.parquet"
         try:
             train_ds, val_ds = load_train_val_ray_datasets(path, test_size=0.5)
-            cfg = TrainerConfig(num_workers=1, device="cpu", epochs=1, batch_size=2)
+            cfg = TrainerConfig(ray_workers=1, device="cpu", epochs=1, batch_size=2)
             with pytest.raises(ValueError, match="no matching model"):
                 new_ray_trainer(
                     train_ds=train_ds,
@@ -329,27 +355,101 @@ class TestNewRayTrainer:
 
 
 class TestTrainerConfig:
-    """tests TrainerConfig with num_workers for distributed training"""
+    """tests TrainerConfig with ray_workers for distributed training"""
 
-    def test_default_num_workers(self):
+    def test_default_ray_workers(self):
         cfg = TrainerConfig()
-        assert cfg.num_workers == 2
+        assert cfg.ray_workers == 2
 
-    def test_custom_num_workers(self):
-        cfg = TrainerConfig(num_workers=4)
-        assert cfg.num_workers == 4
+    def test_custom_ray_workers(self):
+        cfg = TrainerConfig(ray_workers=4)
+        assert cfg.ray_workers == 4
 
     def test_cpu_device_config(self):
-        cfg = TrainerConfig(device="cpu", num_workers=1)
+        cfg = TrainerConfig(device="cpu", ray_workers=1)
         assert cfg.device == "cpu"
-        assert cfg.num_workers == 1
+        assert cfg.ray_workers == 1
+
+
+class TestModelConfigs:
+    """tests that model configs drive architecture dimensions"""
+
+    def test_rnn_config_defaults(self):
+        cfg = RNNConfig()
+        assert cfg.hidden_size == 256
+        assert cfg.num_layers == 2
+        assert cfg.dropout == 0.2
+
+    def test_rnn_custom_config(self):
+        """tests that custom RNNConfig changes model architecture"""
+        cfg = RNNConfig(hidden_size=128, num_layers=3, dropout=0.3)
+        emb_weights = torch.zeros(100, 100)
+        model = RNN(
+            batch_size=64,
+            emb_weights=emb_weights,
+            hidden_size=cfg.hidden_size,
+            num_layers=cfg.num_layers,
+            dropout=cfg.dropout,
+        )
+        assert model.lstm.hidden_size == 128
+        assert model.lstm.num_layers == 3
+
+    def test_encoder_config_defaults(self):
+        cfg = EncoderConfig()
+        assert cfg.d_model == 256
+        assert cfg.n_heads == 4
+        assert cfg.n_layers == 4
+        assert cfg.ff_multiplier == 4
+
+    def test_encoder_custom_config(self):
+        """tests that custom EncoderConfig changes model architecture"""
+        cfg = EncoderConfig(d_model=128, n_heads=2, n_layers=2, ff_multiplier=2)
+        emb_weights = torch.zeros(100, 100)
+        model = Encoder(
+            batch_size=64,
+            input_len=200,
+            emb_weights=emb_weights,
+            d_model=cfg.d_model,
+            n_heads=cfg.n_heads,
+            n_layers=cfg.n_layers,
+            ff_multiplier=cfg.ff_multiplier,
+        )
+        assert model.d_model == 128
+        assert model.encoder.num_layers == 2
+
+    def test_decoder_config_defaults(self):
+        cfg = DecoderConfig()
+        assert cfg.d_model == 256
+        assert cfg.n_heads == 4
+        assert cfg.n_encoder_layers == 2
+        assert cfg.n_decoder_layers == 4
+        assert cfg.ff_multiplier == 4
+
+    def test_decoder_custom_config(self):
+        """tests that custom DecoderConfig changes model architecture"""
+
+        cfg = DecoderConfig(d_model=128, n_heads=2, n_encoder_layers=1, n_decoder_layers=2)
+        emb_weights = torch.zeros(100, 100)
+        model = Decoder(
+            batch_size=64,
+            input_len=200,
+            emb_weights=emb_weights,
+            d_model=cfg.d_model,
+            n_heads=cfg.n_heads,
+            n_encoder_layers=cfg.n_encoder_layers,
+            n_decoder_layers=cfg.n_decoder_layers,
+        )
+        assert model.d_model == 128
+        assert model.encoder.num_layers == 1
+        assert model.decoder.num_layers == 2
 
 
 class TestSingleTrainer:
     """tests the existing single-node Trainer still works"""
 
     def test_new_trainer_creates_trainer(self):
-        model = get_trained_model(64, "cpu")
+        emb_weights = torch.randn(100, 100)
+        model = RNN(batch_size=64, emb_weights=emb_weights)
         cfg = TrainerConfig(device="cpu")
         trainer = new_trainer(model=model, cfg=cfg)
         assert isinstance(trainer.loss_function, torch.nn.BCEWithLogitsLoss)

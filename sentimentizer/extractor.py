@@ -1,3 +1,4 @@
+import tarfile
 import zipfile
 from collections.abc import Generator
 from itertools import islice
@@ -38,14 +39,25 @@ def process_json(json_file: IO[bytes], stop: int = 0) -> Generator:
 
 @time_decorator
 def extract_data(file_path: str, compressed_file_name: str, stop: int = 0) -> ray.data.Dataset:
-    "reads from zipped yelp data file"
+    """Reads from zipped or tarred yelp data file.
+
+    Supports both .zip and .tar/.tar.gz archives.
+    """
 
     def generate_lines(x: int) -> Generator:
-        with zipfile.ZipFile(file_path) as zfile:
-            inf = zfile.open(compressed_file_name)
-            yield from process_json(inf, stop)
+        if file_path.endswith((".tar", ".tar.gz", ".tgz")):
+            with tarfile.open(file_path, "r:*") as tar:
+                member = tar.getmember(compressed_file_name)
+                f = tar.extractfile(member)
+                if f is None:
+                    raise ValueError(f"Could not extract {compressed_file_name} from {file_path}")
+                yield from process_json(f, stop)
+        else:
+            with zipfile.ZipFile(file_path) as zfile:
+                inf = zfile.open(compressed_file_name)
+                yield from process_json(inf, stop)
 
-    # Use flat_map to read from the single zip file
+    # Use flat_map to read from the archive
     ds = ray.data.range(1).flat_map(generate_lines)
 
     def tokenize(row: dict) -> dict:

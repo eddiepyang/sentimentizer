@@ -157,9 +157,6 @@ class Tokenizer:
 
         def transform_batch(batch: dict) -> dict:
             inputs = []
-            # 'batch' is a dict of columns. 'text_col' should allow access to the list of tokens.
-            # Depending on batch_format (numpy/pandas).
-            # If numpy, column is array of objects (lists).
             for text in batch[cfg.text_col]:
                 inputs.append(text_sequencer(dictionary, text, cfg.max_len))
 
@@ -167,6 +164,13 @@ class Tokenizer:
 
             if cfg.label_col in batch:
                 batch[cfg.labels] = np.array([convert_rating(r) for r in batch[cfg.label_col]])
+
+            # Drop variable-length columns that cause Arrow conversion issues
+            # Keep only the numeric columns needed for training
+            cols_to_keep = {cfg.inputs, cfg.labels}
+            for col in list(batch.keys()):
+                if col not in cols_to_keep:
+                    del batch[col]
 
             return batch
 

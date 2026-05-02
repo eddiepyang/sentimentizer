@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import ray
 import torch
@@ -26,8 +27,12 @@ class CorpusDataset(Dataset):
         return self.data.__len__()
 
     def __getitem__(self, i: int) -> tuple[torch.Tensor, torch.Tensor]:
-        return torch.tensor(self.data[self.x_labels].iat[i]), torch.tensor(
-            self.data[self.y_labels].iat[i]
+        x = self.data[self.x_labels].iat[i]
+        y = self.data[self.y_labels].iat[i]
+        # Convert via numpy to handle Arrow TensorArrayElement types
+        # that Ray Data writes to parquet
+        return torch.tensor(np.asarray(x), dtype=torch.long), torch.tensor(
+            np.asarray(y), dtype=torch.float32
         )
 
 

@@ -1,73 +1,158 @@
-# Introduction
+# sentimentizer
 
 [![PyPI Latest Release](https://img.shields.io/pypi/v/sentimentizer.svg)](https://pypi.org/project/sentimentizer/)
 ![GitHub CI](https://github.com/eddiepyang/sentimentizer/actions/workflows/ci.yaml/badge.svg)
-  
-Beta release, api subject to change. Install with:  
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-```
+Lightweight PyTorch models for sentiment analysis. Small models can be pretty effective for classification tasks at a much smaller cost to deploy — all models were trained on a single 2080Ti GPU in minutes, and inference requires less than 1GB of memory.
+
+> **Beta release** — API is subject to change.
+
+## Install
+
+```bash
 pip install sentimentizer
-```  
-  
-This repo contains Neural Nets written with the pytorch framework for sentiment analysis. 
-Small models can be pretty effective for classification tasks at a much smaller cost to deploy.
-This package focuses on sentiment analysis and all models were trained on a single 2080Ti gpu in minutes. 
-Deploying models for inference requires less than 1GB of memory which makes creating multiple containers relatively efficient.
-
-
-## Usage
 ```
-# where 0 is very negative and 1 is very positive
+
+## Quick Start
+
+```python
 from sentimentizer.tokenizer import get_trained_tokenizer
 from sentimentizer.models.rnn import get_trained_model
 
-model = get_trained_model(64, 'cpu')
+model = get_trained_model(64, "cpu")
 tokenizer = get_trained_tokenizer()
+
 review_text = "greatest pie ever, best in town!"
 positive_ids = tokenizer.tokenize_text(review_text)
 model.predict(positive_ids)
-  
->> tensor(0.9701)
+# >> tensor(0.9701)
 ```
 
-## Install for development
+Scores range from **0** (very negative) to **1** (very positive).
 
-This project uses [uv](https://docs.astral.sh/uv/) for dependency management:
+## Models
+
+Three architectures are available:
+
+| Model | Module | Description |
+|-------|--------|-------------|
+| **Encoder** ⭐ | `sentimentizer.models.encoder` | Transformer encoder with CLS token + positional encoding (4 layers, d_model=256) — **recommended** |
+| **RNN** | `sentimentizer.models.rnn` | Bidirectional 2-layer LSTM (hidden=256) with GloVe embeddings — solid baseline |
+| **Decoder** | `sentimentizer.models.decoder` | Encoder-Decoder Transformer with learnable query token + cross-attention (2 encoder + 4 decoder layers) |
+
+**Why Encoder?** Self-attention over the full token sequence with a CLS token is the most natural fit for sentence-level classification. The RNN processes tokens sequentially and can miss long-range dependencies, though bidirectionality helps. The Decoder uses cross-attention (a query token attends to encoded text), which is effective but adds encoder overhead — best reserved for cases where you want the Decoder's cross-attention pattern.
+
+Each module exposes `get_trained_model(batch_size, device)` to load pre-trained weights.
+
+## Serving
+
+### Ray Serve (Python)
+
+The `serve.py` entry point deploys a Ray Serve application with 2 replicas using the **RNN** model by default:
 
 ```bash
-# Install uv (if not already installed)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Install dependencies and create virtual environment
-uv sync
-
-# Install with dev dependencies
-uv sync --extra dev
-
-# Run tests
-uv run pytest tests/ -v
+serve run serve:app --host 0.0.0.0 --port 8000
 ```
 
-Or with miniconda:
-```
-conda create -n {env}  
-conda install pip  
-pip install -e .  
+To switch to the Encoder model, update the import in `serve.py`:
+
+```python
+from sentimentizer.models.encoder import Encoder, get_trained_model
 ```
 
-## Retrain model
-To rerun the model:
-* get the yelp [dataset](https://www.yelp.com/dataset), 
-* get the glove 6B 100D [dataset](https://nlp.stanford.edu/projects/glove/)
-* place both files in the package data directory 
-* run the training script in workflows
+Send a prediction request:
 
-### Single-node training
 ```bash
+curl -X POST http://localhost:8000 \
+  -H "Content-Type: application/json" \
+  -d '{"text": "the food was terrific"}'
+```
+
+Response:
+
+```json
+{
+  "sentiment_score": 0.9701,
+  "prediction": "positive"
+}
+```
+
+### Go CLI Client
+
+A Go CLI client is included for interacting with the serve endpoint:
+
+```bash
+# Build and run
+go run main.go -text "the food was terrific"
+
+# Pipe input
+echo "terrible service" | go run main.go
+
+# Positional arguments
+go run main.go "best restaurant in town"
+
+# Raw JSON output
+go run main.go -raw -text "amazing pasta"
+
+# Custom endpoint
+go run main.go -host http://remote:8000 -text "great coffee"
+```
+
+The client outputs colorized results with emoji indicators:
+
+```
+Text:       the food was terrific
+Prediction: positive 👍
+Score:      0.9701
+Latency:    12ms
+```
+
+## Training
+
+### Prerequisites
+
+To retrain the model:
+
+1. Get the Yelp [dataset](https://www.yelp.com/dataset) — download `yelp_dataset.tar` and place it in `../data/` (one level above the project root)
+2. Get the GloVe 6B 100D [embeddings](https://nlp.stanford.edu/projects/glove/) — download `glove.6B.zip` and place it in `../data/` (one level above the project root)
+
+The expected directory structure:
+
+```
+data/                            # one level above project root
+├── yelp_dataset.tar             # Yelp dataset (downloaded)
+└── glove.6B.zip                 # GloVe embeddings (downloaded)
+
+torch-sentiment/                 # project root
+├── sentimentizer/
+│   └── data/
+│       ├── yelp.dictionary      # Generated during training
+│       ├── weights.pth          # Generated during training
+│       └── ...
+└── ...
+```
+
+### Single-node training (recommended for laptops and single-GPU machines)
+
+```bash
+# NVIDIA GPU
 python workflows/driver.py --device cuda --type new --save True
+
+# Apple Silicon (M1/M2/M3/M4) — uses Metal Performance Shaders
+python workflows/driver.py --device mps --type new --save True
+
+# CPU only (slowest)
+python workflows/driver.py --device cpu --type new --save True
+
+# Quick iteration with less data
+python workflows/driver.py --device mps --type new --save True --stop 5000
 ```
 
-### Distributed training with Ray Train
+> **Tip:** On a single machine, single-node training is always faster than distributed. Use `--distributed` only when you have multiple GPUs.
+
+### Distributed training with Ray Train (multi-GPU or multi-machine only)
+
 ```bash
 # Run with 2 workers (default)
 python workflows/driver.py --device cuda --distributed --save True
@@ -79,12 +164,12 @@ python workflows/driver.py --device cuda --distributed --num-workers 4 --save Tr
 python workflows/driver.py --device cpu --distributed --num-workers 2
 ```
 
-The `--distributed` flag enables Ray Train, which distributes data and model training
-across multiple workers. Each worker gets a shard of the dataset and runs the training
-loop with PyTorch Distributed Data Parallel (DDP). Checkpoints and metrics are
-aggregated automatically by Ray Train.
+The `--distributed` flag enables Ray Train, which distributes data and model training across multiple workers. Each worker gets a shard of the dataset and runs the training loop with PyTorch Distributed Data Parallel (DDP). Checkpoints and metrics are aggregated automatically by Ray Train.
+
+**Distributed training adds overhead** (process group init, gradient sync, actor management) and is slower than single-node on a single GPU. Only use it when you have multiple GPUs or machines.
 
 ### CLI arguments
+
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--device` | `cuda` | Device to use: `cuda`, `mps`, or `cpu` |
@@ -93,19 +178,96 @@ aggregated automatically by Ray Train.
 | `--stop` | `10000` | Number of lines to load from the dataset |
 | `--save` | `False` | Save model weights after training |
 | `--distributed` | `False` | Enable distributed training with Ray Train |
-| `--num-workers` | `2` | Number of Ray Train workers (distributed mode only) |
+| `--num-workers` | `2` | Ray Train workers (distributed mode only; single-node ignores this) |
+
+## Model Configuration
+
+All model architecture parameters are configured via dataclasses in `sentimentizer/config.py`. To change layer dimensions, update the config and retrain:
+
+```python
+from sentimentizer.config import RNNConfig, EncoderConfig, DecoderConfig
+
+# Customize RNN — e.g., larger hidden state and 3 layers
+rnn_config = RNNConfig(hidden_size=512, num_layers=3, dropout=0.3)
+
+# Customize Encoder — e.g., wider model with 8 heads
+encoder_config = EncoderConfig(d_model=512, n_heads=8, n_layers=6, ff_multiplier=4)
+
+# Customize Decoder — e.g., deeper decoder
+decoder_config = DecoderConfig(d_model=512, n_heads=8, n_encoder_layers=4, n_decoder_layers=8)
+```
+
+The config flows: **`config.py` → `DriverConfig` → `new_model()` / `get_trained_model()` → model `__init__` sets layer dimensions**.
+
+| Config | Parameters | Defaults |
+|--------|-----------|----------|
+| `RNNConfig` | `hidden_size=256`, `num_layers=2`, `dropout=0.2` | Bidirectional LSTM |
+| `EncoderConfig` | `d_model=256`, `n_heads=4`, `n_layers=4`, `dropout=0.2`, `ff_multiplier=4` | Transformer encoder + CLS token |
+| `DecoderConfig` | `d_model=256`, `n_heads=4`, `n_encoder_layers=2`, `n_decoder_layers=4`, `dropout=0.2`, `ff_multiplier=4` | Encoder-decoder + query token |
 
 ## Architecture
 
 The pipeline consists of three stages, all powered by Ray:
 
-1. **Extract** — Reads raw JSON data from zip archives using `ray.data` and tokenizes text
+1. **Extract** — Reads raw JSON data from `.zip` or `.tar` archives using `ray.data` and tokenizes text
 2. **Transform** — Converts tokens to numeric sequences using `ray.data.map_batches()` and writes processed parquet
 3. **Train** — Fits the model using either single-node PyTorch or distributed Ray Train with `TorchTrainer`
 
-Inference is served via Ray Serve (see `serve.py`).
+Inference is served via Ray Serve (see `serve.py` and `sentimentizer/serve.py`).
+
+## Docker
+
+Build and run the containerized service:
+
+```bash
+# Build
+docker build -t sentimentizer .
+
+# Run
+docker run -p 8000:8000 -p 8265:8265 sentimentizer
+```
+
+The image uses a multi-stage build with Python 3.11-slim and CPU-only PyTorch. Port 8000 serves predictions; port 8265 exposes the Ray dashboard.
+
+## Kubernetes
+
+Kubernetes manifests are in the `k8s/` directory:
+
+| File | Resource | Purpose |
+|------|----------|---------|
+| `deployment.yaml` | Deployment | Pod template with the sentimentizer container |
+| `service.yaml` | Service | ClusterIP service for internal routing |
+| `hpa.yaml` | HorizontalPodAutoscaler | Auto-scaling based on CPU/memory usage |
+| `ingress.yaml` | Ingress | HTTP ingress routing |
+| `pdb.yaml` | PodDisruptionBudget | Minimum available replicas during disruptions |
+
+## Development
+
+### With uv (recommended)
+
+This project uses [uv](https://docs.astral.sh/uv/) for dependency management:
+
+```bash
+# Install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Install dependencies
+uv sync
+
+# Install with dev dependencies
+uv sync --extra dev
+```
+
+### With conda
+
+```bash
+conda create -n sentimentizer
+conda install pip
+pip install -e .
+```
 
 ## Testing
+
 ```bash
 # Run all tests
 uv run pytest tests/ -v
@@ -115,3 +277,27 @@ uv run pytest tests/ -v -k "Ray"
 
 # Run with coverage
 uv run pytest tests/ -v --cov=sentimentizer --cov-report=term-missing
+```
+
+## Project Structure
+
+```
+sentimentizer/
+├── __init__.py          # Logging and timing utilities
+├── config.py            # Configuration dataclasses, enums, and constants
+├── extractor.py         # Ray Data extraction from zip/tar archives
+├── loader.py            # Data loading utilities
+├── tokenizer.py         # Text tokenizer with pre-trained support
+├── trainer.py           # Training logic
+├── serve.py             # Ray Serve deployment app
+├── data/                # Training data (Yelp, GloVe)
+└── models/
+    ├── __init__.py
+    ├── rnn.py           # RNN model with GloVe embeddings
+    ├── encoder.py       # Transformer encoder model
+    └── decoder.py       # Transformer decoder model
+```
+
+## License
+
+[MIT](LICENSE)

@@ -6,7 +6,13 @@ import torch
 from gensim import corpora
 
 from sentimentizer import new_logger, time_decorator
-from sentimentizer.config import DEFAULT_LOG_LEVEL, DriverConfig
+from sentimentizer.config import (
+    DEFAULT_LOG_LEVEL,
+    DecoderConfig,
+    DriverConfig,
+    EncoderConfig,
+    RNNConfig,
+)
 from sentimentizer.extractor import extract_data
 from sentimentizer.loader import load_train_val_corpus_datasets, load_train_val_ray_datasets
 from sentimentizer.tokenizer import Tokenizer
@@ -45,7 +51,7 @@ def new_parser() -> argparse.Namespace:
         "--num-workers",
         type=int,
         default=2,
-        help="number of Ray Train workers for distributed training",
+        help="number of Ray Train workers for distributed training (--distributed only)",
     )
     args = parser.parse_args()
 
@@ -57,12 +63,28 @@ def new_parser() -> argparse.Namespace:
         device=args.device,
         early_stop=args.stop,
         distributed=args.distributed,
-        num_workers=args.num_workers,
+        ray_workers=args.num_workers,
     )
     return args
 
 
+def _get_model_config(
+    model_type: str,
+) -> RNNConfig | EncoderConfig | DecoderConfig:
+    """Get the model config class for the given model type."""
+    if model_type == "rnn":
+        return DriverConfig.rnn()
+    elif model_type == "encoder":
+        return DriverConfig.encoder()
+    elif model_type == "decoder":
+        return DriverConfig.decoder()
+    else:
+        raise ValueError(f"no matching model config for {model_type}")
+
+
 def _load_model(args: argparse.Namespace) -> torch.nn.Module:
+    model_config = _get_model_config(args.model)
+
     if args.model == "rnn":
         from sentimentizer.models.rnn import get_trained_model, new_model
     elif args.model == "encoder":
@@ -78,9 +100,14 @@ def _load_model(args: argparse.Namespace) -> torch.nn.Module:
             embeddings_config=DriverConfig.embeddings(),
             batch_size=DriverConfig.trainer.batch_size,
             input_len=DriverConfig.tokenizer.max_len,
+            model_config=model_config,
         )
     elif args.type == "update":
-        model = get_trained_model(DriverConfig.trainer.batch_size, args.device)
+        model = get_trained_model(
+            DriverConfig.trainer.batch_size,
+            args.device,
+            model_config=model_config,
+        )
     else:
         raise RunTypeError
 
@@ -143,7 +170,7 @@ def _run_fit_distributed(args: argparse.Namespace) -> None:
     """Distributed training using Ray Train TorchTrainer."""
     train_ds, val_ds = load_train_val_ray_datasets(DriverConfig.files.processed_reviews_file_path)
 
-    cfg = DriverConfig.trainer(device=args.device, num_workers=args.num_workers)
+    cfg = DriverConfig.trainer(device=args.device, ray_workers=args.num_workers)
 
     ray_trainer = new_ray_trainer(
         train_ds=train_ds,

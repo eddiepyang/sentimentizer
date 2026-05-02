@@ -30,15 +30,15 @@ def _new_loaders(
     train_loader = DataLoader(
         dataset=train_data,
         batch_size=cfg.batch_size,
-        num_workers=cfg.workers,
-        pin_memory=cfg.memory,
+        num_workers=cfg.dataloader_workers,
+        pin_memory=cfg.memory if cfg.device != "mps" else False,
     )
 
     val_loader = DataLoader(
         val_data,
         batch_size=cfg.batch_size,
-        num_workers=cfg.workers,
-        pin_memory=cfg.memory,
+        num_workers=cfg.dataloader_workers,
+        pin_memory=cfg.memory if cfg.device != "mps" else False,
     )
 
     return train_loader, val_loader
@@ -342,7 +342,7 @@ def new_ray_trainer(
         train_loop_per_worker=_train_func,
         train_loop_config=train_loop_config,
         scaling_config=ScalingConfig(
-            num_workers=cfg.num_workers,
+            num_workers=cfg.ray_workers,
             use_gpu=use_gpu,
         ),
         datasets={"train": train_ds, "val": val_ds},

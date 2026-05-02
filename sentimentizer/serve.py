@@ -9,7 +9,6 @@ from sentimentizer import logger
 from sentimentizer.models.rnn import RNN, get_trained_model
 from sentimentizer.tokenizer import Tokenizer, get_trained_tokenizer
 
-
 # ---------------------------------------------------------------------------
 # Metrics helpers (lightweight Prometheus-compatible counters/histograms)
 # ---------------------------------------------------------------------------
@@ -232,9 +231,7 @@ class SentimentDeployment:
                 "request_count": metrics.request_count,
                 "error_count": metrics.error_count,
                 "avg_latency_s": (
-                    metrics.total_latency_s / metrics.request_count
-                    if metrics.request_count
-                    else 0
+                    metrics.total_latency_s / metrics.request_count if metrics.request_count else 0
                 ),
             }
         )

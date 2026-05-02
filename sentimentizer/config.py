@@ -6,6 +6,7 @@ from logging import INFO
 from sentimentizer import root
 
 data_path = os.path.join(root, "sentimentizer")
+external_data = root.parent / "data"  # data/ one level above project root
 
 DEFAULT_LOG_LEVEL = INFO
 
@@ -59,7 +60,7 @@ class TokenizerConfig:
 
 @dataclass(frozen=True)
 class FileConfig:
-    archive_file_path: str = f"{data_path}/data/archive.zip"
+    archive_file_path: str = str(external_data / "yelp_dataset.tar")
     raw_file_path: str = "yelp_academic_dataset_review.json"
     dictionary_file_path: str = f"{data_path}/data/yelp.dictionary"
     raw_reviews_file_path: str = f"{data_path}/data/review_data_raw.parquet"
@@ -71,17 +72,49 @@ class FileConfig:
 class TrainerConfig:
     batch_size: int = 64
     epochs: int = 4
-    workers: int = 10
-    num_workers: int = 2
+    dataloader_workers: int = 10  # DataLoader subprocesses for data loading
+    ray_workers: int = 2  # Ray Train workers (only used with --distributed)
     device: str = "cuda"
     memory: bool = True
 
 
 @dataclass
 class EmbeddingsConfig:
-    file_path: str = f"{data_path}/data/glove.6B.zip"
-    sub_file_path: str = "glove.6B.100d.txt"
+    file_path: str = str(external_data / "glove.6B.zip")
+    sub_file_path: str = "glove.6B.zip/glove.6B.100d.txt"
     emb_length: int = 100
+
+
+@dataclass(frozen=True)
+class RNNConfig:
+    """Configuration for the RNN model architecture."""
+
+    hidden_size: int = 256
+    num_layers: int = 2
+    dropout: float = 0.2
+
+
+@dataclass(frozen=True)
+class EncoderConfig:
+    """Configuration for the Transformer Encoder model architecture."""
+
+    d_model: int = 256
+    n_heads: int = 4
+    n_layers: int = 4
+    dropout: float = 0.2
+    ff_multiplier: int = 4  # dim_feedforward = d_model * ff_multiplier
+
+
+@dataclass(frozen=True)
+class DecoderConfig:
+    """Configuration for the Transformer Decoder model architecture."""
+
+    d_model: int = 256
+    n_heads: int = 4
+    n_encoder_layers: int = 2
+    n_decoder_layers: int = 4
+    dropout: float = 0.2
+    ff_multiplier: int = 4  # dim_feedforward = d_model * ff_multiplier
 
 
 @dataclass
@@ -90,3 +123,6 @@ class DriverConfig:
     embeddings: type[EmbeddingsConfig] = EmbeddingsConfig
     tokenizer: type[TokenizerConfig] = TokenizerConfig
     trainer: type[TrainerConfig] = TrainerConfig
+    rnn: type[RNNConfig] = RNNConfig
+    encoder: type[EncoderConfig] = EncoderConfig
+    decoder: type[DecoderConfig] = DecoderConfig
