@@ -3,7 +3,7 @@
 
 agent:
   # LLM configuration (Ollama OpenAI-compatible endpoint)
-  model_name: "glm5.1"
+  model_name: "glm-5.1:cloud"
   ollama_base_url: "http://localhost:11434/v1"
   temperature: 0.3
   max_tokens: 2048

@@ -16,6 +16,7 @@ from typing import Any
 
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.openai import OpenAIModel
+from pydantic_ai.providers.openai import OpenAIProvider
 
 from sentimentizer import new_logger
 from sentimentizer.agent.loader import AgentConfig
@@ -44,11 +45,16 @@ def _create_model(config: AgentConfig) -> OpenAIModel:
     """Create an OpenAI-compatible model pointed at Ollama.
 
     Ollama exposes an OpenAI-compatible API at /v1, so we
-    use pydantic-ai-slim's OpenAIModel with a custom base_url.
+    use pydantic-ai-slim's OpenAIModel with OpenAIProvider
+    configured with Ollama's base_url.
     """
+    provider = OpenAIProvider(
+        base_url=config.ollama_base_url,
+        api_key="ollama",  # Ollama doesn't require a real key
+    )
     return OpenAIModel(
         model_name=config.model_name,
-        base_url=config.ollama_base_url,
+        provider=provider,
     )
 
 
@@ -68,7 +74,7 @@ def create_analysis_agent(config: AgentConfig) -> Agent[TuningDeps, AnalysisResu
 
     agent = Agent(
         model=model,
-        result_type=AnalysisResult,
+        output_type=AnalysisResult,
         deps_type=TuningDeps,
         system_prompt=ANALYSIS_SYSTEM_PROMPT,
         model_settings={"temperature": config.temperature, "max_tokens": config.max_tokens},
@@ -108,7 +114,7 @@ def create_strategy_agent(config: AgentConfig) -> Agent[TuningDeps, TuningDecisi
 
     agent = Agent(
         model=model,
-        result_type=TuningDecision,
+        output_type=TuningDecision,
         deps_type=TuningDeps,
         system_prompt=STRATEGY_SYSTEM_PROMPT,
         model_settings={"temperature": config.temperature, "max_tokens": config.max_tokens},

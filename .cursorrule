@@ -1,6 +1,6 @@
 # Project Rules
 
-## After making code changes, always run tests and lint
+## After making code changes, always run tests, lint, and format
 
 After modifying any source file in `sentimentizer/` or `workflows/`, run the test suite to verify nothing is broken:
 
@@ -20,6 +20,14 @@ After running tests, always run the linter and fix any issues before considering
 uv run ruff check .
 uv run ruff check --fix .
 ```
+
+**Always run `black` formatting as the final step before completing any task:**
+
+```bash
+uv run black .
+```
+
+This ensures consistent code style across all files. Do not consider a task done until `black` has been run and all files are formatted.
 
 If you add new features, modules, or change CLI arguments, update `README.md` accordingly — specifically the CLI arguments table, project structure, and any relevant usage sections.
 

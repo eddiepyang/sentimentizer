@@ -18,14 +18,11 @@ from typing import Any
 
 from sentimentizer import new_logger
 from sentimentizer.agent.agents import TuningDeps, create_analysis_agent, create_strategy_agent
-from sentimentizer.agent.loader import (
-    load_agent_config,
-    load_search_space,
-)
+from sentimentizer.agent.loader import load_agent_config
 from sentimentizer.agent.models import AgentRunResult, AnalysisResult, TuningDecision, TuningResult
 from sentimentizer.agent.state import AgentState
 from sentimentizer.config import DEFAULT_LOG_LEVEL
-from sentimentizer.tuner import tune_model
+from sentimentizer.tuner import load_search_space
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
@@ -56,7 +53,7 @@ async def analyze(state: AgentState) -> dict[str, Any]:
         prompt += " Use get_previous_results and get_current_metrics to examine the data."
 
     result = await analysis_agent.run(prompt, deps=deps)
-    analysis: AnalysisResult = result.data
+    analysis: AnalysisResult = result.output
 
     logger.info(
         "analysis_complete",
@@ -108,7 +105,7 @@ async def decide(state: AgentState) -> dict[str, Any]:
         prompt += f" The analysis found: {state['current_analysis'].summary}"
 
     result = await strategy_agent.run(prompt, deps=deps)
-    decision: TuningDecision = result.data
+    decision: TuningDecision = result.output
 
     logger.info(
         "decision_made",
@@ -153,9 +150,11 @@ def tune(state: AgentState) -> dict[str, Any]:
         has_overrides=overrides is not None,
     )
 
+    # Lazy import to break circular dependency
+    from sentimentizer.tuner import tune_model
+
     result = tune_model(
         model_type=model_type,
-        agent_config=agent_config,
         tuner_config=tuner_config,
         search_space_overrides=overrides,
         config_path=config_path,
