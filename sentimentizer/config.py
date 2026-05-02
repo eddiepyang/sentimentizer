@@ -27,6 +27,17 @@ def auto_detect_device() -> str:
     return "cpu"
 
 
+def default_epochs(model_type: str) -> int:
+    """Return default epochs for the model type.
+
+    RNNs converge faster with simple patterns.
+    Transformers need more epochs for attention patterns to develop.
+    """
+    if model_type in ("encoder", "decoder"):
+        return 8
+    return 4
+
+
 def default_dataloader_workers(device: str) -> int:
     """Return optimal DataLoader workers for the device.
 
@@ -129,7 +140,8 @@ class FileConfig:
 @dataclass
 class TrainerConfig:
     batch_size: int = 64
-    epochs: int = 4
+    epochs: int = -1  # -1 means use model-specific default (4 for RNN, 8 for encoder/decoder)
+    early_stopping_patience: int = 2  # stop if val_loss doesn't improve for this many epochs
     dataloader_workers: int = -1  # -1 means auto-detect based on device
     ray_workers: int = 2  # Ray Train workers (only used with --distributed)
     device: str = "auto"  # "auto" detects best available: cuda > mps > cpu

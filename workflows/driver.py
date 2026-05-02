@@ -14,6 +14,7 @@ from sentimentizer.config import (
     RNNConfig,
     auto_detect_device,
     default_dataloader_workers,
+    default_epochs,
 )
 from sentimentizer.extractor import extract_data
 from sentimentizer.loader import load_train_val_corpus_datasets, load_train_val_ray_datasets
@@ -161,8 +162,10 @@ def _run_fit_single(args: argparse.Namespace) -> None:
 
     model = _load_model(args)
 
+    epochs = default_epochs(args.model)
     cfg = DriverConfig.trainer(
         device=args.device,
+        epochs=epochs,
         dataloader_workers=default_dataloader_workers(args.device),
     )
     trainer = new_trainer(

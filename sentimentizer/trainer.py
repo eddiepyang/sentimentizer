@@ -22,6 +22,7 @@ from sentimentizer.config import (
     SchedulerParams,
     TrainerConfig,
     default_dataloader_workers,
+    default_epochs,
 )
 from sentimentizer.loader import CorpusDataset
 
@@ -103,14 +104,37 @@ class Trainer:
         model.to(self.cfg.device)
         start = time.time()
 
+        # Resolve default epochs if auto (-1)
+        epochs = self.cfg.epochs
+        if epochs == -1:
+            epochs = default_epochs("rnn")  # fallback; driver resolves this
+
         logger.info("fitting model...")
 
-        for epoch in range(self.cfg.epochs):
+        best_val_loss = float("inf")
+        patience_counter = 0
+
+        for epoch in range(epochs):
             self._train_epoch(model, train_loader)
             self.eval(model, val_loader)
 
             if self.scheduler:
                 self.scheduler.step()
+
+            # Early stopping based on validation loss
+            if self.cfg.early_stopping_patience > 0:
+                if self.val_loss < best_val_loss:
+                    best_val_loss = self.val_loss
+                    patience_counter = 0
+                else:
+                    patience_counter += 1
+                    if patience_counter >= self.cfg.early_stopping_patience:
+                        logger.info(
+                            f"early stopping at epoch {epoch}, "
+                            f"val_loss hasn't improved for {patience_counter} epochs"
+                        )
+                        break
+
             logger.info(f"epoch {epoch} completed")
         logger.info(f"model fitting completed, {time.time()-start:.0f} seconds passed")
 
