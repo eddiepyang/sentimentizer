@@ -112,6 +112,10 @@ tune-custom:
 tune-no-validate:
 	uv run python workflows/driver.py --model $(MODEL) --tune --no-validate --save
 
+## Upload RNN weights to Hugging Face Hub
+upload-rnn:
+	uv run python -c "from sentimentizer.hf import push_model_to_hub; push_model_to_hub('sentimentizer/data/rnn_weights.pth', 'ryeyoo/sentimentizer-rnn', 'rnn')"
+
 # ──────────────────────────────────────────────
 # Serving
 # ──────────────────────────────────────────────

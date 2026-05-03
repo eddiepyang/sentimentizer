@@ -208,6 +208,24 @@ def new_parser() -> argparse.Namespace:
         default=0.0,
         help="loss weight for the positive class (0 = auto-calculate from data, default: 0)",
     )
+    parser.add_argument(
+        "--push-to-hub",
+        action="store_true",
+        default=False,
+        help="push model weights to Hugging Face Hub after training",
+    )
+    parser.add_argument(
+        "--pull-from-hub",
+        action="store_true",
+        default=False,
+        help="pull model weights from Hugging Face Hub before running",
+    )
+    parser.add_argument(
+        "--hf-repo",
+        type=str,
+        default=DriverConfig.hf.repo_id,
+        help=f"Hugging Face repository ID (default: {DriverConfig.hf.repo_id})",
+    )
     args = parser.parse_args()
 
     if args.type not in ("new", "update"):
@@ -413,6 +431,14 @@ def _run_fit_single(args: argparse.Namespace) -> None:
         torch.save(model.state_dict(), weights_path)
         logger.info(f"model weights saved to: {weights_path}")
 
+        if args.push_to_hub:
+            from sentimentizer.hf import push_model_to_hub
+            push_model_to_hub(
+                local_path=weights_path,
+                repo_id=args.hf_repo,
+                model_type=args.model,
+            )
+
 
 def _run_fit_distributed(args: argparse.Namespace) -> None:
     """Distributed training using Ray Train TorchTrainer."""
@@ -482,6 +508,14 @@ def _run_fit_distributed(args: argparse.Namespace) -> None:
                 weights_path,
             )
         logger.info(f"model weights saved to: {weights_path}")
+
+        if args.push_to_hub:
+            from sentimentizer.hf import push_model_to_hub
+            push_model_to_hub(
+                local_path=weights_path,
+                repo_id=args.hf_repo,
+                model_type=args.model,
+            )
 
 
 def run_agent_tune(args: argparse.Namespace) -> None:
@@ -611,6 +645,20 @@ def run_tune(args: argparse.Namespace) -> None:
 @time_decorator
 def main() -> None:
     args = new_parser()
+
+    if args.pull_from_hub:
+        from sentimentizer.hf import pull_model_from_hub
+        weights_path = weights_path_for(args.model)
+        success = pull_model_from_hub(
+            repo_id=args.hf_repo,
+            model_type=args.model,
+            local_path=weights_path,
+        )
+        if success:
+            logger.info(f"Pulled {args.model} weights from HF Hub. Forcing run type to 'update'.")
+            args.type = "update"
+        else:
+            logger.error("Failed to pull weights from HF Hub. Proceeding with original run type.")
 
     # Initialize Ray with a fixed metrics export port so Prometheus can scrape it.
     # The port must match metrics/prometheus.yml target (host.docker.internal:8080).

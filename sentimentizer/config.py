@@ -176,6 +176,11 @@ class EmbeddingsConfig:
     emb_length: int = 100
 
 
+@dataclass
+class HuggingFaceConfig:
+    repo_id: str = "ryeyoo/sentimentizer"
+
+
 @dataclass(frozen=True)
 class RNNConfig:
     """Configuration for the RNN model architecture."""
@@ -217,3 +222,4 @@ class DriverConfig:
     rnn: type[RNNConfig] = RNNConfig
     encoder: type[EncoderConfig] = EncoderConfig
     decoder: type[DecoderConfig] = DecoderConfig
+    hf: type[HuggingFaceConfig] = HuggingFaceConfig
