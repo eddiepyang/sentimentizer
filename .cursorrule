@@ -2,7 +2,7 @@
   "rules": [
     {
       "pattern": ".*",
-      "instruction": "Whenever executing `pytest`, always prefix it with `uv run`, like `uv run pytest`."
+      "instruction": "Whenever executing python tools (like `pytest`, `ruff`, `black`, `serve` or `python` scripts), always prefix it with `uv run`, like `uv run pytest` or `uv run python workflows/driver.py`. Refer to `CLAUDE.md` for Ray APIs and coding standards."
     }
   ]
 }

@@ -128,7 +128,7 @@ download-rnn:
 
 ## Start Ray Serve with all three models
 serve:
-	serve run sentimentizer.serve:app --host 0.0.0.0 --port 8000
+	uv run serve run sentimentizer.serve:app --host 0.0.0.0 --port 8000
 
 # ──────────────────────────────────────────────
 # Testing & Linting

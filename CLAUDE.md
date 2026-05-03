@@ -57,10 +57,9 @@ Both ruff and black are run in CI — PRs must pass lint and format checks befor
 
 ## Project structure
 
-- `sentimentizer/` — Core library (models, trainer, tokenizer, extractor, loader, config)
+- `sentimentizer/` — Core library (models, trainer, tokenizer, extractor, loader, config, serve.py)
 - `workflows/` — CLI driver for the extract → tokenize → train pipeline
 - `tests/` — Pytest tests
-- `serve.py` — Ray Serve deployment
 - `k8s/` — Kubernetes manifests
 
 ## Key conventions

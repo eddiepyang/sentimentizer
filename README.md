@@ -48,10 +48,10 @@ Each module exposes `get_trained_model(device, model_config=...)` to load pre-tr
 
 ### Ray Serve (Python)
 
-The `serve.py` entry point deploys a Ray Serve application that loads **all three models** (RNN, Encoder, Decoder) at startup. You can select which model to use per request via the `model` field.
+The `sentimentizer/serve.py` entry point deploys a Ray Serve application that loads **all three models** (RNN, Encoder, Decoder) at startup. You can select which model to use per request via the `model` field.
 
 ```bash
-serve run serve:app --host 0.0.0.0 --port 8000
+uv run serve run sentimentizer.serve:app --host 0.0.0.0 --port 8000
 ```
 
 Send a prediction request (defaults to RNN):
