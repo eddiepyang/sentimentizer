@@ -116,6 +116,10 @@ tune-no-validate:
 upload-rnn:
 	uv run python -c "from sentimentizer.hf import push_model_to_hub; push_model_to_hub('sentimentizer/data/rnn_weights.pth', 'ryeyoo/sentimentizer-rnn', 'rnn')"
 
+## Download RNN weights from Hugging Face Hub
+download-rnn:
+	uv run python -c "from sentimentizer.hf import download_weights; download_weights('rnn', 'sentimentizer/data/rnn_weights.pth')"
+
 # ──────────────────────────────────────────────
 # Serving
 # ──────────────────────────────────────────────

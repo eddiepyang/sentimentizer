@@ -151,13 +151,14 @@ class TestGetTrainedModel:
         assert output.shape == (2,)
 
     def test_missing_weights_file(self):
-        """tests that loading from a missing weights file raises FileNotFoundError"""
+        """tests that loading from a missing weights file raises FileNotFoundError
+        when both local file and Hugging Face Hub download fail"""
         from unittest.mock import patch
 
-        mock_path = "sentimentizer.models.rnn.torch.load"
         with (
-            patch(mock_path, side_effect=FileNotFoundError("No weights")),
-            pytest.raises(FileNotFoundError),
+            patch("sentimentizer.models.rnn.Path.exists", return_value=False),
+            patch("sentimentizer.hf.download_weights", return_value=None),
+            pytest.raises(FileNotFoundError, match="Weights file not found"),
         ):
             get_trained_model("cpu")
 

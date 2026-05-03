@@ -176,8 +176,25 @@ class EmbeddingsConfig:
     emb_length: int = 100
 
 
+# Per-model Hugging Face Hub repository IDs for pre-trained weights.
+# Each model type maps to its own repo; weights are stored as
+# ``{model_type}_weights.pth`` inside the repo.
+HF_WEIGHTS_REPOS: dict[str, str] = {
+    "rnn": "ryeyoo/sentimentizer-rnn",
+    "encoder": "ryeyoo/sentimentizer-encoder",
+    "decoder": "ryeyoo/sentimentizer-decoder",
+}
+
+
 @dataclass
 class HuggingFaceConfig:
+    """Configuration for Hugging Face Hub interactions.
+
+    Attributes:
+        repo_id: Default repo ID (used by push_model_to_hub).
+            Per-model repos are defined in HF_WEIGHTS_REPOS above.
+    """
+
     repo_id: str = "ryeyoo/sentimentizer"
 
 

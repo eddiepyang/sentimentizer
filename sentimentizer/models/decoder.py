@@ -1,5 +1,5 @@
 import math
-from importlib.resources import files
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -7,7 +7,13 @@ from gensim import corpora
 from torch import nn
 
 from sentimentizer import new_logger
-from sentimentizer.config import DEFAULT_LOG_LEVEL, VALID_DEVICES, DecoderConfig, EmbeddingsConfig
+from sentimentizer.config import (
+    DEFAULT_LOG_LEVEL,
+    VALID_DEVICES,
+    DecoderConfig,
+    EmbeddingsConfig,
+    weights_path_for,
+)
 from sentimentizer.extractor import new_embedding_weights
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
@@ -219,6 +225,9 @@ def get_trained_model(
 ) -> Decoder:
     """Load a pre-trained Decoder model from saved weights.
 
+    If local weights are not found, attempts to download them from the
+    Hugging Face Hub (``ryeyoo/sentimentizer-decoder``).
+
     Args:
         device: Device to load weights onto ("cpu", "cuda", or "mps")
         model_config: Decoder architecture configuration (must match saved weights)
@@ -230,20 +239,26 @@ def get_trained_model(
     if device not in VALID_DEVICES:
         raise ValueError("device must be cpu, cuda, or mps")
 
-    weights_path = str(files("sentimentizer.data").joinpath("decoder_weights.pth"))
+    weights_path = weights_path_for("decoder")
 
-    try:
-        weights = torch.load(
-            weights_path,
-            map_location=torch.device(device=device),
-            weights_only=True,
-        )
-    except FileNotFoundError as e:
-        raise FileNotFoundError(
-            f"Weights file not found at {weights_path}. "
-            "Please train the model first: "
-            "python workflows/driver.py --device cuda --model decoder --type new --save True"
-        ) from e
+    # Try local file first; if missing, download from Hugging Face Hub
+    if not Path(weights_path).exists():
+        from sentimentizer.hf import download_weights
+
+        downloaded = download_weights("decoder", weights_path)
+        if downloaded is None:
+            raise FileNotFoundError(
+                f"Weights file not found at {weights_path} and could not be "
+                "downloaded from Hugging Face Hub. Please train the model "
+                "first: python workflows/driver.py --device cuda --model decoder "
+                "--type new --save True"
+            )
+
+    weights = torch.load(
+        weights_path,
+        map_location=torch.device(device=device),
+        weights_only=True,
+    )
 
     # Infer dimensions from saved weights
     emb_shape = weights["embed_layer.weight"].shape

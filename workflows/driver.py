@@ -647,14 +647,14 @@ def main() -> None:
     args = new_parser()
 
     if args.pull_from_hub:
-        from sentimentizer.hf import pull_model_from_hub
+        from sentimentizer.hf import download_weights
         weights_path = weights_path_for(args.model)
-        success = pull_model_from_hub(
-            repo_id=args.hf_repo,
+        # download_weights uses HF_WEIGHTS_REPOS mapping from config
+        result_path = download_weights(
             model_type=args.model,
             local_path=weights_path,
         )
-        if success:
+        if result_path:
             logger.info(f"Pulled {args.model} weights from HF Hub. Forcing run type to 'update'.")
             args.type = "update"
         else:

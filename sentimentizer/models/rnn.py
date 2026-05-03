@@ -1,4 +1,4 @@
-from importlib.resources import files
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -12,6 +12,7 @@ from sentimentizer.config import (
     VALID_DEVICES,
     EmbeddingsConfig,
     RNNConfig,
+    weights_path_for,
 )
 from sentimentizer.extractor import new_embedding_weights
 
@@ -169,6 +170,9 @@ def get_trained_model(
 ) -> RNN:
     """Load a pre-trained RNN model from saved weights.
 
+    If local weights are not found, attempts to download them from the
+    Hugging Face Hub (``ryeyoo/sentimentizer-rnn``).
+
     Args:
         device: Device to load weights onto ("cpu", "cuda", or "mps")
         model_config: RNN architecture configuration (must match saved weights)
@@ -179,18 +183,22 @@ def get_trained_model(
     if device not in VALID_DEVICES:
         raise ValueError("device must be cpu, cuda, or mps")
 
-    weights_path = str(files("sentimentizer.data").joinpath("rnn_weights.pth"))
+    weights_path = weights_path_for("rnn")
 
-    try:
-        weights = torch.load(
-            weights_path, map_location=torch.device(device=device), weights_only=True
-        )
-    except FileNotFoundError as e:
-        raise FileNotFoundError(
-            f"Weights file not found at {weights_path}. "
-            "Please train the model first: "
-            "python workflows/driver.py --device cuda --model rnn --type new --save True"
-        ) from e
+    # Try local file first; if missing, download from Hugging Face Hub
+    if not Path(weights_path).exists():
+        from sentimentizer.hf import download_weights
+
+        downloaded = download_weights("rnn", weights_path)
+        if downloaded is None:
+            raise FileNotFoundError(
+                f"Weights file not found at {weights_path} and could not be "
+                "downloaded from Hugging Face Hub. Please train the model "
+                "first: python workflows/driver.py --device cuda --model rnn "
+                "--type new --save True"
+            )
+
+    weights = torch.load(weights_path, map_location=torch.device(device=device), weights_only=True)
 
     # Check if weights are from the new architecture (has 'classifier' keys)
     if "classifier.0.weight" not in weights:
