@@ -3466,7 +3466,7 @@ requires-dist = [
     { name = "scikit-learn" },
     { name = "smart-open", specifier = ">=7.0.1" },
     { name = "structlog" },
-    { name = "torch", specifier = ">=2.0" },
+    { name = "torch", specifier = ">=2.10" },
 ]
 provides-extras = ["dev"]
 

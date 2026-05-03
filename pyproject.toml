@@ -19,7 +19,7 @@ keywords = ["rnn", "pytorch", "nlp", "sentiment"]
 dependencies = [
     "numpy>=1.23.0",
     "pandas>=1.5.2",
-    "torch>=2.0",
+    "torch>=2.10",
     "orjson>=3.8.5",
     "pyarrow>=11.0.0",
     "scikit-learn",
@@ -90,3 +90,9 @@ target-version = ["py311"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = [
+    "ignore:.*RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO.*:FutureWarning",
+    "ignore:.*use_push_based_shuffle.*:DeprecationWarning",
+    "ignore:.*use_polars.*:DeprecationWarning",
+    "ignore:.*use_arrow_tensor_v2.*:DeprecationWarning"
+]
