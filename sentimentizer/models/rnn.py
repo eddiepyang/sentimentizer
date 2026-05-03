@@ -1,4 +1,4 @@
-from importlib.resources import files
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -12,6 +12,7 @@ from sentimentizer.config import (
     VALID_DEVICES,
     EmbeddingsConfig,
     RNNConfig,
+    weights_path_for,
 )
 from sentimentizer.extractor import new_embedding_weights
 
@@ -84,6 +85,7 @@ class RNN(nn.Module):
 
         Args:
             inputs: Token IDs of shape (batch, seq_len)
+                    Zero-padding is used to compute sequence lengths.
 
         Returns:
             Logits of shape (batch,)
@@ -95,13 +97,21 @@ class RNN(nn.Module):
 
         embeds = F.relu(self.fc0(embeds), inplace=True)  # (B, seq_len, emb_dim)
 
-        # LSTM processes tokens in order — no permute needed
-        out, (hidden, cell) = self.lstm(embeds)  # out: (B, seq_len, hidden*2)
-        if self.verbose:
-            logger.info(f"lstm out shape {out.shape}")
+        # Compute actual (non-padding) lengths so the bidirectional LSTM
+        # can skip padding.  Without packing, the backward pass starts
+        # from position max_len-1 (all zeros), so its final hidden state
+        # is dominated by padding noise instead of real content.
+        lengths = (inputs != 0).sum(dim=1).clamp(min=1)  # (B,)
+
+        packed = nn.utils.rnn.pack_padded_sequence(
+            embeds, lengths.cpu(), batch_first=True, enforce_sorted=False
+        )
+        _, (hidden, _) = self.lstm(packed)
 
         # hidden shape: (num_layers * 2, B, hidden_size)
-        # Take final layer's forward and backward hidden states
+        # Take final layer's forward and backward hidden states.
+        # With packed input, these are correctly computed from the
+        # last real token (forward) and first real token (backward).
         hidden_fwd = hidden[-2]  # last forward layer: (B, hidden_size)
         hidden_bwd = hidden[-1]  # last backward layer: (B, hidden_size)
         hidden_cat = torch.cat([hidden_fwd, hidden_bwd], dim=1)  # (B, hidden*2)
@@ -123,7 +133,8 @@ class RNN(nn.Module):
         """
         with torch.no_grad():
             self.eval()
-            output = torch.from_numpy(converted_text)
+            device = next(self.parameters()).device
+            output = torch.from_numpy(converted_text).to(device)
             return torch.sigmoid(self.forward(output))
 
 
@@ -159,6 +170,9 @@ def get_trained_model(
 ) -> RNN:
     """Load a pre-trained RNN model from saved weights.
 
+    If local weights are not found, attempts to download them from the
+    Hugging Face Hub (``ryeyoo/sentimentizer-rnn``).
+
     Args:
         device: Device to load weights onto ("cpu", "cuda", or "mps")
         model_config: RNN architecture configuration (must match saved weights)
@@ -169,18 +183,22 @@ def get_trained_model(
     if device not in VALID_DEVICES:
         raise ValueError("device must be cpu, cuda, or mps")
 
-    weights_path = str(files("sentimentizer.data").joinpath("weights.pth"))
+    weights_path = weights_path_for("rnn")
 
-    try:
-        weights = torch.load(
-            weights_path, map_location=torch.device(device=device), weights_only=True
-        )
-    except FileNotFoundError as e:
-        raise FileNotFoundError(
-            f"Weights file not found at {weights_path}. "
-            "Please train the model first: "
-            "python workflows/driver.py --device cuda --model rnn --type new --save True"
-        ) from e
+    # Try local file first; if missing, download from Hugging Face Hub
+    if not Path(weights_path).exists():
+        from sentimentizer.hf import download_weights
+
+        downloaded = download_weights("rnn", weights_path)
+        if downloaded is None:
+            raise FileNotFoundError(
+                f"Weights file not found at {weights_path} and could not be "
+                "downloaded from Hugging Face Hub. Please train the model "
+                "first: python workflows/driver.py --device cuda --model rnn "
+                "--type new --save True"
+            )
+
+    weights = torch.load(weights_path, map_location=torch.device(device=device), weights_only=True)
 
     # Check if weights are from the new architecture (has 'classifier' keys)
     if "classifier.0.weight" not in weights:

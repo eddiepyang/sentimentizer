@@ -13,6 +13,12 @@ import structlog
 # Disable Ray's automatic uv runtime environment to prevent VIRTUAL_ENV warnings
 os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
 
+# Enable Ray Data rich progress bars and suppress the "new progress UI" info message.
+# These must be set before ray.data.context is imported so the defaults are picked up.
+# See https://docs.ray.io/en/2.55.1/data/api/doc/ray.data.DataContext.html
+os.environ["RAY_DATA_ENABLE_RICH_PROGRESS_BARS"] = "1"
+os.environ["RAY_TQDM"] = "0"
+
 file_path = Path(__file__)
 root = file_path.parent.parent.absolute()
 

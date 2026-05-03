@@ -1,5 +1,5 @@
 import math
-from importlib.resources import files
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -7,7 +7,13 @@ from gensim import corpora
 from torch import nn
 
 from sentimentizer import new_logger
-from sentimentizer.config import DEFAULT_LOG_LEVEL, VALID_DEVICES, EmbeddingsConfig, EncoderConfig
+from sentimentizer.config import (
+    DEFAULT_LOG_LEVEL,
+    VALID_DEVICES,
+    EmbeddingsConfig,
+    EncoderConfig,
+    weights_path_for,
+)
 from sentimentizer.extractor import new_embedding_weights
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
@@ -72,12 +78,13 @@ class Encoder(nn.Module):
         d_model: int = EncoderConfig.d_model,
         n_heads: int = EncoderConfig.n_heads,
         n_layers: int = EncoderConfig.n_layers,
-        verbose: bool = True,
+        verbose: bool = False,
         dropout: float = EncoderConfig.dropout,
         ff_multiplier: int = EncoderConfig.ff_multiplier,
     ) -> None:
         super().__init__()
         self.d_model = d_model
+        self.verbose = verbose
 
         # Embedding layer (vocab_size, emb_dim)
         self.embed_layer = nn.Embedding(emb_weights.shape[0], emb_weights.shape[1])
@@ -88,8 +95,8 @@ class Encoder(nn.Module):
         # Learnable CLS token prepended to the sequence
         self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
 
-        # Positional encoding (max_len = input_len + 1 for CLS token)
-        self.pos_encoder = PositionalEncoding(d_model, dropout=dropout, max_len=input_len + 1)
+        # Positional encoding (default max_len=500)
+        self.pos_encoder = PositionalEncoding(d_model, dropout=dropout)
 
         # Transformer encoder with batch_first=True
         encoder_layer = nn.TransformerEncoderLayer(
@@ -120,12 +127,14 @@ class Encoder(nn.Module):
 
         Args:
             inputs: Token IDs of shape (batch, seq_len)
+                    Zero-padding is used to build the padding mask.
 
         Returns:
             Logits of shape (batch,)
         """
         embeds = self.embed_layer(inputs)  # (B, seq_len, emb_dim)
-        logger.debug(f"embedding shape {embeds.shape}")
+        if self.verbose:
+            logger.info(f"embedding shape {embeds.shape}")
 
         # Project to d_model
         projected = self.proj(embeds)  # (B, seq_len, d_model)
@@ -137,13 +146,23 @@ class Encoder(nn.Module):
         # Add positional encoding
         x = self.pos_encoder(x)  # (B, seq_len+1, d_model)
 
-        # Transformer encoder — self-attention over all tokens including CLS
-        encoded = self.encoder(x)  # (B, seq_len+1, d_model)
-        logger.debug(f"encoder out shape {encoded.shape}")
+        # Padding mask: True where padding (so attention ignores those positions).
+        # CLS token at position 0 is never padded, so prepend False.
+        pad_mask = inputs == 0  # (B, seq_len)
+        cls_mask = torch.zeros(inputs.size(0), 1, dtype=torch.bool, device=inputs.device)
+        src_key_padding_mask = torch.cat([cls_mask, pad_mask], dim=1)  # (B, seq_len+1)
+
+        # Transformer encoder — self-attention with padding mask
+        encoded = self.encoder(
+            x, src_key_padding_mask=src_key_padding_mask
+        )  # (B, seq_len+1, d_model)
+        if self.verbose:
+            logger.info(f"encoder out shape {encoded.shape}")
 
         # Pool from CLS token position
         cls_out = encoded[:, 0, :]  # (B, d_model)
-        logger.debug(f"cls out shape {cls_out.shape}")
+        if self.verbose:
+            logger.info(f"cls out shape {cls_out.shape}")
 
         # Classify
         logits = self.classifier(cls_out)  # (B, 1)
@@ -160,7 +179,8 @@ class Encoder(nn.Module):
         """
         with torch.no_grad():
             self.eval()
-            output = torch.from_numpy(converted_text)
+            device = next(self.parameters()).device
+            output = torch.from_numpy(converted_text).to(device)
             return torch.sigmoid(self.forward(output))
 
 
@@ -196,12 +216,17 @@ def new_model(
 def get_trained_model(
     device: str,
     model_config: EncoderConfig = _DEFAULT_ENCODER_CONFIG,
+    input_len: int = 200,
 ) -> Encoder:
     """Load a pre-trained Encoder model from saved weights.
+
+    If local weights are not found, attempts to download them from the
+    Hugging Face Hub (``ryeyoo/sentimentizer-encoder``).
 
     Args:
         device: Device to load weights onto ("cpu", "cuda", or "mps")
         model_config: Encoder architecture configuration (must match saved weights)
+        input_len: Maximum sequence length (defaults to 200)
 
     Returns:
         Encoder model with loaded weights
@@ -209,11 +234,27 @@ def get_trained_model(
     if device not in VALID_DEVICES:
         raise ValueError("device must be cpu, cuda, or mps")
 
+    weights_path = weights_path_for("encoder")
+
+    # Try local file first; if missing, download from Hugging Face Hub
+    if not Path(weights_path).exists():
+        from sentimentizer.hf import download_weights
+
+        downloaded = download_weights("encoder", weights_path)
+        if downloaded is None:
+            raise FileNotFoundError(
+                f"Weights file not found at {weights_path} and could not be "
+                "downloaded from Hugging Face Hub. Please train the model "
+                "first: python workflows/driver.py --device cuda --model encoder "
+                "--type new --save True"
+            )
+
     weights = torch.load(
-        str(files("sentimentizer.data").joinpath("encoder_weights.pth")),
+        weights_path,
         map_location=torch.device(device=device),
         weights_only=True,
     )
+
     # Infer vocab size and d_model from saved weights
     emb_shape = weights["embed_layer.weight"].shape
     d_model = weights["proj.weight"].shape[0]  # output dim of proj layer
@@ -222,13 +263,20 @@ def get_trained_model(
     model = Encoder(
         d_model=d_model,
         n_heads=model_config.n_heads,
-        input_len=200,
+        input_len=input_len,
         emb_weights=empty_embeddings,
         n_layers=model_config.n_layers,
         dropout=model_config.dropout,
         ff_multiplier=model_config.ff_multiplier,
     )
 
-    model.load_state_dict(weights)
+    try:
+        model.load_state_dict(weights)
+    except RuntimeError as e:
+        raise RuntimeError(
+            "Saved weights are incompatible with the current model architecture. "
+            "Please retrain the model: "
+            "python workflows/driver.py --device cuda --model encoder --type new --save True"
+        ) from e
 
     return model

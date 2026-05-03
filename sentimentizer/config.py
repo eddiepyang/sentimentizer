@@ -38,7 +38,7 @@ def auto_detect_device() -> str:
 def default_epochs(model_type: str) -> int:
     """Return default epochs for the model type.
 
-    RNNs converge faster with simple patterns.
+    RNNs need enough epochs to learn compositional patterns like negation.
     Transformers need more epochs for attention patterns to develop.
     """
     if model_type in ("encoder", "decoder"):
@@ -131,7 +131,28 @@ class FileConfig:
     dictionary_file_path: str = f"{data_path}/data/yelp.dictionary"
     raw_reviews_file_path: str = f"{data_path}/data/review_data_raw.parquet"
     processed_reviews_file_path: str = f"{data_path}/data/review_data.parquet"
-    weights_file_path: str = f"{data_path}/data/weights.pth"
+    rnn_weights_file_path: str = f"{data_path}/data/rnn_weights.pth"
+    encoder_weights_file_path: str = f"{data_path}/data/encoder_weights.pth"
+    decoder_weights_file_path: str = f"{data_path}/data/decoder_weights.pth"
+
+
+def weights_path_for(model_type: str) -> str:
+    """Return the weights file path for the given model type.
+
+    Args:
+        model_type: One of 'rnn', 'encoder', 'decoder'.
+
+    Returns:
+        Absolute path to the weights file for that model type.
+    """
+    if model_type == "rnn":
+        return FileConfig.rnn_weights_file_path
+    elif model_type == "encoder":
+        return FileConfig.encoder_weights_file_path
+    elif model_type == "decoder":
+        return FileConfig.decoder_weights_file_path
+    else:
+        raise ValueError(f"Unknown model type: {model_type!r}")
 
 
 @dataclass
@@ -140,21 +161,41 @@ class TrainerConfig:
     epochs: int = -1  # -1 means use model-specific default (4 for RNN, 8 for encoder/decoder)
     early_stopping_patience: int = 2  # stop if val_loss doesn't improve for this many epochs
     dataloader_workers: int = -1  # -1 means auto-detect based on device
-    ray_workers: int = 2  # Ray Train workers (only used with --distributed)
+    ray_workers: int = 1  # Ray Train workers (only used with --distributed)
     device: str = "auto"  # "auto" detects best available: cuda > mps > cpu
     memory: bool = True
     checkpoint_dir: str = ""  # directory to save checkpoints (empty = no checkpointing)
     checkpoint_every: int = 1  # save checkpoint every N epochs (0 = disabled)
     checkpoint_best: bool = True  # save the best model (lowest val loss) separately
+    pos_weight: float = 1.0  # weight for the positive class in the loss function
 
 
 @dataclass
 class EmbeddingsConfig:
-    file_path: str = str(external_data / "glove.6B.zip")
-    # sub_file_path: str = "glove.6B.zip/glove.6B.100d.txt"
-    sub_file_path: str = "glove.6B.100d.txt"
-
+    model_name: str = "glove-wiki-gigaword-100"  # auto-downloaded via gensim.downloader
     emb_length: int = 100
+
+
+# Per-model Hugging Face Hub repository IDs for pre-trained weights.
+# Each model type maps to its own repo; weights are stored as
+# ``{model_type}_weights.pth`` inside the repo.
+HF_WEIGHTS_REPOS: dict[str, str] = {
+    "rnn": "ryeyoo/sentimentizer-rnn",
+    "encoder": "ryeyoo/sentimentizer-encoder",
+    "decoder": "ryeyoo/sentimentizer-decoder",
+}
+
+
+@dataclass
+class HuggingFaceConfig:
+    """Configuration for Hugging Face Hub interactions.
+
+    Attributes:
+        repo_id: Default repo ID (used by push_model_to_hub).
+            Per-model repos are defined in HF_WEIGHTS_REPOS above.
+    """
+
+    repo_id: str = "ryeyoo/sentimentizer"
 
 
 @dataclass(frozen=True)
@@ -198,3 +239,4 @@ class DriverConfig:
     rnn: type[RNNConfig] = RNNConfig
     encoder: type[EncoderConfig] = EncoderConfig
     decoder: type[DecoderConfig] = DecoderConfig
+    hf: type[HuggingFaceConfig] = HuggingFaceConfig

@@ -151,13 +151,14 @@ class TestGetTrainedModel:
         assert output.shape == (2,)
 
     def test_missing_weights_file(self):
-        """tests that loading from a missing weights file raises FileNotFoundError"""
+        """tests that loading from a missing weights file raises FileNotFoundError
+        when both local file and Hugging Face Hub download fail"""
         from unittest.mock import patch
 
-        mock_path = "sentimentizer.models.rnn.torch.load"
         with (
-            patch(mock_path, side_effect=FileNotFoundError("No weights")),
-            pytest.raises(FileNotFoundError),
+            patch("sentimentizer.models.rnn.Path.exists", return_value=False),
+            patch("sentimentizer.hf.download_weights", return_value=None),
+            pytest.raises(FileNotFoundError, match="Weights file not found"),
         ):
             get_trained_model("cpu")
 
@@ -313,8 +314,7 @@ class TestNewRayTrainer:
             "scheduler_eta_min": 1e-6,
             "model_type": "rnn",
             "dict_path": "/tmp/test.dict",
-            "embeddings_file_path": "/tmp/test.zip",
-            "embeddings_sub_file_path": "test.txt",
+            "embeddings_model_name": "glove-wiki-gigaword-100",
             "embeddings_emb_length": 100,
             "input_len": 200,
         }
@@ -338,8 +338,7 @@ class TestNewRayTrainer:
             "scheduler_eta_min",
             "model_type",
             "dict_path",
-            "embeddings_file_path",
-            "embeddings_sub_file_path",
+            "embeddings_model_name",
             "embeddings_emb_length",
             "input_len",
         }
@@ -355,8 +354,7 @@ class TestNewRayTrainer:
             "scheduler_eta_min": 1e-6,
             "model_type": "rnn",
             "dict_path": "/tmp/test.dict",
-            "embeddings_file_path": "/tmp/test.zip",
-            "embeddings_sub_file_path": "test.txt",
+            "embeddings_model_name": "glove-wiki-gigaword-100",
             "embeddings_emb_length": 100,
             "input_len": 200,
         }
@@ -368,7 +366,7 @@ class TestTrainerConfig:
 
     def test_default_ray_workers(self):
         cfg = TrainerConfig()
-        assert cfg.ray_workers == 2
+        assert cfg.ray_workers == 1
 
     def test_custom_ray_workers(self):
         cfg = TrainerConfig(ray_workers=4)

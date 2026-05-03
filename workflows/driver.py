@@ -1,11 +1,18 @@
 import argparse
 import asyncio
+import atexit
 import os
 import shutil
+import signal
 from pathlib import Path
 
 # Disable Ray's automatic uv runtime environment to prevent VIRTUAL_ENV warnings
 os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
+
+# Tell the Ray Dashboard where to find Grafana and Prometheus for the Metrics tab.
+# These must be set BEFORE ray.init() so the dashboard can embed Grafana iframes.
+os.environ.setdefault("RAY_GRAFANA_HOST", "http://localhost:3000")
+os.environ.setdefault("RAY_PROMETHEUS_HOST", "http://localhost:9090")
 
 import ray
 import torch
@@ -21,13 +28,57 @@ from sentimentizer.config import (
     auto_detect_device,
     default_dataloader_workers,
     default_epochs,
+    weights_path_for,
 )
 from sentimentizer.extractor import extract_data
-from sentimentizer.loader import load_train_val_corpus_datasets, load_train_val_ray_datasets
+from sentimentizer.loader import (
+    compute_pos_weight,
+    load_train_val_corpus_datasets,
+    load_train_val_ray_datasets,
+)
 from sentimentizer.tokenizer import Tokenizer
 from sentimentizer.trainer import latest_checkpoint, load_checkpoint, new_ray_trainer, new_trainer
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
+
+
+# ──────────────────────────────────────────────
+# CUDA cleanup: graceful GPU release on exit
+# ──────────────────────────────────────────────
+
+
+def _cuda_cleanup() -> None:
+    """Release cached CUDA memory and synchronize pending GPU ops.
+
+    Safe to call even when CUDA is not available.  Called by atexit
+    and signal handlers to prevent orphaned GPU contexts after Ctrl-C.
+    """
+    if torch.cuda.is_available():
+        try:
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+        except RuntimeError:
+            # CUDA context may already be torn down during shutdown
+            pass
+
+
+# Register cleanup for normal process exit (including unhandled exceptions)
+atexit.register(_cuda_cleanup)
+
+
+def _sigint_handler(signum: int, frame: object) -> None:
+    """Handle Ctrl-C by cleaning up CUDA before re-raising KeyboardInterrupt.
+
+    Without this, a Ctrl-C during CUDA training can leave the GPU context
+    in a bad state, causing error 804 on subsequent runs.
+    """
+    logger.info("Received SIGINT, cleaning up CUDA...")
+    _cuda_cleanup()
+    raise KeyboardInterrupt
+
+
+# Install the handler for interactive Ctrl-C
+signal.signal(signal.SIGINT, _sigint_handler)
 
 
 class RunTypeError(Exception):
@@ -59,7 +110,7 @@ def new_parser() -> argparse.Namespace:
     parser.add_argument(
         "--num-workers",
         type=int,
-        default=2,
+        default=1,
         help="number of Ray Train workers for distributed training (--distributed only)",
     )
     parser.add_argument(
@@ -73,6 +124,53 @@ def new_parser() -> argparse.Namespace:
         type=str,
         default=None,
         help="path to agent config YAML file (default: sentimentizer/agent/config.yaml)",
+    )
+    parser.add_argument(
+        "--tune",
+        action="store_true",
+        default=False,
+        help="use TuningRun skill to tune hyperparameters and validate model predictions",
+    )
+    parser.add_argument(
+        "--tune-mode",
+        default="agent",
+        choices=["agent", "standalone"],
+        help="tuning mode: 'agent' (LLM-guided loop) or 'standalone' (single Ray Tune run)",
+    )
+    parser.add_argument(
+        "--tune-samples",
+        type=int,
+        default=20,
+        help="number of Ray Tune trials per tuning iteration (default: 20)",
+    )
+    parser.add_argument(
+        "--tune-max-iterations",
+        type=int,
+        default=5,
+        help="maximum agent tuning iterations (default: 5)",
+    )
+    parser.add_argument(
+        "--tune-output-dir",
+        default="tuning_results",
+        help="directory to save tuning results and model weights (default: tuning_results)",
+    )
+    parser.add_argument(
+        "--no-validate",
+        action="store_true",
+        default=False,
+        help="skip model prediction validation after tuning",
+    )
+    parser.add_argument(
+        "--validation-threshold",
+        type=float,
+        default=0.75,
+        help="minimum fraction of correct predictions to pass validation (default: 0.75)",
+    )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=2,
+        help="maximum re-tuning attempts if validation fails (default: 2)",
     )
     parser.add_argument(
         "--checkpoint-dir",
@@ -91,6 +189,42 @@ def new_parser() -> argparse.Namespace:
         action="store_true",
         default=False,
         help="resume training from the latest checkpoint in --checkpoint-dir",
+    )
+    parser.add_argument(
+        "--no-balance-classes",
+        action="store_true",
+        default=False,
+        help="disable class balancing (undersampling majority class in training data)",  # noqa: E501
+    )
+    parser.add_argument(
+        "--balance-seed",
+        type=int,
+        default=42,
+        help="random seed for class balancing undersampling (default: 42)",
+    )
+    parser.add_argument(
+        "--pos-weight",
+        type=float,
+        default=0.0,
+        help="loss weight for the positive class (0 = auto-calculate from data, default: 0)",
+    )
+    parser.add_argument(
+        "--push-to-hub",
+        action="store_true",
+        default=False,
+        help="push model weights to Hugging Face Hub after training",
+    )
+    parser.add_argument(
+        "--pull-from-hub",
+        action="store_true",
+        default=False,
+        help="pull model weights from Hugging Face Hub before running",
+    )
+    parser.add_argument(
+        "--hf-repo",
+        type=str,
+        default=DriverConfig.hf.repo_id,
+        help=f"Hugging Face repository ID (default: {DriverConfig.hf.repo_id})",
     )
     args = parser.parse_args()
 
@@ -235,9 +369,25 @@ def run_fit(args: argparse.Namespace) -> None:
 
 def _run_fit_single(args: argparse.Namespace) -> None:
     """Single-node training using the existing Trainer class."""
+    balance_classes = not args.no_balance_classes
     train_dataset, val_dataset = load_train_val_corpus_datasets(
-        DriverConfig.files.processed_reviews_file_path
+        DriverConfig.files.processed_reviews_file_path,
+        balance_classes=balance_classes,
+        random_state=args.balance_seed,
     )
+
+    # Auto-compute pos_weight from training data if not explicitly set
+    pos_weight = args.pos_weight
+    if pos_weight == 0.0:
+        if balance_classes:
+            logger.info("using pos_weight=1.0 because class balancing (undersampling) is enabled")
+            pos_weight = 1.0
+        else:
+            import pandas as pd
+
+            train_df = pd.read_parquet(DriverConfig.files.processed_reviews_file_path)
+            pos_weight = compute_pos_weight(train_df)
+            del train_df
 
     model = _load_model(args)
 
@@ -248,6 +398,7 @@ def _run_fit_single(args: argparse.Namespace) -> None:
         dataloader_workers=default_dataloader_workers(args.device),
         checkpoint_dir=args.checkpoint_dir,
         checkpoint_every=args.checkpoint_every,
+        pos_weight=pos_weight,
     )
 
     trainer = new_trainer(
@@ -269,22 +420,58 @@ def _run_fit_single(args: argparse.Namespace) -> None:
                 f"resumed from checkpoint: {ckpt_path}, epoch={checkpoint.get('epoch', '?')}"
             )
 
-    trainer.fit(model, train_data=train_dataset, val_data=val_dataset)
+    try:
+        trainer.fit(model, train_data=train_dataset, val_data=val_dataset)
+    finally:
+        # Ensure CUDA resources are released even on Ctrl-C or exception
+        _cuda_cleanup()
 
     if args.save:
-        torch.save(model.state_dict(), DriverConfig.files.weights_file_path)
-        logger.info(f"model weights saved to: {DriverConfig.files.weights_file_path}")
+        weights_path = weights_path_for(args.model)
+        torch.save(model.state_dict(), weights_path)
+        logger.info(f"model weights saved to: {weights_path}")
+
+        if args.push_to_hub:
+            from sentimentizer.hf import push_model_to_hub
+
+            push_model_to_hub(
+                local_path=weights_path,
+                repo_id=args.hf_repo,
+                model_type=args.model,
+            )
 
 
 def _run_fit_distributed(args: argparse.Namespace) -> None:
     """Distributed training using Ray Train TorchTrainer."""
-    train_ds, val_ds = load_train_val_ray_datasets(DriverConfig.files.processed_reviews_file_path)
+    balance_classes = not args.no_balance_classes
 
+    # Auto-compute pos_weight from full dataset if not explicitly set
+    pos_weight = args.pos_weight
+    if pos_weight == 0.0:
+        if balance_classes:
+            logger.info("using pos_weight=1.0 because class balancing (undersampling) is enabled")
+            pos_weight = 1.0
+        else:
+            import pandas as pd
+
+            full_df = pd.read_parquet(DriverConfig.files.processed_reviews_file_path)
+            pos_weight = compute_pos_weight(full_df)
+            del full_df
+
+    train_ds, val_ds = load_train_val_ray_datasets(
+        DriverConfig.files.processed_reviews_file_path,
+        balance_classes=balance_classes,
+        random_state=args.balance_seed,
+    )
+
+    epochs = default_epochs(args.model)
     cfg = DriverConfig.trainer(
+        epochs=epochs,
         device=args.device,
         ray_workers=args.num_workers,
         checkpoint_dir=args.checkpoint_dir,
         checkpoint_every=args.checkpoint_every,
+        pos_weight=pos_weight,
     )
 
     ray_trainer = new_ray_trainer(
@@ -294,7 +481,11 @@ def _run_fit_distributed(args: argparse.Namespace) -> None:
         model_type=args.model,
     )
 
-    result = ray_trainer.fit()
+    try:
+        result = ray_trainer.fit()
+    finally:
+        # Ensure CUDA resources are released even on Ctrl-C or exception
+        _cuda_cleanup()
 
     logger.info(  # type: ignore[call-arg]
         "distributed training completed",
@@ -304,12 +495,29 @@ def _run_fit_distributed(args: argparse.Namespace) -> None:
 
     if args.save:
         # Load best checkpoint and save model weights
-        checkpoint_data = result.checkpoint.to_dict()
-        torch.save(
-            checkpoint_data["model_state_dict"],
-            DriverConfig.files.weights_file_path,
-        )
-        logger.info(f"model weights saved to: {DriverConfig.files.weights_file_path}")
+        # Ray 2.55+ uses directory-based checkpoints (to_dict removed)
+        import os
+
+        import ray.cloudpickle as pickle
+
+        weights_path = weights_path_for(args.model)
+        with result.checkpoint.as_directory() as checkpoint_dir:
+            with open(os.path.join(checkpoint_dir, "data.pkl"), "rb") as fp:
+                checkpoint_data = pickle.load(fp)
+            torch.save(
+                checkpoint_data["model_state_dict"],
+                weights_path,
+            )
+        logger.info(f"model weights saved to: {weights_path}")
+
+        if args.push_to_hub:
+            from sentimentizer.hf import push_model_to_hub
+
+            push_model_to_hub(
+                local_path=weights_path,
+                repo_id=args.hf_repo,
+                model_type=args.model,
+            )
 
 
 def run_agent_tune(args: argparse.Namespace) -> None:
@@ -343,31 +551,129 @@ def run_agent_tune(args: argparse.Namespace) -> None:
         best_config=result.best_config,
     )
 
-    if args.save:
-        import json
-        from pathlib import Path
+    # Always save best config JSON
+    import json
+    from pathlib import Path
 
-        output_path = Path("best_config.json")
-        with open(output_path, "w") as f:
-            json.dump(
-                {
-                    "best_config": result.best_config,
-                    "best_accuracy": result.best_accuracy,
-                    "best_loss": result.best_loss,
-                    "iterations": result.iterations_completed,
-                    "converged": result.converged,
-                },
-                f,
-                indent=2,
-            )
-        logger.info(f"best config saved to: {output_path}")
+    output_path = Path("best_config.json")
+    with open(output_path, "w") as f:
+        json.dump(
+            {
+                "best_config": result.best_config,
+                "best_accuracy": result.best_accuracy,
+                "best_loss": result.best_loss,
+                "iterations": result.iterations_completed,
+                "converged": result.converged,
+                "history": [
+                    h.model_dump() if hasattr(h, "model_dump") else h for h in result.history
+                ],
+            },
+            f,
+            indent=2,
+            default=str,
+        )
+    logger.info(f"best config saved to: {output_path}")
+
+
+def run_tune(args: argparse.Namespace) -> None:
+    """Run the TuningRun skill to tune hyperparameters and validate model predictions.
+
+    This is the main entry point for the tuning skill. It creates a
+    TuningRunConfig from the CLI arguments, executes the tuning run,
+    and logs the results including validation status.
+    """
+    from sentimentizer.agent.skill import TuningRun, TuningRunConfig
+
+    config = TuningRunConfig(
+        model_type=args.model,
+        mode=args.tune_mode,
+        config_path=args.agent_config,
+        num_samples=args.tune_samples,
+        max_iterations=args.tune_max_iterations,
+        device=args.device,
+        save_best_model=args.save,
+        output_dir=args.tune_output_dir,
+        validate_predictions=not args.no_validate,
+        validation_threshold=args.validation_threshold,
+        max_retries=args.max_retries,
+        balance_classes=not args.no_balance_classes,
+        balance_seed=args.balance_seed,
+        pos_weight=args.pos_weight,
+    )
+
+    run = TuningRun(config)
+
+    logger.info(  # type: ignore[call-arg]
+        "starting_tuning_skill",
+        model_type=config.model_type,
+        mode=config.mode,
+        device=config.device,
+        validate=config.validate_predictions,
+        max_retries=config.max_retries,
+    )
+
+    try:
+        result = run.execute()
+    finally:
+        # Ensure CUDA resources are released even on Ctrl-C or exception
+        _cuda_cleanup()
+
+    logger.info(  # type: ignore[call-arg]
+        "tuning_skill_complete",
+        best_accuracy=result.best_accuracy,
+        best_loss=result.best_loss,
+        best_f1=result.best_f1,
+        best_cohen_kappa=result.best_cohen_kappa,
+        best_positive_accuracy=result.best_positive_accuracy,
+        best_negative_accuracy=result.best_negative_accuracy,
+        iterations=result.iterations_completed,
+        converged=result.converged,
+        validation_passed=result.validation_passed,
+        retry_count=result.retry_count,
+        model_path=result.model_path,
+        results_path=result.results_path,
+        elapsed_seconds=result.elapsed_seconds,
+    )
+
+    if result.validation_passed:
+        logger.info("tuning_skill_passed: model predictions validated successfully")
+    else:
+        logger.warning(
+            "tuning_skill_failed: model predictions did not meet validation threshold "
+            f"({result.validation_threshold}) after {result.retry_count} retries"
+        )
 
 
 @time_decorator
 def main() -> None:
     args = new_parser()
 
-    if args.agent_tune:
+    if args.pull_from_hub:
+        from sentimentizer.hf import download_weights
+
+        weights_path = weights_path_for(args.model)
+        # download_weights uses HF_WEIGHTS_REPOS mapping from config
+        result_path = download_weights(
+            model_type=args.model,
+            local_path=weights_path,
+        )
+        if result_path:
+            logger.info(f"Pulled {args.model} weights from HF Hub. Forcing run type to 'update'.")
+            args.type = "update"
+        else:
+            logger.error("Failed to pull weights from HF Hub. Proceeding with original run type.")
+
+    # Initialize Ray with a fixed metrics export port so Prometheus can scrape it.
+    # The port must match metrics/prometheus.yml target (host.docker.internal:8080).
+    # _metrics_export_port is a private API but is the only way to set this
+    # programmatically in Ray 2.55 (public API uses `ray start --metrics-export-port`).
+    if not ray.is_initialized():
+        ray.init(_metrics_export_port=8080)
+
+    if args.tune:
+        # Tuning skill mode: tune hyperparameters and validate model
+        run_tune(args)
+    elif args.agent_tune:
         # Agent tuning mode: uses LLM-guided hyperparameter search
         run_agent_tune(args)
     else:
