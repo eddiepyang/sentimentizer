@@ -97,8 +97,10 @@ class TestSaveLoadCheckpoint:
         new_optimizer = torch.optim.Adam(new_model.parameters(), lr=0.001)
         new_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(new_optimizer, T_max=10)
 
-        # Step the scheduler to change state
+        # Step the scheduler to change state (must step optimizer first to avoid PyTorch warnings)
+        optimizer.step()
         scheduler.step()
+        optimizer.step()
         scheduler.step()
 
         # Save and reload

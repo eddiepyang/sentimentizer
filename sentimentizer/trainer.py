@@ -106,6 +106,7 @@ def _new_loaders(
         batch_size=cfg.batch_size,
         num_workers=workers,
         pin_memory=pin_mem,
+        shuffle=True,
     )
 
     val_loader = DataLoader(
@@ -131,7 +132,7 @@ class Trainer:
     losses: list[float] = field(default_factory=list)
     val_loss: float = float("inf")
 
-    def _train_epoch(self, model: torch.nn.Module, train_loader: DataLoader) -> None:
+    def _train_epoch(self, model: torch.nn.Module, train_loader: DataLoader, epoch: int) -> None:
         i = 0
         n = len(train_loader.dataset)  # type: ignore[arg-type]
         model.train()
@@ -149,10 +150,12 @@ class Trainer:
             self.losses.append(loss_val)
             if i % (self.cfg.batch_size * 100) == 0:
                 logger.info(
-                    f"{i / n:.2f} of rows completed in "
+                    f"[epoch {epoch}] {i / n:.2f} of rows completed in "
                     f"{j + 1} cycles, current loss at {np.mean(self.losses[-60:]):.6f}"
                 )
-                logger.info(f"current learning rate at {self.optimizer.param_groups[0]['lr']:.6f}")
+                logger.info(
+                    f"[epoch {epoch}] current learning rate at {self.optimizer.param_groups[0]['lr']:.6f}"  # noqa: E501
+                )
 
     def fit(
         self, model: torch.nn.Module, train_data: CorpusDataset, val_data: CorpusDataset
@@ -178,68 +181,95 @@ class Trainer:
         if checkpoint_dir:
             Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
 
-        for epoch in range(epochs):
-            self._train_epoch(model, train_loader)
-            self.evaluate(model, val_loader)
+        try:
+            for epoch in range(epochs):
+                self._train_epoch(model, train_loader, epoch)
+                self.evaluate(model, val_loader, epoch)
 
-            if self.scheduler:
-                self.scheduler.step()
+                if self.scheduler:
+                    self.scheduler.step()
 
-            # Save periodic checkpoint
-            if checkpoint_dir and checkpoint_every > 0 and (epoch + 1) % checkpoint_every == 0:
-                ckpt_path = Path(checkpoint_dir) / f"checkpoint_epoch_{epoch + 1}.pth"
-                save_checkpoint(model, self.optimizer, epoch + 1, ckpt_path)
-                logger.info(f"saved checkpoint: {ckpt_path}")
+                # Save periodic checkpoint
+                if checkpoint_dir and checkpoint_every > 0 and (epoch + 1) % checkpoint_every == 0:
+                    ckpt_path = Path(checkpoint_dir) / f"checkpoint_epoch_{epoch + 1}.pth"
+                    save_checkpoint(model, self.optimizer, epoch + 1, ckpt_path)
+                    logger.info(f"saved checkpoint: {ckpt_path}")
 
-            # Save best model checkpoint
-            if checkpoint_dir and checkpoint_best and self.val_loss < best_val_loss:
-                best_path = Path(checkpoint_dir) / "best_model.pth"
-                save_checkpoint(model, self.optimizer, epoch + 1, best_path)
-                logger.info(
-                    f"saved best model checkpoint (val_loss={self.val_loss:.6f}): {best_path}"
-                )
+                # Save best model checkpoint
+                if checkpoint_dir and checkpoint_best and self.val_loss < best_val_loss:
+                    best_path = Path(checkpoint_dir) / "best_model.pth"
+                    save_checkpoint(model, self.optimizer, epoch + 1, best_path)
+                    logger.info(
+                        f"saved best model checkpoint (val_loss={self.val_loss:.6f}): {best_path}"
+                    )
 
-            # Early stopping based on validation loss
-            if self.cfg.early_stopping_patience > 0:
-                if self.val_loss < best_val_loss:
-                    best_val_loss = self.val_loss
-                    patience_counter = 0
-                else:
-                    patience_counter += 1
-                    if patience_counter >= self.cfg.early_stopping_patience:
-                        logger.info(
-                            f"early stopping at epoch {epoch}, "
-                            f"val_loss hasn't improved for {patience_counter} epochs"
-                        )
-                        break
+                # Early stopping based on validation loss
+                if self.cfg.early_stopping_patience > 0:
+                    if self.val_loss < best_val_loss:
+                        best_val_loss = self.val_loss
+                        patience_counter = 0
+                    else:
+                        patience_counter += 1
+                        if patience_counter >= self.cfg.early_stopping_patience:
+                            logger.info(
+                                f"early stopping at epoch {epoch}, "
+                                f"val_loss hasn't improved for {patience_counter} epochs"
+                            )
+                            break
 
-            logger.info(f"epoch {epoch} completed")
+                logger.info(f"[epoch {epoch}] completed, val_loss={self.val_loss:.6f}")
+        finally:
+            # Release CUDA resources even on Ctrl-C or exception.
+            # Prevents error 804 ("forward compatibility was attempted on
+            # non supported HW") caused by orphaned GPU contexts.
+            if self.cfg.device in ("cuda", "mps") and torch.cuda.is_available():
+                torch.cuda.synchronize()
+                torch.cuda.empty_cache()
+
         logger.info(f"model fitting completed, {time.time() - start:.0f} seconds passed")
 
-    def evaluate(self, model: torch.nn.Module, val_loader: DataLoader) -> None:
-        logger.info("evaluating predictions...")
-        losses = []
-        i = 0
-        n = len(val_loader.dataset)  # type: ignore[arg-type]
+    def evaluate(self, model: torch.nn.Module, val_loader: DataLoader, epoch: int) -> None:
+        logger.info(f"[epoch {epoch}] evaluating predictions...")
         model.to(self.cfg.device)
         model.eval()
 
-        for j, (sent, target) in enumerate(val_loader):
-            loss_val = val_step(
-                model,
-                data=sent.to(self.cfg.device),
-                target=target.to(self.cfg.device),
-                loss_function=self.loss_function,
-            )
-            losses.append(loss_val)
-            i += len(target)
-            if i % (self.cfg.batch_size * 100) == 0:
-                logger.info(
-                    f"{i / n:.2f} of rows completed in "
-                    f"{j + 1} cycles, validation loss at {np.mean(losses[-60:]):.6f}"
-                )
+        all_probs: list[torch.Tensor] = []
+        all_targets: list[torch.Tensor] = []
+        losses = []
+
+        with torch.no_grad():
+            for sent, target in val_loader:
+                sent = sent.to(self.cfg.device)
+                target = target.to(self.cfg.device)
+                logits = model(sent)
+                loss_val = self.loss_function(logits, target)
+                losses.append(loss_val.item())
+
+                all_probs.append(torch.sigmoid(logits).cpu())
+                all_targets.append(target.cpu())
+
+        probabilities = torch.cat(all_probs).numpy()
+        targets = torch.cat(all_targets).numpy()
+        predictions = (probabilities >= 0.5).astype(int)
+
+        from sentimentizer.metrics import compute_classification_metrics
+
+        metrics = compute_classification_metrics(
+            predictions=predictions,
+            targets=targets,
+            probabilities=probabilities,
+        )
+
         self.val_loss = np.mean(losses)
-        logger.info(f"validation loss at: {self.val_loss: .6f}")
+        logger.info(  # type: ignore[call-arg]
+            f"[epoch {epoch}] evaluation complete",
+            val_loss=self.val_loss,
+            accuracy=metrics.accuracy,
+            pos_acc=metrics.positive_accuracy,
+            neg_acc=metrics.negative_accuracy,
+            f1=metrics.f1,
+            auc_roc=metrics.auc_roc,
+        )
 
 
 def _get_opt_params(model_type: str) -> OptimizationParams | EncoderOptimizationParams:
@@ -314,8 +344,12 @@ def new_trainer(
             last_epoch=sched.last_epoch,
         )
 
+    loss_function = torch.nn.BCEWithLogitsLoss(
+        pos_weight=torch.tensor([cfg.pos_weight]).to(cfg.device)
+    )
+
     trainer = Trainer(
-        loss_function=torch.nn.BCEWithLogitsLoss(),
+        loss_function=loss_function,
         optimizer=optimizer,
         scheduler=scheduler,
         cfg=cfg,
@@ -338,8 +372,10 @@ def _train_func(config: dict) -> None:
     Reports metrics and checkpoints back to Ray Train.
     """
 
-    # Unpack training config
+    # Unpack training config (resolve -1 to model-specific default)
     epochs = config["epochs"]
+    if epochs == -1:
+        epochs = default_epochs(config["model_type"])
     batch_size = config["batch_size"]
     lr = config["lr"]
     betas = tuple(config["betas"])
@@ -352,8 +388,7 @@ def _train_func(config: dict) -> None:
     # Unpack model config
     model_type = config["model_type"]
     dict_path = config["dict_path"]
-    embeddings_file_path = config["embeddings_file_path"]
-    embeddings_sub_file_path = config["embeddings_sub_file_path"]
+    embeddings_model_name = config["embeddings_model_name"]
     embeddings_emb_length = config["embeddings_emb_length"]
     input_len = config["input_len"]
 
@@ -361,8 +396,7 @@ def _train_func(config: dict) -> None:
     from sentimentizer.config import EmbeddingsConfig
 
     embeddings_config = EmbeddingsConfig(
-        file_path=embeddings_file_path,
-        sub_file_path=embeddings_sub_file_path,
+        model_name=embeddings_model_name,
         emb_length=embeddings_emb_length,
     )
 
@@ -409,11 +443,15 @@ def _train_func(config: dict) -> None:
             T_max=epochs,
             eta_min=scheduler_eta_min,
         )
-    loss_function = torch.nn.BCEWithLogitsLoss()
+    loss_function = torch.nn.BCEWithLogitsLoss(
+        pos_weight=torch.tensor([config.get("pos_weight", 1.0)]).to(device)
+    )
 
     # Get dataset shards for this worker
-    train_shard = train.get_context().get_dataset_shard("train")
-    val_shard = train.get_context().get_dataset_shard("val")
+    # In Ray 2.55+, get_dataset_shard is a standalone function, not a method on get_context()
+    # See https://docs.ray.io/en/2.55.1/train/api/doc/ray.train.get_dataset_shard.html
+    train_shard = train.get_dataset_shard("train")
+    val_shard = train.get_dataset_shard("val")
 
     start = time.time()
     logger.info("fitting model (distributed)...")
@@ -437,34 +475,73 @@ def _train_func(config: dict) -> None:
 
         # Validation
         val_losses = []
+        all_probs = []
+        all_targets = []
         model.eval()
-        for batch in val_shard.iter_torch_batches(batch_size=batch_size):
-            loss_val = val_step(
-                model,
-                data=batch["data"].long().to(device),
-                target=batch["target"].float().to(device),
-                loss_function=loss_function,
-            )
-            val_losses.append(loss_val)
+        with torch.no_grad():
+            for batch in val_shard.iter_torch_batches(batch_size=batch_size):
+                data = batch["data"].long().to(device)
+                target = batch["target"].float().to(device)
+                logits = model(data)
+                loss_val = loss_function(logits, target)
+                val_losses.append(loss_val.item())
+
+                all_probs.append(torch.sigmoid(logits).cpu())
+                all_targets.append(target.cpu())
 
         val_loss = np.mean(val_losses) if val_losses else 0.0
         train_loss = np.mean(epoch_losses) if epoch_losses else 0.0
 
-        logger.info(
-            f"epoch {epoch} completed, train_loss={train_loss:.6f}, val_loss={val_loss:.6f}"
+        from sentimentizer.metrics import compute_classification_metrics
+
+        probabilities = torch.cat(all_probs).numpy()
+        targets = torch.cat(all_targets).numpy()
+        predictions = (probabilities >= 0.5).astype(int)
+
+        metrics = compute_classification_metrics(
+            predictions=predictions,
+            targets=targets,
+            probabilities=probabilities,
+        )
+
+        logger.info(  # type: ignore[call-arg]
+            f"[epoch {epoch}] completed",
+            train_loss=train_loss,
+            val_loss=val_loss,
+            accuracy=metrics.accuracy,
+            pos_acc=metrics.positive_accuracy,
+            neg_acc=metrics.negative_accuracy,
+            f1=metrics.f1,
         )
 
         # Report metrics and checkpoint to Ray Train
-        train.report(
-            {"train_loss": train_loss, "val_loss": val_loss, "epoch": epoch},
-            checkpoint=Checkpoint.from_dict(
+        # Ray 2.55+ requires directory-based checkpoints (from_dict removed)
+        import os
+        import tempfile
+
+        import ray.cloudpickle as pickle
+
+        checkpoint_data = {
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "epoch": epoch,
+        }
+        with tempfile.TemporaryDirectory() as checkpoint_dir:
+            with open(os.path.join(checkpoint_dir, "data.pkl"), "wb") as fp:
+                pickle.dump(checkpoint_data, fp)
+            checkpoint = Checkpoint.from_directory(checkpoint_dir)
+            train.report(
                 {
-                    "model_state_dict": model.module.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(),
+                    "train_loss": train_loss,
+                    "val_loss": val_loss,
+                    "accuracy": metrics.accuracy,
+                    "pos_acc": metrics.positive_accuracy,
+                    "neg_acc": metrics.negative_accuracy,
+                    "f1": metrics.f1,
                     "epoch": epoch,
-                }
-            ),
-        )
+                },
+                checkpoint=checkpoint,
+            )
 
     logger.info(f"model fitting completed, {time.time() - start:.0f} seconds passed")
 
@@ -584,6 +661,9 @@ def new_ray_trainer(
 ) -> TorchTrainer:
     """Factory function to create a Ray Train TorchTrainer for distributed training.
 
+    See Ray Train docs:
+    https://docs.ray.io/en/2.55.1/train/api/doc/ray.train.torch.TorchTrainer.html
+
     Args:
         train_ds: Ray Dataset for training
         val_ds: Ray Dataset for validation
@@ -621,10 +701,10 @@ def new_ray_trainer(
         "scheduler_eta_min": sched.eta_min,
         "model_type": model_type,
         "dict_path": driver_config.files.dictionary_file_path,
-        "embeddings_file_path": driver_config.embeddings.file_path,
-        "embeddings_sub_file_path": driver_config.embeddings.sub_file_path,
+        "embeddings_model_name": driver_config.embeddings.model_name,
         "embeddings_emb_length": driver_config.embeddings.emb_length,
         "input_len": driver_config.tokenizer.max_len,
+        "pos_weight": cfg.pos_weight,
     }
 
     use_gpu = cfg.device in ("cuda", "mps")

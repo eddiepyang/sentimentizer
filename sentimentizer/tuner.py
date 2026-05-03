@@ -210,8 +210,7 @@ def _trainable_wrapper(config: dict, train_dataset: Any = None, val_dataset: Any
     - 'model_type': str
     - 'device': str
     - 'dict_path': str
-    - 'embeddings_file_path': str
-    - 'embeddings_sub_file_path': str
+    - 'embeddings_model_name': str
     - 'embeddings_emb_length': int
     - 'input_len': int
     """
@@ -226,8 +225,7 @@ def _trainable_wrapper(config: dict, train_dataset: Any = None, val_dataset: Any
     model_type = config["model_type"]
     dict_path = config["dict_path"]
     embeddings_config = EmbeddingsConfig(
-        file_path=config["embeddings_file_path"],
-        sub_file_path=config["embeddings_sub_file_path"],
+        model_name=config["embeddings_model_name"],
         emb_length=config["embeddings_emb_length"],
     )
     input_len = config["input_len"]
@@ -266,6 +264,7 @@ def _trainable_wrapper(config: dict, train_dataset: Any = None, val_dataset: Any
         epochs=config.get("epochs", 4),
         device=device,
         dataloader_workers=0,  # Avoid multiprocessing in Ray workers
+        pos_weight=config.get("pos_weight", 1.0),
     )
 
     trainer = new_trainer(
@@ -277,8 +276,12 @@ def _trainable_wrapper(config: dict, train_dataset: Any = None, val_dataset: Any
     if train_dataset is None or val_dataset is None:
         from sentimentizer.loader import load_train_val_corpus_datasets
 
+        balance_classes = config.get("balance_classes", True)
+        random_state = config.get("balance_seed", 42)
         train_dataset, val_dataset = load_train_val_corpus_datasets(
-            DriverConfig.files.processed_reviews_file_path
+            DriverConfig.files.processed_reviews_file_path,
+            balance_classes=balance_classes,
+            random_state=random_state,
         )
 
     train_loader, val_loader = _new_loaders(
@@ -292,22 +295,28 @@ def _trainable_wrapper(config: dict, train_dataset: Any = None, val_dataset: Any
     best_val_loss = float("inf")
 
     for epoch in range(epochs):
-        trainer._train_epoch(model, train_loader)  # noqa: SLF001
-        trainer.evaluate(model, val_loader)
+        trainer._train_epoch(model, train_loader, epoch)  # noqa: SLF001
+        trainer.evaluate(model, val_loader, epoch)
 
-        val_accuracy = _compute_accuracy(model, val_loader, device)
+        from sentimentizer.metrics import compute_metrics_from_model
+
+        metrics = compute_metrics_from_model(model, val_loader, device)
         val_loss = trainer.val_loss
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
 
-        from ray import tune
-
         tune.report(
             {
-                "val_accuracy": val_accuracy,
+                "val_accuracy": metrics.accuracy,
                 "val_loss": val_loss,
                 "train_loss": trainer.losses[-1] if trainer.losses else 0.0,
+                "val_precision": metrics.precision,
+                "val_recall": metrics.recall,
+                "val_f1": metrics.f1,
+                "val_cohen_kappa": metrics.cohen_kappa,
+                "val_positive_accuracy": metrics.positive_accuracy,
+                "val_negative_accuracy": metrics.negative_accuracy,
                 "epoch": epoch,
             }
         )
@@ -348,23 +357,6 @@ def _build_model_config(model_type: str, config: dict) -> Any:
         raise ValueError(f"Unknown model type: {model_type}")
 
 
-def _compute_accuracy(model: Any, dataloader: Any, device: str) -> float:
-    """Compute validation accuracy from a model and dataloader."""
-    import torch
-
-    correct = 0
-    total = 0
-    model.eval()
-    with torch.no_grad():
-        for inputs, targets in dataloader:
-            outputs = model(inputs.to(device))
-            preds = torch.sigmoid(outputs) >= 0.5
-            targets_binary = targets.to(device) >= 0.5
-            correct += (preds == targets_binary).sum().item()
-            total += targets_binary.numel()
-    return correct / max(total, 1)
-
-
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -375,8 +367,15 @@ def tune_model(
     tuner_config: TunerConfig | None = None,
     search_space_overrides: dict[str, dict[str, Any]] | None = None,
     config_path: str | Path | None = None,
+    balance_classes: bool = True,
+    balance_seed: int = 42,
+    pos_weight: float = 1.0,
 ) -> dict[str, Any]:
     """Run hyperparameter tuning using Ray Tune + Optuna.
+
+    See Ray Tune docs:
+    https://docs.ray.io/en/2.55.1/tune/api/doc/ray.tune.Tuner.html
+    https://docs.ray.io/en/2.55.1/tune/api/doc/ray.tune.search.optuna.OptunaSearch.html
 
     Args:
         model_type: One of 'rnn', 'encoder', 'decoder'.
@@ -384,12 +383,21 @@ def tune_model(
         search_space_overrides: Optional overrides from the agent's
             TuningDecision.
         config_path: Path to config YAML.
+        balance_classes: Whether to balance classes in training data
+            by undersampling the majority class (default: True).
+        balance_seed: Random seed for class balancing (default: 42).
 
     Returns:
         Dict with keys:
         - 'best_config': dict of best hyperparameters
-        - 'best_accuracy': float
-        - 'best_loss': float
+        - 'best_accuracy': float — overall accuracy
+        - 'best_loss': float — best validation loss
+        - 'best_precision': float — positive-class precision
+        - 'best_recall': float — positive-class recall
+        - 'best_f1': float — positive-class F1 score
+        - 'best_cohen_kappa': float — Cohen's kappa coefficient
+        - 'best_positive_accuracy': float — accuracy on positive samples
+        - 'best_negative_accuracy': float — accuracy on negative samples
         - 'trial_count': int
         - 'results': list of all trial results
     """
@@ -402,21 +410,25 @@ def tune_model(
         config_path=config_path,
     )
 
-    from sentimentizer.config import DriverConfig
+    from sentimentizer.config import DriverConfig, auto_detect_device
 
     search_space["model_type"] = model_type
-    search_space["device"] = "cpu"
+    search_space["device"] = auto_detect_device()
     search_space["dict_path"] = DriverConfig.files.dictionary_file_path
-    search_space["embeddings_file_path"] = DriverConfig.embeddings.file_path
-    search_space["embeddings_sub_file_path"] = DriverConfig.embeddings.sub_file_path
+    search_space["embeddings_model_name"] = DriverConfig.embeddings.model_name
     search_space["embeddings_emb_length"] = DriverConfig.embeddings.emb_length
     search_space["input_len"] = DriverConfig.tokenizer.max_len
+    search_space["balance_classes"] = balance_classes
+    search_space["balance_seed"] = balance_seed
+    search_space["pos_weight"] = pos_weight
 
     from sentimentizer.loader import load_train_val_corpus_datasets
 
     logger.info("loading_datasets_for_tuning")
     train_dataset, val_dataset = load_train_val_corpus_datasets(
-        DriverConfig.files.processed_reviews_file_path
+        DriverConfig.files.processed_reviews_file_path,
+        balance_classes=balance_classes,
+        random_state=balance_seed,
     )
 
     scheduler = _get_scheduler(tuner_config)
@@ -426,7 +438,16 @@ def tune_model(
     )
 
     reporter = CLIReporter(
-        metric_columns=["val_accuracy", "val_loss", "train_loss", "epoch"],
+        metric_columns=[
+            "val_accuracy",
+            "val_loss",
+            "train_loss",
+            "val_f1",
+            "val_cohen_kappa",
+            "val_positive_accuracy",
+            "val_negative_accuracy",
+            "epoch",
+        ],
     )
 
     logger.info(
@@ -437,6 +458,8 @@ def tune_model(
         search_algorithm="optuna",
     )
 
+    _check_memory_for_workers(num_workers=4)
+
     result = tune.Tuner(
         tune.with_resources(
             tune.with_parameters(
@@ -444,13 +467,14 @@ def tune_model(
                 train_dataset=train_dataset,
                 val_dataset=val_dataset,
             ),
-            resources={"cpu": 1, "gpu": 1 if _gpu_available() else 0},
+            resources={"cpu": 1, "gpu": 0.25 if _gpu_available() else 0},
         ),
         param_space=search_space,
         tune_config=tune.TuneConfig(
             scheduler=scheduler,
             search_alg=search_alg,
             num_samples=tuner_config.num_samples,
+            max_concurrent_trials=4,
         ),
         run_config=RunConfig(
             progress_reporter=reporter,
@@ -466,10 +490,11 @@ def tune_model(
         "model_type",
         "device",
         "dict_path",
-        "embeddings_file_path",
-        "embeddings_sub_file_path",
+        "embeddings_model_name",
         "embeddings_emb_length",
         "input_len",
+        "balance_classes",
+        "balance_seed",
     }
     clean_config = {k: v for k, v in best_config.items() if k not in internal_keys}
 
@@ -484,6 +509,12 @@ def tune_model(
         "best_config": clean_config,
         "best_accuracy": best_metrics.get("val_accuracy", 0.0),
         "best_loss": best_metrics.get("val_loss", float("inf")),
+        "best_precision": best_metrics.get("val_precision", 0.0),
+        "best_recall": best_metrics.get("val_recall", 0.0),
+        "best_f1": best_metrics.get("val_f1", 0.0),
+        "best_cohen_kappa": best_metrics.get("val_cohen_kappa", 0.0),
+        "best_positive_accuracy": best_metrics.get("val_positive_accuracy", 0.0),
+        "best_negative_accuracy": best_metrics.get("val_negative_accuracy", 0.0),
         "trial_count": len(result),
         "results": all_results,
     }
@@ -492,6 +523,10 @@ def tune_model(
         "tuning_complete",
         best_accuracy=output["best_accuracy"],
         best_loss=output["best_loss"],
+        best_f1=output["best_f1"],
+        best_cohen_kappa=output["best_cohen_kappa"],
+        best_positive_accuracy=output["best_positive_accuracy"],
+        best_negative_accuracy=output["best_negative_accuracy"],
         trial_count=output["trial_count"],
         best_config=clean_config,
     )
@@ -507,3 +542,37 @@ def _gpu_available() -> bool:
         return torch.cuda.is_available()
     except ImportError:
         return False
+
+
+def _check_memory_for_workers(num_workers: int) -> None:
+    """Check and log if there is enough GPU memory for the requested workers."""
+    if not _gpu_available():
+        return
+
+    import torch
+
+    try:
+        free_mem, total_mem = torch.cuda.mem_get_info()
+        free_mem_gb = free_mem / (1024**3)
+
+        # Estimate ~1.5 GB per worker for these text classification models
+        # (embeddings + hidden states + adam optimizer)
+        required_gb = num_workers * 1.5
+
+        if free_mem_gb < required_gb:
+            logger.warning(
+                "insufficient_gpu_memory_warning",
+                free_mem_gb=f"{free_mem_gb:.2f}GB",
+                estimated_required_gb=f"{required_gb:.2f}GB",
+                num_workers=num_workers,
+                message="You may experience CUDA OutOfMemory errors during tuning.",
+            )
+        else:
+            logger.info(
+                "gpu_memory_check_passed",
+                free_mem_gb=f"{free_mem_gb:.2f}GB",
+                estimated_required_gb=f"{required_gb:.2f}GB",
+                num_workers=num_workers,
+            )
+    except Exception as e:
+        logger.warning(f"Could not calculate GPU memory: {e}")

@@ -1,5 +1,5 @@
 import math
-from importlib.resources import files
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -7,7 +7,13 @@ from gensim import corpora
 from torch import nn
 
 from sentimentizer import new_logger
-from sentimentizer.config import DEFAULT_LOG_LEVEL, VALID_DEVICES, DecoderConfig, EmbeddingsConfig
+from sentimentizer.config import (
+    DEFAULT_LOG_LEVEL,
+    VALID_DEVICES,
+    DecoderConfig,
+    EmbeddingsConfig,
+    weights_path_for,
+)
 from sentimentizer.extractor import new_embedding_weights
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
@@ -63,12 +69,13 @@ class Decoder(nn.Module):
         n_heads: int = DecoderConfig.n_heads,
         n_encoder_layers: int = DecoderConfig.n_encoder_layers,
         n_decoder_layers: int = DecoderConfig.n_decoder_layers,
-        verbose: bool = True,
+        verbose: bool = False,
         dropout: float = DecoderConfig.dropout,
         ff_multiplier: int = DecoderConfig.ff_multiplier,
     ) -> None:
         super().__init__()
         self.d_model = d_model
+        self.verbose = verbose
 
         # Embedding layer
         self.embed_layer = nn.Embedding(emb_weights.shape[0], emb_weights.shape[1])
@@ -79,8 +86,8 @@ class Decoder(nn.Module):
         # Learnable query token for cross-attention decoding
         self.query_token = nn.Parameter(torch.zeros(1, 1, d_model))
 
-        # Positional encoding for the input sequence
-        self.pos_encoder = PositionalEncoding(d_model, dropout=dropout, max_len=input_len + 1)
+        # Positional encoding for the input sequence (default max_len=500)
+        self.pos_encoder = PositionalEncoding(d_model, dropout=dropout)
 
         # Transformer encoder — encodes input text into memory
         encoder_layer = nn.TransformerEncoderLayer(
@@ -124,29 +131,41 @@ class Decoder(nn.Module):
 
         Args:
             inputs: Token IDs of shape (batch, seq_len)
+                    Zero-padding is used to build the padding mask.
 
         Returns:
             Logits of shape (batch,)
         """
         # Embed and project
         embeds = self.embed_layer(inputs)  # (B, seq_len, emb_dim)
-        logger.debug(f"embedding shape {embeds.shape}")
+        if self.verbose:
+            logger.info(f"embedding shape {embeds.shape}")
 
         projected = self.proj(embeds)  # (B, seq_len, d_model)
 
         # Add positional encoding to input
         memory_input = self.pos_encoder(projected)  # (B, seq_len, d_model)
 
-        # Encode input text into memory
-        memory = self.encoder(memory_input)  # (B, seq_len, d_model)
-        logger.debug(f"memory shape {memory.shape}")
+        # Padding mask for encoder: True where padding (attention ignores those positions)
+        src_key_padding_mask = inputs == 0  # (B, seq_len)
+
+        # Encode input text into memory (with padding mask)
+        memory = self.encoder(
+            memory_input, src_key_padding_mask=src_key_padding_mask
+        )  # (B, seq_len, d_model)
+        if self.verbose:
+            logger.info(f"memory shape {memory.shape}")
 
         # Expand query token for the batch
         query = self.query_token.expand(inputs.size(0), -1, -1)  # (B, 1, d_model)
 
-        # Query cross-attends to memory via decoder
-        decoded = self.decoder(tgt=query, memory=memory)  # (B, 1, d_model)
-        logger.debug(f"decoded shape {decoded.shape}")
+        # Query cross-attends to memory via decoder (memory_key_padding_mask
+        # ensures cross-attention also ignores padding)
+        decoded = self.decoder(
+            tgt=query, memory=memory, memory_key_padding_mask=src_key_padding_mask
+        )  # (B, 1, d_model)
+        if self.verbose:
+            logger.info(f"decoded shape {decoded.shape}")
 
         # Extract query output and classify
         query_out = decoded.squeeze(1)  # (B, d_model)
@@ -164,7 +183,8 @@ class Decoder(nn.Module):
         """
         with torch.no_grad():
             self.eval()
-            output = torch.from_numpy(converted_text)
+            device = next(self.parameters()).device
+            output = torch.from_numpy(converted_text).to(device)
             return torch.sigmoid(self.forward(output))
 
 
@@ -201,12 +221,17 @@ def new_model(
 def get_trained_model(
     device: str,
     model_config: DecoderConfig = _DEFAULT_DECODER_CONFIG,
+    input_len: int = 200,
 ) -> Decoder:
     """Load a pre-trained Decoder model from saved weights.
+
+    If local weights are not found, attempts to download them from the
+    Hugging Face Hub (``ryeyoo/sentimentizer-decoder``).
 
     Args:
         device: Device to load weights onto ("cpu", "cuda", or "mps")
         model_config: Decoder architecture configuration (must match saved weights)
+        input_len: Maximum sequence length (defaults to 200)
 
     Returns:
         Decoder model with loaded weights
@@ -214,11 +239,27 @@ def get_trained_model(
     if device not in VALID_DEVICES:
         raise ValueError("device must be cpu, cuda, or mps")
 
+    weights_path = weights_path_for("decoder")
+
+    # Try local file first; if missing, download from Hugging Face Hub
+    if not Path(weights_path).exists():
+        from sentimentizer.hf import download_weights
+
+        downloaded = download_weights("decoder", weights_path)
+        if downloaded is None:
+            raise FileNotFoundError(
+                f"Weights file not found at {weights_path} and could not be "
+                "downloaded from Hugging Face Hub. Please train the model "
+                "first: python workflows/driver.py --device cuda --model decoder "
+                "--type new --save True"
+            )
+
     weights = torch.load(
-        str(files("sentimentizer.data").joinpath("decoder_weights.pth")),
+        weights_path,
         map_location=torch.device(device=device),
         weights_only=True,
     )
+
     # Infer dimensions from saved weights
     emb_shape = weights["embed_layer.weight"].shape
     d_model = weights["proj.weight"].shape[0]
@@ -227,7 +268,7 @@ def get_trained_model(
     model = Decoder(
         d_model=d_model,
         n_heads=model_config.n_heads,
-        input_len=200,
+        input_len=input_len,
         emb_weights=empty_embeddings,
         n_encoder_layers=model_config.n_encoder_layers,
         n_decoder_layers=model_config.n_decoder_layers,
@@ -235,6 +276,13 @@ def get_trained_model(
         ff_multiplier=model_config.ff_multiplier,
     )
 
-    model.load_state_dict(weights)
+    try:
+        model.load_state_dict(weights)
+    except RuntimeError as e:
+        raise RuntimeError(
+            "Saved weights are incompatible with the current model architecture. "
+            "Please retrain the model: "
+            "python workflows/driver.py --device cuda --model decoder --type new --save True"
+        ) from e
 
     return model

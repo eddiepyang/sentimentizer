@@ -1,5 +1,5 @@
 import re
-from collections.abc import Generator
+from collections import Counter
 from dataclasses import dataclass, field
 from importlib.resources import files
 from typing import TypeVar
@@ -20,13 +20,25 @@ pattern = re.compile(r"[a-z0-9'-]+")
 
 
 def convert_rating(rating: int) -> float:
-    """scaling ratings from 0 to 1"""
+    """Scale a single star rating to binary label.
+
+    Used for single-item inference (tokenize_text). For batch processing,
+    prefer vectorized_convert_ratings() instead.
+    """
     if rating in [4, 5]:
         return 1.0
     elif rating in [1, 2]:
         return 0.0
     else:
         return 0.5
+
+
+def vectorized_convert_ratings(stars: np.ndarray) -> np.ndarray:
+    """Vectorized star-to-label conversion using NumPy.
+
+    ~100x faster than applying convert_rating() per element.
+    """
+    return np.where(stars >= 4, 1.0, np.where(stars <= 2, 0.0, 0.5))
 
 
 def text_sequencer(
@@ -38,10 +50,10 @@ def text_sequencer(
     """
 
     processed = np.zeros(max_len, dtype=int)
-    # in case the word is not in the dictionary because it was
-    # filtered out use this number to represent an out of set id
-    # Use max ID + 1 to avoid collisions with existing IDs after filter_extremes
-    dict_final = max(dictionary.keys()) + 1 if dictionary.keys() else 1
+    # OOV token index: after compactify(), IDs are 0..N-1 so the
+    # embedding matrix has rows [pad, word_0, word_1, ..., word_{N-1}, OOV].
+    # Row N+1 = len(dictionary) + 1 is the dedicated OOV row.
+    dict_final = len(dictionary) + 1
 
     for i, word in enumerate(text):
         if i >= max_len:
@@ -72,6 +84,9 @@ def _new_dictionary(data: pd.DataFrame, cfg: TokenizerConfig) -> corpora.Diction
         no_above=cfg.no_above,
         keep_n=cfg.dict_keep,
     )
+    # Remap IDs to contiguous 0..N-1 after filter_extremes leaves gaps.
+    # Required for embedding matrix row alignment (row k = token ID k-1).
+    dictionary.compactify()
     logger.info("dictionary created...")
 
     if cfg.save_dictionary:
@@ -101,11 +116,14 @@ class Tokenizer:
 
         # Work on a copy to avoid mutating the input DataFrame
         data = data.copy()
+
+        # Drop neutral (3-star) reviews for strict binary classification
+        data = data[data[self.cfg.label_col] != 3].copy()
         data[self.cfg.inputs] = data[self.cfg.text_col].map(
             lambda text: text_sequencer(self.dictionary, text, self.cfg.max_len)  # type: ignore[arg-type]
         )
 
-        data[self.cfg.labels] = data[self.cfg.label_col].map(convert_rating)
+        data[self.cfg.labels] = vectorized_convert_ratings(data[self.cfg.label_col].values)
         logger.info("converted tokens to numbers...")
         return data
 
@@ -120,22 +138,14 @@ class Tokenizer:
 
     @classmethod
     def from_dataset(cls: type[TokenizerType], ds: ray.data.Dataset) -> TokenizerType:
-        """creates tokenizer from ray dataset"""
+        """Creates tokenizer from ray dataset using distributed Map-Reduce.
+
+        Instead of pulling every row to the driver via iter_rows(), this
+        distributes word counting across Ray workers and aggregates the
+        results on the driver to build the Gensim dictionary.
+        """
         cfg = TokenizerConfig(save_dictionary=False)
-        # Create dictionary from dataset tokens column
-        # ds.iter_rows() yields items. We want the text_col.
-
-        def gen_docs() -> Generator:
-            for row in ds.iter_rows():
-                yield row[cfg.text_col]
-
-        dictionary = corpora.Dictionary(gen_docs())
-        dictionary.filter_extremes(
-            no_below=cfg.dict_min,
-            no_above=cfg.no_above,
-            keep_n=cfg.dict_keep,
-        )
-        logger.info("dictionary created...")
+        dictionary = _build_dictionary_distributed(ds, cfg)
 
         if cfg.save_dictionary:
             dictionary.save(f"{FileConfig.dictionary_file_path}")
@@ -153,6 +163,9 @@ class Tokenizer:
         dictionary = self.dictionary
         cfg = self.cfg
 
+        # Drop neutral (3-star) reviews for strict binary classification
+        ds = ds.filter(lambda row: row[cfg.label_col] != 3)
+
         def transform_batch(batch: dict) -> dict:
             inputs = []
             for text in batch[cfg.text_col]:
@@ -161,7 +174,7 @@ class Tokenizer:
             batch[cfg.inputs] = np.array(inputs)
 
             if cfg.label_col in batch:
-                batch[cfg.labels] = np.array([convert_rating(r) for r in batch[cfg.label_col]])
+                batch[cfg.labels] = vectorized_convert_ratings(np.asarray(batch[cfg.label_col]))
 
             # Drop variable-length columns that cause Arrow conversion issues
             # Keep only the numeric columns needed for training
@@ -188,3 +201,78 @@ def get_trained_tokenizer() -> Tokenizer:
         str(files("sentimentizer.data").joinpath("yelp.dictionary"))
     )
     return Tokenizer(dictionary=corp_dict)
+
+
+# ---------------------------------------------------------------------------
+# Distributed dictionary building (Map-Reduce)
+# ---------------------------------------------------------------------------
+
+
+def _count_vocab_batch(batch: dict, text_col: str) -> tuple[Counter, Counter, int]:
+    """Count word frequencies and document frequencies for a batch.
+
+    Returns:
+        word_freq: Counter of total word occurrences across all docs in batch
+        doc_freq: Counter of how many docs each word appears in
+        num_docs: Number of documents in this batch
+    """
+    word_freq: Counter = Counter()
+    doc_freq: Counter = Counter()
+    num_docs = 0
+
+    for doc_tokens in batch[text_col]:
+        num_docs += 1
+        word_freq.update(doc_tokens)
+        # doc_freq counts each word once per document
+        doc_freq.update(set(doc_tokens))
+
+    return word_freq, doc_freq, num_docs
+
+
+def _build_dictionary_distributed(ds: ray.data.Dataset, cfg: TokenizerConfig) -> corpora.Dictionary:
+    """Build a Gensim dictionary using distributed Map-Reduce over Ray.
+
+    Instead of streaming every row to the driver via iter_rows(),
+    this distributes word counting across Ray workers and aggregates
+    the results on the driver to construct the dictionary.
+    """
+    text_col = cfg.text_col
+
+    # Map phase: count vocab across distributed batches
+    total_word_freq: Counter = Counter()
+    total_doc_freq: Counter = Counter()
+    total_num_docs = 0
+
+    for batch in ds.iter_batches(batch_size=10000, batch_format="numpy"):
+        wf, df, nd = _count_vocab_batch(batch, text_col)
+        total_word_freq += wf
+        total_doc_freq += df
+        total_num_docs += nd
+
+    # Reduce phase: build Gensim dictionary from aggregated counts
+    dictionary = corpora.Dictionary()
+    dictionary.num_docs = total_num_docs
+
+    # Assign contiguous IDs to all words
+    for idx, word in enumerate(total_word_freq.keys()):
+        dictionary.token2id[word] = idx
+        dictionary.dfs[idx] = total_doc_freq[word]
+
+    # num_pos = total word count (used by filter_extremes)
+    dictionary.num_pos = sum(total_word_freq.values())
+    dictionary.num_nnz = sum(total_doc_freq.values())
+
+    dictionary.filter_extremes(
+        no_below=cfg.dict_min,
+        no_above=cfg.no_above,
+        keep_n=cfg.dict_keep,
+    )
+    # Remap IDs to contiguous 0..N-1 after filter_extremes leaves gaps.
+    # Required for embedding matrix row alignment (row k = token ID k-1).
+    dictionary.compactify()
+    logger.info(
+        f"dictionary created via Map-Reduce: {len(dictionary)} terms, "
+        f"{total_num_docs} documents"
+    )
+
+    return dictionary

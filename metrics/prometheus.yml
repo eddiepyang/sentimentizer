@@ -1,0 +1,14 @@
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+
+scrape_configs:
+  - job_name: 'ray'
+    # Scrape Ray metrics from the host machine
+    static_configs:
+      - targets: ['host.docker.internal:8080']
+
+  - job_name: 'sentimentizer'
+    # Scrape Sentimentizer application metrics (system, GPU, Ray health)
+    static_configs:
+      - targets: ['host.docker.internal:8081']

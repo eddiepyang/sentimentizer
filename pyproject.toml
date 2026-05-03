@@ -19,8 +19,7 @@ keywords = ["rnn", "pytorch", "nlp", "sentiment"]
 dependencies = [
     "numpy>=1.23.0",
     "pandas>=1.5.2",
-    "polars>=1.27.1",
-    "torch>=2.0",
+    "torch>=2.10",
     "orjson>=3.8.5",
     "pyarrow>=11.0.0",
     "scikit-learn",
@@ -28,6 +27,7 @@ dependencies = [
     "smart_open>=7.0.1",
     "structlog",
     "psutil",
+    "prometheus_client>=0.14.0",
     "ray[data]>=2.5.0",
     "ray[serve]>=2.5.0",
     "ray[train]>=2.5.0",
@@ -36,6 +36,8 @@ dependencies = [
     "pyyaml>=6.0",
     "pydantic-ai-slim[openai]>=0.0.36",
     "langgraph>=0.2",
+    "rich>=13.0.0",
+    "huggingface_hub",
 ]
 
 [project.optional-dependencies]
@@ -66,6 +68,7 @@ dev = [
 [tool.ruff]
 target-version = "py311"
 line-length = 100
+exclude = ["scripts"]
 
 [tool.ruff.lint]
 select = [
@@ -91,3 +94,9 @@ target-version = ["py311"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = [
+    "ignore:.*RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO.*:FutureWarning",
+    "ignore:.*use_push_based_shuffle.*:DeprecationWarning",
+    "ignore:.*use_polars.*:DeprecationWarning",
+    "ignore:.*use_arrow_tensor_v2.*:DeprecationWarning"
+]
