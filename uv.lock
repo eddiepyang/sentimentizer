@@ -3426,7 +3426,7 @@ wheels = [
 
 [[package]]
 name = "sentimentizer"
-version = "0.99.0"
+version = "0.101.0"
 source = { editable = "." }
 dependencies = [
     { name = "gensim" },
@@ -3496,7 +3496,7 @@ requires-dist = [
     { name = "scikit-learn" },
     { name = "smart-open", specifier = ">=7.0.1" },
     { name = "structlog" },
-    { name = "torch", specifier = ">=2.10" },
+    { name = "torch", specifier = ">=2.0" },
 ]
 provides-extras = ["dev"]
 

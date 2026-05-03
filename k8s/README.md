@@ -112,11 +112,11 @@ spec:
 ## Resource Configuration
 
 The deployment is configured with:
-- **Replicas**: 1 (single node)
+- **Replicas**: 2
 - **CPU Request**: 500m (0.5 cores)
 - **CPU Limit**: 2000m (2 cores)
-- **Memory Request**: 512Mi
-- **Memory Limit**: 2Gi
+- **Memory Request**: 1Gi
+- **Memory Limit**: 4Gi
 
 Adjust these in [deployment.yaml](deployment.yaml) based on your workload.
 
@@ -125,4 +125,3 @@ Adjust these in [deployment.yaml](deployment.yaml) based on your workload.
 Remove all resources:
 ```bash
 kubectl delete -f k8s/
-```

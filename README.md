@@ -9,7 +9,6 @@ Lightweight PyTorch models for sentiment analysis. Small models can be pretty ef
 > **Beta release** — API is subject to change.
 
 ## Install
-
 ```bash
 pip install sentimentizer
 ```
@@ -20,7 +19,7 @@ pip install sentimentizer
 from sentimentizer.tokenizer import get_trained_tokenizer
 from sentimentizer.models.rnn import get_trained_model
 
-model = get_trained_model(64, "cpu")
+model = get_trained_model(device="cpu")
 tokenizer = get_trained_tokenizer()
 
 review_text = "greatest pie ever, best in town!"
@@ -43,7 +42,7 @@ Three architectures are available:
 
 **Why Encoder?** Self-attention over the full token sequence with a CLS token is the most natural fit for sentence-level classification. The RNN processes tokens sequentially and can miss long-range dependencies, though bidirectionality helps. The Decoder uses cross-attention (a query token attends to encoded text), which is effective but adds encoder overhead — best reserved for cases where you want the Decoder's cross-attention pattern.
 
-Each module exposes `get_trained_model(batch_size, device)` to load pre-trained weights.
+Each module exposes `get_trained_model(device, model_config=...)` to load pre-trained weights.
 
 ## Serving
 
@@ -152,17 +151,20 @@ torch-sentiment/                 # project root
 ### Single-node training (recommended for laptops and single-GPU machines)
 
 ```bash
+# Auto-detect best device (cuda > mps > cpu)
+python workflows/driver.py --device auto --type new --save
+
 # NVIDIA GPU
-python workflows/driver.py --device cuda --type new --save True
+python workflows/driver.py --device cuda --type new --save
 
 # Apple Silicon (M1/M2/M3/M4) — uses Metal Performance Shaders
-python workflows/driver.py --device mps --type new --save True
+python workflows/driver.py --device mps --type new --save
 
 # CPU only (slowest)
-python workflows/driver.py --device cpu --type new --save True
+python workflows/driver.py --device cpu --type new --save
 
 # Quick iteration with less data
-python workflows/driver.py --device mps --type new --save True --stop 5000
+python workflows/driver.py --device mps --type new --save --stop 5000
 ```
 
 > **Tip:** On a single machine, single-node training is always faster than distributed. Use `--distributed` only when you have multiple GPUs.
@@ -171,10 +173,10 @@ python workflows/driver.py --device mps --type new --save True --stop 5000
 
 ```bash
 # Run with 2 workers (default)
-python workflows/driver.py --device cuda --distributed --save True
+python workflows/driver.py --device cuda --distributed --save
 
 # Run with 4 workers
-python workflows/driver.py --device cuda --distributed --num-workers 4 --save True
+python workflows/driver.py --device cuda --distributed --num-workers 4 --save
 
 # Run on CPU only
 python workflows/driver.py --device cpu --distributed --num-workers 2
@@ -188,17 +190,18 @@ The `--distributed` flag enables Ray Train, which distributes data and model tra
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--device` | `cuda` | Device to use: `cuda`, `mps`, or `cpu` |
+| `--device` | `auto` | Device to use: `auto` (detect), `cuda`, `mps`, or `cpu` |
 | `--model` | `rnn` | Model type: `rnn`, `encoder`, or `decoder` |
 | `--type` | `new` | Run type: `new` (from scratch) or `update` (resume) |
 | `--stop` | `10000` | Number of lines to load from the dataset |
-| `--save` | `False` | Save model weights after training |
-| `--distributed` | `False` | Enable distributed training with Ray Train |
+| `--save` | off | Save model weights after training (flag, no value needed) |
+| `--distributed` | off | Enable distributed training with Ray Train (flag, no value needed) |
 | `--num-workers` | `2` | Ray Train workers (distributed mode only; single-node ignores this) |
-| `--agent-tune` | `False` | Use Pydantic AI + LangGraph agent for hyperparameter tuning (GLM 5.1 via Ollama) |
+| `--agent-tune` | off | Use Pydantic AI + LangGraph agent for hyperparameter tuning (GLM 5.1 via Ollama) (flag, no value needed) |
 | `--agent-config` | `None` | Path to agent config YAML (default: `sentimentizer/agent/config.yaml`) |
 | `--checkpoint-dir` | `""` | Directory to save training checkpoints (empty = no checkpointing) |
-| `--resume` | `False` | Resume training from the latest checkpoint in `--checkpoint-dir` |
+| `--checkpoint-every` | `1` | Save checkpoint every N epochs (0 = disabled) |
+| `--resume` | off | Resume training from the latest checkpoint in `--checkpoint-dir` (flag, no value needed) |
 
 ## Checkpointing
 
@@ -332,7 +335,7 @@ encoder_config = EncoderConfig(d_model=512, n_heads=8, n_layers=6, ff_multiplier
 decoder_config = DecoderConfig(d_model=512, n_heads=8, n_encoder_layers=4, n_decoder_layers=8)
 ```
 
-The config flows: **`config.py` → `DriverConfig` → `new_model()` / `get_trained_model()` → model `__init__` sets layer dimensions**.
+The config flows: **`config.py` → `DriverConfig` → `new_model(model_config=...)` / `get_trained_model(device, model_config=...)` → model `__init__` sets layer dimensions**.
 
 | Config | Parameters | Defaults |
 |--------|-----------|----------|
@@ -419,7 +422,7 @@ uv run pytest tests/ -v --cov=sentimentizer --cov-report=term-missing
 ```
 sentimentizer/
 ├── __init__.py          # Logging and timing utilities
-├── config.py            # Configuration dataclasses, enums, and constants
+├── config.py            # Configuration dataclasses and constants
 ├── extractor.py         # Ray Data extraction from zip/tar archives
 ├── loader.py            # Data loading utilities
 ├── tokenizer.py         # Text tokenizer with pre-trained support

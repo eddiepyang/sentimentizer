@@ -7,7 +7,7 @@ from gensim import corpora
 from torch import nn
 
 from sentimentizer import new_logger
-from sentimentizer.config import DEFAULT_LOG_LEVEL, Devices, EmbeddingsConfig, EncoderConfig
+from sentimentizer.config import DEFAULT_LOG_LEVEL, VALID_DEVICES, EmbeddingsConfig, EncoderConfig
 from sentimentizer.extractor import new_embedding_weights
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
@@ -55,7 +55,6 @@ class Encoder(nn.Module):
     a multi-layer Transformer encoder with batch_first=True.
 
     Args:
-        batch_size: Batch size (used for CLS token initialization)
         input_len: Maximum sequence length (number of tokens)
         d_model: Internal Transformer dimension (projected from embeddings)
         n_heads: Number of attention heads
@@ -68,7 +67,7 @@ class Encoder(nn.Module):
 
     def __init__(
         self,
-        batch_size: int,
+        
         input_len: int,
         emb_weights: torch.Tensor,
         d_model: int = EncoderConfig.d_model,
@@ -79,7 +78,6 @@ class Encoder(nn.Module):
         ff_multiplier: int = EncoderConfig.ff_multiplier,
     ) -> None:
         super().__init__()
-        _ = batch_size  # batch_size not stored; runtime uses inputs.size(0)
         self.d_model = d_model
 
         # Embedding layer (vocab_size, emb_dim)
@@ -170,7 +168,7 @@ class Encoder(nn.Module):
 def new_model(
     dict_path: str,
     embeddings_config: EmbeddingsConfig,
-    batch_size: int,
+    
     input_len: int,
     model_config: EncoderConfig = _DEFAULT_ENCODER_CONFIG,
 ) -> Encoder:
@@ -179,7 +177,6 @@ def new_model(
     Args:
         dict_path: Path to the gensim dictionary file
         embeddings_config: Configuration for GloVe embeddings
-        batch_size: Batch size
         input_len: Maximum sequence length
         model_config: Encoder architecture configuration (defaults from EncoderConfig)
     """
@@ -187,7 +184,7 @@ def new_model(
     embedding_matrix = new_embedding_weights(dict_yelp, embeddings_config)
     emb_t = torch.from_numpy(embedding_matrix)
     model = Encoder(
-        batch_size=batch_size,
+        
         d_model=model_config.d_model,
         n_heads=model_config.n_heads,
         input_len=input_len,
@@ -200,26 +197,26 @@ def new_model(
 
 
 def get_trained_model(
-    batch_size: int,
+    
     device: str,
     model_config: EncoderConfig = _DEFAULT_ENCODER_CONFIG,
 ) -> Encoder:
     """Load a pre-trained Encoder model from saved weights.
 
     Args:
-        batch_size: Batch size for the model
         device: Device to load weights onto ("cpu", "cuda", or "mps")
         model_config: Encoder architecture configuration (must match saved weights)
 
     Returns:
         Encoder model with loaded weights
     """
-    if device not in Devices:
+    if device not in VALID_DEVICES:
         raise ValueError("device must be cpu, cuda, or mps")
 
     weights = torch.load(
         str(files("sentimentizer.data").joinpath("encoder_weights.pth")),
         map_location=torch.device(device=device),
+        weights_only=True,
     )
     # Infer vocab size and d_model from saved weights
     emb_shape = weights["embed_layer.weight"].shape
@@ -227,7 +224,7 @@ def get_trained_model(
 
     empty_embeddings = torch.zeros(emb_shape)
     model = Encoder(
-        batch_size=batch_size,
+        
         d_model=d_model,
         n_heads=model_config.n_heads,
         input_len=200,

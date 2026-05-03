@@ -8,14 +8,12 @@ root = Path(".").resolve()
 
 @pytest.fixture
 def rel_path():
-    global root
     path = f"{root}/tests/test_data/archive.zip"
     return path
 
 
 @pytest.fixture
 def relative_root():
-    global root
     return root
 
 

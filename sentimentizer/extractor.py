@@ -6,7 +6,6 @@ from typing import IO
 
 import numpy as np
 import orjson as json
-import pyarrow as pa
 import ray
 from gensim import corpora
 
@@ -27,10 +26,10 @@ logger = new_logger(DEFAULT_LOG_LEVEL)
 
 def generate_batch(
     generator_input: Generator[dict, str, None], iter_size: int
-) -> Generator[pa.RecordBatch, list, None]:
+) -> Generator[tuple[list, int, int], None, None]:
     for start in range(0, iter_size, BATCH_SIZE):
         end = min(start + BATCH_SIZE, iter_size)
-        review_dicts = []
+        review_dicts: list[dict] = []
         review_dicts.extend(islice(generator_input, BATCH_SIZE))
         yield review_dicts, start, end
 
@@ -52,7 +51,7 @@ def extract_data(file_path: str, compressed_file_name: str, stop: int = 0) -> ra
     Supports both .zip and .tar/.tar.gz archives.
     """
 
-    def generate_lines(x: int) -> Generator:
+    def generate_lines(_row: int) -> Generator:
         if file_path.endswith((".tar", ".tar.gz", ".tgz")):
             with tarfile.open(file_path, "r:*") as tar:
                 member = tar.getmember(compressed_file_name)

@@ -52,9 +52,11 @@ def _get_default_config_path() -> Path:
 
 def _config_dict_to_agent_config(agent_dict: dict[str, Any]) -> AgentConfig:
     """Convert the agent section of the YAML dict into an AgentConfig."""
-    cp_dict = agent_dict.pop("checkpointing", {})
+    # Work on a copy to avoid mutating the input dictionary
+    agent_dict_copy = dict(agent_dict)
+    cp_dict = agent_dict_copy.pop("checkpointing", {})
     checkpoint_cfg = CheckpointConfig(**cp_dict)
-    return AgentConfig(checkpointing=checkpoint_cfg, **agent_dict)
+    return AgentConfig(checkpointing=checkpoint_cfg, **agent_dict_copy)
 
 
 def load_agent_config(
@@ -88,3 +90,13 @@ def load_agent_config(
 
 # Allow overriding config path via environment variable
 CONFIG_PATH_ENV = "SENTIMENTIZER_AGENT_CONFIG"
+
+
+def get_config_path() -> Path | None:
+    """Get config path from environment variable, or None for default."""
+    import os
+
+    env_path = os.environ.get(CONFIG_PATH_ENV)
+    if env_path:
+        return Path(env_path)
+    return None

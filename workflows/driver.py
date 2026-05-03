@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import os
 import shutil
+from pathlib import Path
 
 # Disable Ray's automatic uv runtime environment to prevent VIRTUAL_ENV warnings
 os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
@@ -48,7 +49,7 @@ def new_parser() -> argparse.Namespace:
         "--type", default="new", help="type of run, must be new or update"
     )  # noqa: E501
     parser.add_argument("--stop", type=int, default=10000, help="how many lines to load")
-    parser.add_argument("--save", type=bool, default=False, help="save data and model")
+    parser.add_argument("--save", action="store_true", default=False, help="save data and model")
     parser.add_argument(
         "--distributed",
         action="store_true",
@@ -102,7 +103,6 @@ def new_parser() -> argparse.Namespace:
 
     logger.info(  # type: ignore[call-arg]
         "running with args",
-        device=args.device,
         early_stop=args.stop,
         distributed=args.distributed,
         ray_workers=args.num_workers,
@@ -113,7 +113,7 @@ def new_parser() -> argparse.Namespace:
 def _get_model_config(
     model_type: str,
 ) -> RNNConfig | EncoderConfig | DecoderConfig:
-    """Get the model config class for the given model type."""
+    """Get the model config for the given model type."""
     if model_type == "rnn":
         return DriverConfig.rnn()
     elif model_type == "encoder":
@@ -140,14 +140,12 @@ def _load_model(args: argparse.Namespace) -> torch.nn.Module:
         model = new_model(
             dict_path=DriverConfig.files.dictionary_file_path,
             embeddings_config=DriverConfig.embeddings(),
-            batch_size=DriverConfig.trainer.batch_size,
             input_len=DriverConfig.tokenizer.max_len,
             model_config=model_config,
         )
     elif args.type == "update":
         model = get_trained_model(
-            DriverConfig.trainer.batch_size,
-            args.device,
+            device=args.device,
             model_config=model_config,
         )
     else:
@@ -156,18 +154,68 @@ def _load_model(args: argparse.Namespace) -> torch.nn.Module:
     return model
 
 
+def _remove_path(path: str) -> None:
+    """Remove a file or directory at the given path.
+
+    Ray Data writes parquet as a directory of part files, but a previous
+    run may have left a regular file at the same location. This helper
+    handles both cases so write_parquet never hits FileExistsError.
+    """
+    p = Path(path)
+    if p.is_file() or p.is_symlink():
+        p.unlink()
+    elif p.is_dir():
+        shutil.rmtree(p)
+
+
+def _parquet_row_count(path: str) -> int:
+    """Return the number of rows in a parquet file or directory from metadata.
+
+    Returns 0 if the path does not exist.
+    """
+    import pyarrow.parquet as pq
+
+    p = Path(path)
+    if not p.exists():
+        return 0
+    if p.is_file():
+        return pq.read_metadata(str(p)).num_rows
+    if p.is_dir():
+        total = 0
+        for f in sorted(p.glob("*.parquet")):
+            total += pq.read_metadata(str(f)).num_rows
+        return total
+    return 0
+
+
 def run_extract(args: argparse.Namespace) -> None:
+    # Skip extraction if the raw parquet already has enough rows
+    existing_rows = _parquet_row_count(DriverConfig.files.raw_reviews_file_path)
+    if existing_rows >= args.stop:
+        logger.info(
+            f"skipping extract: {existing_rows} rows already exist (need {args.stop})"
+        )
+        return
+
     ds = extract_data(
         DriverConfig.files.archive_file_path,
         DriverConfig.files.raw_file_path,
         stop=args.stop,
     )
-    # Remove existing directory if it exists to clean up
-    shutil.rmtree(DriverConfig.files.raw_reviews_file_path, ignore_errors=True)
+    # Remove existing file or directory to avoid FileExistsError
+    _remove_path(DriverConfig.files.raw_reviews_file_path)
     ds.write_parquet(DriverConfig.files.raw_reviews_file_path)
 
 
 def run_tokenize(args: argparse.Namespace) -> None:
+    # Skip tokenization if the processed parquet already has enough rows
+    existing_rows = _parquet_row_count(DriverConfig.files.processed_reviews_file_path)
+    if existing_rows >= args.stop:
+        logger.info(
+            f"skipping tokenize: {existing_rows} rows already exist (need {args.stop})"
+        )
+        return
+
     reviews_data = ray.data.read_parquet(DriverConfig.files.raw_reviews_file_path)
     if args.type == "new":
         tokenizer = Tokenizer.from_dataset(reviews_data)
@@ -178,7 +226,7 @@ def run_tokenize(args: argparse.Namespace) -> None:
         raise RunTypeError
 
     processed_ds = tokenizer.transform_dataset(reviews_data)
-    shutil.rmtree(DriverConfig.files.processed_reviews_file_path, ignore_errors=True)
+    _remove_path(DriverConfig.files.processed_reviews_file_path)
     processed_ds.write_parquet(DriverConfig.files.processed_reviews_file_path)
 
 
@@ -199,8 +247,8 @@ def _run_fit_single(args: argparse.Namespace) -> None:
 
     epochs = default_epochs(args.model)
     cfg = DriverConfig.trainer(
-        device=args.device,
         epochs=epochs,
+        device=args.device,
         dataloader_workers=default_dataloader_workers(args.device),
         checkpoint_dir=args.checkpoint_dir,
         checkpoint_every=args.checkpoint_every,
@@ -260,12 +308,11 @@ def _run_fit_distributed(args: argparse.Namespace) -> None:
 
     if args.save:
         # Load best checkpoint and save model weights
-        with result.checkpoint.as_directory():
-            checkpoint_data = result.checkpoint.to_dict()
-            torch.save(
-                checkpoint_data["model_state_dict"],
-                DriverConfig.files.weights_file_path,
-            )
+        checkpoint_data = result.checkpoint.to_dict()
+        torch.save(
+            checkpoint_data["model_state_dict"],
+            DriverConfig.files.weights_file_path,
+        )
         logger.info(f"model weights saved to: {DriverConfig.files.weights_file_path}")
 
 
