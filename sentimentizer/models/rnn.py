@@ -132,7 +132,8 @@ class RNN(nn.Module):
         """
         with torch.no_grad():
             self.eval()
-            output = torch.from_numpy(converted_text)
+            device = next(self.parameters()).device
+            output = torch.from_numpy(converted_text).to(device)
             return torch.sigmoid(self.forward(output))
 
 

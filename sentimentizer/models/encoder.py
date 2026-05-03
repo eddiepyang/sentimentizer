@@ -72,12 +72,13 @@ class Encoder(nn.Module):
         d_model: int = EncoderConfig.d_model,
         n_heads: int = EncoderConfig.n_heads,
         n_layers: int = EncoderConfig.n_layers,
-        verbose: bool = True,
+        verbose: bool = False,
         dropout: float = EncoderConfig.dropout,
         ff_multiplier: int = EncoderConfig.ff_multiplier,
     ) -> None:
         super().__init__()
         self.d_model = d_model
+        self.verbose = verbose
 
         # Embedding layer (vocab_size, emb_dim)
         self.embed_layer = nn.Embedding(emb_weights.shape[0], emb_weights.shape[1])
@@ -88,8 +89,8 @@ class Encoder(nn.Module):
         # Learnable CLS token prepended to the sequence
         self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
 
-        # Positional encoding (max_len = input_len + 1 for CLS token)
-        self.pos_encoder = PositionalEncoding(d_model, dropout=dropout, max_len=input_len + 1)
+        # Positional encoding (default max_len=500)
+        self.pos_encoder = PositionalEncoding(d_model, dropout=dropout)
 
         # Transformer encoder with batch_first=True
         encoder_layer = nn.TransformerEncoderLayer(
@@ -126,7 +127,8 @@ class Encoder(nn.Module):
             Logits of shape (batch,)
         """
         embeds = self.embed_layer(inputs)  # (B, seq_len, emb_dim)
-        logger.debug(f"embedding shape {embeds.shape}")
+        if self.verbose:
+            logger.info(f"embedding shape {embeds.shape}")
 
         # Project to d_model
         projected = self.proj(embeds)  # (B, seq_len, d_model)
@@ -146,11 +148,13 @@ class Encoder(nn.Module):
 
         # Transformer encoder — self-attention with padding mask
         encoded = self.encoder(x, src_key_padding_mask=src_key_padding_mask)  # (B, seq_len+1, d_model)
-        logger.debug(f"encoder out shape {encoded.shape}")
+        if self.verbose:
+            logger.info(f"encoder out shape {encoded.shape}")
 
         # Pool from CLS token position
         cls_out = encoded[:, 0, :]  # (B, d_model)
-        logger.debug(f"cls out shape {cls_out.shape}")
+        if self.verbose:
+            logger.info(f"cls out shape {cls_out.shape}")
 
         # Classify
         logits = self.classifier(cls_out)  # (B, 1)
@@ -167,7 +171,8 @@ class Encoder(nn.Module):
         """
         with torch.no_grad():
             self.eval()
-            output = torch.from_numpy(converted_text)
+            device = next(self.parameters()).device
+            output = torch.from_numpy(converted_text).to(device)
             return torch.sigmoid(self.forward(output))
 
 
@@ -203,12 +208,14 @@ def new_model(
 def get_trained_model(
     device: str,
     model_config: EncoderConfig = _DEFAULT_ENCODER_CONFIG,
+    input_len: int = 200,
 ) -> Encoder:
     """Load a pre-trained Encoder model from saved weights.
 
     Args:
         device: Device to load weights onto ("cpu", "cuda", or "mps")
         model_config: Encoder architecture configuration (must match saved weights)
+        input_len: Maximum sequence length (defaults to 200)
 
     Returns:
         Encoder model with loaded weights
@@ -239,7 +246,7 @@ def get_trained_model(
     model = Encoder(
         d_model=d_model,
         n_heads=model_config.n_heads,
-        input_len=200,
+        input_len=input_len,
         emb_weights=empty_embeddings,
         n_layers=model_config.n_layers,
         dropout=model_config.dropout,

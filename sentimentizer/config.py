@@ -38,12 +38,12 @@ def auto_detect_device() -> str:
 def default_epochs(model_type: str) -> int:
     """Return default epochs for the model type.
 
-    RNNs converge faster with simple patterns.
+    RNNs need enough epochs to learn compositional patterns like negation.
     Transformers need more epochs for attention patterns to develop.
     """
     if model_type in ("encoder", "decoder"):
         return 8
-    return 1
+    return 4
 
 
 def default_dataloader_workers(device: str) -> int:

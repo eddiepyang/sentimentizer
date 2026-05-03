@@ -63,12 +63,13 @@ class Decoder(nn.Module):
         n_heads: int = DecoderConfig.n_heads,
         n_encoder_layers: int = DecoderConfig.n_encoder_layers,
         n_decoder_layers: int = DecoderConfig.n_decoder_layers,
-        verbose: bool = True,
+        verbose: bool = False,
         dropout: float = DecoderConfig.dropout,
         ff_multiplier: int = DecoderConfig.ff_multiplier,
     ) -> None:
         super().__init__()
         self.d_model = d_model
+        self.verbose = verbose
 
         # Embedding layer
         self.embed_layer = nn.Embedding(emb_weights.shape[0], emb_weights.shape[1])
@@ -79,8 +80,8 @@ class Decoder(nn.Module):
         # Learnable query token for cross-attention decoding
         self.query_token = nn.Parameter(torch.zeros(1, 1, d_model))
 
-        # Positional encoding for the input sequence
-        self.pos_encoder = PositionalEncoding(d_model, dropout=dropout, max_len=input_len + 1)
+        # Positional encoding for the input sequence (default max_len=500)
+        self.pos_encoder = PositionalEncoding(d_model, dropout=dropout)
 
         # Transformer encoder — encodes input text into memory
         encoder_layer = nn.TransformerEncoderLayer(
@@ -131,7 +132,8 @@ class Decoder(nn.Module):
         """
         # Embed and project
         embeds = self.embed_layer(inputs)  # (B, seq_len, emb_dim)
-        logger.debug(f"embedding shape {embeds.shape}")
+        if self.verbose:
+            logger.info(f"embedding shape {embeds.shape}")
 
         projected = self.proj(embeds)  # (B, seq_len, d_model)
 
@@ -145,7 +147,8 @@ class Decoder(nn.Module):
         memory = self.encoder(
             memory_input, src_key_padding_mask=src_key_padding_mask
         )  # (B, seq_len, d_model)
-        logger.debug(f"memory shape {memory.shape}")
+        if self.verbose:
+            logger.info(f"memory shape {memory.shape}")
 
         # Expand query token for the batch
         query = self.query_token.expand(inputs.size(0), -1, -1)  # (B, 1, d_model)
@@ -155,7 +158,8 @@ class Decoder(nn.Module):
         decoded = self.decoder(
             tgt=query, memory=memory, memory_key_padding_mask=src_key_padding_mask
         )  # (B, 1, d_model)
-        logger.debug(f"decoded shape {decoded.shape}")
+        if self.verbose:
+            logger.info(f"decoded shape {decoded.shape}")
 
         # Extract query output and classify
         query_out = decoded.squeeze(1)  # (B, d_model)
@@ -173,7 +177,8 @@ class Decoder(nn.Module):
         """
         with torch.no_grad():
             self.eval()
-            output = torch.from_numpy(converted_text)
+            device = next(self.parameters()).device
+            output = torch.from_numpy(converted_text).to(device)
             return torch.sigmoid(self.forward(output))
 
 
@@ -210,12 +215,14 @@ def new_model(
 def get_trained_model(
     device: str,
     model_config: DecoderConfig = _DEFAULT_DECODER_CONFIG,
+    input_len: int = 200,
 ) -> Decoder:
     """Load a pre-trained Decoder model from saved weights.
 
     Args:
         device: Device to load weights onto ("cpu", "cuda", or "mps")
         model_config: Decoder architecture configuration (must match saved weights)
+        input_len: Maximum sequence length (defaults to 200)
 
     Returns:
         Decoder model with loaded weights
@@ -246,7 +253,7 @@ def get_trained_model(
     model = Decoder(
         d_model=d_model,
         n_heads=model_config.n_heads,
-        input_len=200,
+        input_len=input_len,
         emb_weights=empty_embeddings,
         n_encoder_layers=model_config.n_encoder_layers,
         n_decoder_layers=model_config.n_decoder_layers,

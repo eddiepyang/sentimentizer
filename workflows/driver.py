@@ -116,6 +116,53 @@ def new_parser() -> argparse.Namespace:
         help="path to agent config YAML file (default: sentimentizer/agent/config.yaml)",
     )
     parser.add_argument(
+        "--tune",
+        action="store_true",
+        default=False,
+        help="use TuningRun skill to tune hyperparameters and validate model predictions",
+    )
+    parser.add_argument(
+        "--tune-mode",
+        default="agent",
+        choices=["agent", "standalone"],
+        help="tuning mode: 'agent' (LLM-guided loop) or 'standalone' (single Ray Tune run)",
+    )
+    parser.add_argument(
+        "--tune-samples",
+        type=int,
+        default=20,
+        help="number of Ray Tune trials per tuning iteration (default: 20)",
+    )
+    parser.add_argument(
+        "--tune-max-iterations",
+        type=int,
+        default=5,
+        help="maximum agent tuning iterations (default: 5)",
+    )
+    parser.add_argument(
+        "--tune-output-dir",
+        default="tuning_results",
+        help="directory to save tuning results and model weights (default: tuning_results)",
+    )
+    parser.add_argument(
+        "--no-validate",
+        action="store_true",
+        default=False,
+        help="skip model prediction validation after tuning",
+    )
+    parser.add_argument(
+        "--validation-threshold",
+        type=float,
+        default=0.75,
+        help="minimum fraction of correct predictions to pass validation (default: 0.75)",
+    )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=2,
+        help="maximum re-tuning attempts if validation fails (default: 2)",
+    )
+    parser.add_argument(
         "--checkpoint-dir",
         type=str,
         default="",
@@ -412,11 +459,76 @@ def run_agent_tune(args: argparse.Namespace) -> None:
         logger.info(f"best config saved to: {output_path}")
 
 
+def run_tune(args: argparse.Namespace) -> None:
+    """Run the TuningRun skill to tune hyperparameters and validate model predictions.
+
+    This is the main entry point for the tuning skill. It creates a
+    TuningRunConfig from the CLI arguments, executes the tuning run,
+    and logs the results including validation status.
+    """
+    from sentimentizer.agent.skill import TuningRun, TuningRunConfig
+
+    config = TuningRunConfig(
+        model_type=args.model,
+        mode=args.tune_mode,
+        config_path=args.agent_config,
+        num_samples=args.tune_samples,
+        max_iterations=args.tune_max_iterations,
+        device=args.device,
+        save_best_model=args.save,
+        output_dir=args.tune_output_dir,
+        validate_predictions=not args.no_validate,
+        validation_threshold=args.validation_threshold,
+        max_retries=args.max_retries,
+    )
+
+    run = TuningRun(config)
+
+    logger.info(  # type: ignore[call-arg]
+        "starting_tuning_skill",
+        model_type=config.model_type,
+        mode=config.mode,
+        device=config.device,
+        validate=config.validate_predictions,
+        max_retries=config.max_retries,
+    )
+
+    try:
+        result = run.execute()
+    finally:
+        # Ensure CUDA resources are released even on Ctrl-C or exception
+        _cuda_cleanup()
+
+    logger.info(  # type: ignore[call-arg]
+        "tuning_skill_complete",
+        best_accuracy=result.best_accuracy,
+        best_loss=result.best_loss,
+        iterations=result.iterations_completed,
+        converged=result.converged,
+        validation_passed=result.validation_passed,
+        retry_count=result.retry_count,
+        model_path=result.model_path,
+        results_path=result.results_path,
+        elapsed_seconds=result.elapsed_seconds,
+    )
+
+    if result.validation_passed:
+        logger.info("tuning_skill_passed: model predictions validated successfully")
+    else:
+        logger.warning(
+            "tuning_skill_failed: model predictions did not meet validation threshold "
+            f"({result.validation_threshold}) after {result.retry_count} retries"
+        )
+
+
 @time_decorator
 def main() -> None:
     args = new_parser()
 
-    if args.agent_tune:
+    if args.tune:
+        # Tuning skill mode: tune hyperparameters and validate model
+        run_tune(args)
+    elif args.agent_tune:
         # Agent tuning mode: uses LLM-guided hyperparameter search
         run_agent_tune(args)
     else:

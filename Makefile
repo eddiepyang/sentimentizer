@@ -1,6 +1,6 @@
 .PHONY: setup setup-dev download-data train train-rnn train-encoder train-decoder \
        train-distributed train-quick serve test lint format clean docker-build docker-run \
-	   gpu-reset
+	   gpu-reset tune tune-rnn tune-encoder tune-decoder tune-standalone
 
 # Default device: use auto-detect (cuda > mps > cpu)
 DEVICE ?= auto
@@ -80,6 +80,38 @@ train-agent:
 	uv run python workflows/driver.py --model $(MODEL) --agent-tune --save
 
 # ──────────────────────────────────────────────
+# Tuning Skill (tune + validate until good model)
+# ──────────────────────────────────────────────
+
+## Run tuning skill with agent-guided loop and model validation
+tune:
+	uv run python workflows/driver.py --model $(MODEL) --tune --save
+
+## Run tuning skill for RNN
+tune-rnn:
+	uv run python workflows/driver.py --model rnn --tune --save
+
+## Run tuning skill for Encoder
+tune-encoder:
+	uv run python workflows/driver.py --model encoder --tune --save
+
+## Run tuning skill for Decoder
+tune-decoder:
+	uv run python workflows/driver.py --model decoder --tune --save
+
+## Run tuning skill in standalone mode (no LLM agent, single Ray Tune sweep)
+tune-standalone:
+	uv run python workflows/driver.py --model $(MODEL) --tune --tune-mode standalone --save
+
+## Run tuning skill with custom samples and iterations (usage: make tune-custom SAMPLES=50 ITERATIONS=10)
+tune-custom:
+	uv run python workflows/driver.py --model $(MODEL) --tune --tune-samples $(SAMPLES) --tune-max-iterations $(ITERATIONS) --save
+
+## Run tuning skill without model validation
+tune-no-validate:
+	uv run python workflows/driver.py --model $(MODEL) --tune --no-validate --save
+
+# ──────────────────────────────────────────────
 # Serving
 # ──────────────────────────────────────────────
 
@@ -134,6 +166,7 @@ clean:
 	rm -rf sentimentizer/data/review_data_raw.parquet
 	rm -rf sentimentizer/data/weights.pth
 	rm -rf checkpoints/
+	rm -rf tuning_results/
 	rm -rf .pytest_cache/
 	rm -rf __pycache__/
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
