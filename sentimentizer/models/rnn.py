@@ -38,7 +38,6 @@ class RNN(nn.Module):
 
     def __init__(
         self,
-        
         emb_weights: torch.Tensor,
         hidden_size: int = RNNConfig.hidden_size,
         num_layers: int = RNNConfig.num_layers,
@@ -131,7 +130,6 @@ class RNN(nn.Module):
 def new_model(
     dict_path: str,
     embeddings_config: EmbeddingsConfig,
-    
     input_len: int,
     model_config: RNNConfig = _DEFAULT_RNN_CONFIG,
 ) -> RNN:
@@ -147,7 +145,6 @@ def new_model(
     embedding_matrix = new_embedding_weights(dict_yelp, embeddings_config)
     emb_t = torch.from_numpy(embedding_matrix)
     model = RNN(
-        
         emb_weights=emb_t,
         hidden_size=model_config.hidden_size,
         num_layers=model_config.num_layers,
@@ -157,7 +154,6 @@ def new_model(
 
 
 def get_trained_model(
-    
     device: str,
     model_config: RNNConfig = _DEFAULT_RNN_CONFIG,
 ) -> RNN:
@@ -176,7 +172,9 @@ def get_trained_model(
     weights_path = str(files("sentimentizer.data").joinpath("weights.pth"))
 
     try:
-        weights = torch.load(weights_path, map_location=torch.device(device=device), weights_only=True)
+        weights = torch.load(
+            weights_path, map_location=torch.device(device=device), weights_only=True
+        )
     except FileNotFoundError as e:
         raise FileNotFoundError(
             f"Weights file not found at {weights_path}. "
@@ -197,7 +195,6 @@ def get_trained_model(
 
     empty_embeddings = torch.zeros(emb_shape)
     model = RNN(
-        
         emb_weights=empty_embeddings,
         hidden_size=hidden_size,
         num_layers=model_config.num_layers,

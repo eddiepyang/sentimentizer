@@ -61,7 +61,9 @@ def train_step(
     output = model(data)
     loss = loss_function(output, target)
     loss.backward()
-    torch.nn.utils.clip_grad.clip_grad_norm_(model.parameters(), max_norm=max_grad_norm, norm_type=2)
+    torch.nn.utils.clip_grad.clip_grad_norm_(
+        model.parameters(), max_norm=max_grad_norm, norm_type=2
+    )
     optimizer.step()
     return loss.item()
 

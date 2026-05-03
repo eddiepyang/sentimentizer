@@ -394,7 +394,6 @@ class TestModelConfigs:
         cfg = RNNConfig(hidden_size=128, num_layers=3, dropout=0.3)
         emb_weights = torch.zeros(100, 100)
         model = RNN(
-            
             emb_weights=emb_weights,
             hidden_size=cfg.hidden_size,
             num_layers=cfg.num_layers,
@@ -415,7 +414,6 @@ class TestModelConfigs:
         cfg = EncoderConfig(d_model=128, n_heads=2, n_layers=2, ff_multiplier=2)
         emb_weights = torch.zeros(100, 100)
         model = Encoder(
-            
             input_len=200,
             emb_weights=emb_weights,
             d_model=cfg.d_model,
@@ -440,7 +438,6 @@ class TestModelConfigs:
         cfg = DecoderConfig(d_model=128, n_heads=2, n_encoder_layers=1, n_decoder_layers=2)
         emb_weights = torch.zeros(100, 100)
         model = Decoder(
-            
             input_len=200,
             emb_weights=emb_weights,
             d_model=cfg.d_model,

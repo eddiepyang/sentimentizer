@@ -61,7 +61,6 @@ def default_dataloader_workers(device: str) -> int:
 VALID_DEVICES: frozenset[str] = frozenset(("cpu", "cuda", "mps"))
 
 
-
 @dataclass
 class OptimizationParams:
     """Default optimization params (used for RNN).

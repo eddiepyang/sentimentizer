@@ -507,4 +507,3 @@ def _gpu_available() -> bool:
         return torch.cuda.is_available()
     except ImportError:
         return False
-

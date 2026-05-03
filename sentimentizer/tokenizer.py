@@ -29,7 +29,6 @@ def convert_rating(rating: int) -> float:
         return 0.5
 
 
-
 def text_sequencer(
     dictionary: corpora.Dictionary, text: list[str], max_len: int = 200
 ) -> np.ndarray:

@@ -7,7 +7,7 @@ from gensim import corpora
 from torch import nn
 
 from sentimentizer import new_logger
-from sentimentizer.config import DEFAULT_LOG_LEVEL, DecoderConfig, VALID_DEVICES, EmbeddingsConfig
+from sentimentizer.config import DEFAULT_LOG_LEVEL, VALID_DEVICES, DecoderConfig, EmbeddingsConfig
 from sentimentizer.extractor import new_embedding_weights
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
@@ -57,7 +57,6 @@ class Decoder(nn.Module):
 
     def __init__(
         self,
-        
         input_len: int,
         emb_weights: torch.Tensor,
         d_model: int = DecoderConfig.d_model,
@@ -172,7 +171,6 @@ class Decoder(nn.Module):
 def new_model(
     dict_path: str,
     embeddings_config: EmbeddingsConfig,
-    
     input_len: int,
     model_config: DecoderConfig = _DEFAULT_DECODER_CONFIG,
 ) -> Decoder:
@@ -188,7 +186,6 @@ def new_model(
     embedding_matrix = new_embedding_weights(dict_yelp, embeddings_config)
     emb_t = torch.from_numpy(embedding_matrix)
     model = Decoder(
-        
         d_model=model_config.d_model,
         n_heads=model_config.n_heads,
         input_len=input_len,
@@ -202,7 +199,6 @@ def new_model(
 
 
 def get_trained_model(
-    
     device: str,
     model_config: DecoderConfig = _DEFAULT_DECODER_CONFIG,
 ) -> Decoder:
@@ -229,7 +225,6 @@ def get_trained_model(
 
     empty_embeddings = torch.zeros(emb_shape)
     model = Decoder(
-        
         d_model=d_model,
         n_heads=model_config.n_heads,
         input_len=200,

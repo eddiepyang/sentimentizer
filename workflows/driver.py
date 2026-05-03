@@ -192,9 +192,7 @@ def run_extract(args: argparse.Namespace) -> None:
     # Skip extraction if the raw parquet already has enough rows
     existing_rows = _parquet_row_count(DriverConfig.files.raw_reviews_file_path)
     if existing_rows >= args.stop:
-        logger.info(
-            f"skipping extract: {existing_rows} rows already exist (need {args.stop})"
-        )
+        logger.info(f"skipping extract: {existing_rows} rows already exist (need {args.stop})")
         return
 
     ds = extract_data(
@@ -211,9 +209,7 @@ def run_tokenize(args: argparse.Namespace) -> None:
     # Skip tokenization if the processed parquet already has enough rows
     existing_rows = _parquet_row_count(DriverConfig.files.processed_reviews_file_path)
     if existing_rows >= args.stop:
-        logger.info(
-            f"skipping tokenize: {existing_rows} rows already exist (need {args.stop})"
-        )
+        logger.info(f"skipping tokenize: {existing_rows} rows already exist (need {args.stop})")
         return
 
     reviews_data = ray.data.read_parquet(DriverConfig.files.raw_reviews_file_path)
