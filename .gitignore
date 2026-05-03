@@ -24,7 +24,6 @@ src/__pycache__/*
 vendor
 model_weight.pt
 weights.pth
-rnn_weights.pth
 encoder_weights.pth
 decoder_weights.pth
 yelp_nlp.egg-info

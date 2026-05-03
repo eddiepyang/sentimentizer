@@ -365,7 +365,7 @@ class TestTrainerConfig:
 
     def test_default_ray_workers(self):
         cfg = TrainerConfig()
-        assert cfg.ray_workers == 2
+        assert cfg.ray_workers == 1
 
     def test_custom_ray_workers(self):
         cfg = TrainerConfig(ray_workers=4)

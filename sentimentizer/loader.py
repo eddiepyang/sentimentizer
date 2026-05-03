@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import ray
 import torch
+from ray.data import DataContext
 from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset
 
@@ -9,6 +10,13 @@ from sentimentizer import new_logger
 from sentimentizer.config import DEFAULT_LOG_LEVEL
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
+
+# Enable rich progress bars for Ray Data and suppress the "new progress UI"
+# info message.  Must be set before any Dataset operations are executed.
+# See https://docs.ray.io/en/2.55.1/data/api/doc/ray.data.DataContext.html
+ctx = DataContext.get_current()
+ctx.enable_rich_progress_bars = True
+ctx.use_ray_tqdm = False
 
 
 def compute_pos_weight(df: pd.DataFrame, target_col: str = "target") -> float:

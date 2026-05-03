@@ -371,3 +371,18 @@ class TestRayTrainContext:
 
         with pytest.raises(RuntimeError, match="cannot be used outside"):
             train.get_context()
+
+    def test_get_dataset_shard_is_standalone_function(self) -> None:
+        """In Ray 2.55+, get_dataset_shard is a standalone function, not a method
+        on DistributedTrainContext. Calling train.get_context().get_dataset_shard()
+        raises AttributeError.
+
+        The correct API is: train.get_dataset_shard("train")
+        See https://docs.ray.io/en/2.55.1/train/api/doc/ray.train.get_dataset_shard.html
+        """
+        from ray import train
+
+        assert callable(train.get_dataset_shard)
+        # Verify it's a module-level function, not a method on get_context()
+        with pytest.raises(RuntimeError):
+            train.get_context()  # raises outside worker

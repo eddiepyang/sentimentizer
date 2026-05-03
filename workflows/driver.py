@@ -9,6 +9,11 @@ from pathlib import Path
 # Disable Ray's automatic uv runtime environment to prevent VIRTUAL_ENV warnings
 os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
 
+# Tell the Ray Dashboard where to find Grafana and Prometheus for the Metrics tab.
+# These must be set BEFORE ray.init() so the dashboard can embed Grafana iframes.
+os.environ.setdefault("RAY_GRAFANA_HOST", "http://localhost:3000")
+os.environ.setdefault("RAY_PROMETHEUS_HOST", "http://localhost:9090")
+
 import ray
 import torch
 from gensim import corpora
@@ -105,7 +110,7 @@ def new_parser() -> argparse.Namespace:
     parser.add_argument(
         "--num-workers",
         type=int,
-        default=2,
+        default=1,
         help="number of Ray Train workers for distributed training (--distributed only)",
     )
     parser.add_argument(
@@ -606,6 +611,13 @@ def run_tune(args: argparse.Namespace) -> None:
 @time_decorator
 def main() -> None:
     args = new_parser()
+
+    # Initialize Ray with a fixed metrics export port so Prometheus can scrape it.
+    # The port must match metrics/prometheus.yml target (host.docker.internal:8080).
+    # _metrics_export_port is a private API but is the only way to set this
+    # programmatically in Ray 2.55 (public API uses `ray start --metrics-export-port`).
+    if not ray.is_initialized():
+        ray.init(_metrics_export_port=8080)
 
     if args.tune:
         # Tuning skill mode: tune hyperparameters and validate model

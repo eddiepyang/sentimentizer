@@ -448,8 +448,10 @@ def _train_func(config: dict) -> None:
     )
 
     # Get dataset shards for this worker
-    train_shard = train.get_context().get_dataset_shard("train")
-    val_shard = train.get_context().get_dataset_shard("val")
+    # In Ray 2.55+, get_dataset_shard is a standalone function, not a method on get_context()
+    # See https://docs.ray.io/en/2.55.1/train/api/doc/ray.train.get_dataset_shard.html
+    train_shard = train.get_dataset_shard("train")
+    val_shard = train.get_dataset_shard("val")
 
     start = time.time()
     logger.info("fitting model (distributed)...")
@@ -520,7 +522,7 @@ def _train_func(config: dict) -> None:
         import ray.cloudpickle as pickle
 
         checkpoint_data = {
-            "model_state_dict": model.module.state_dict(),
+            "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "epoch": epoch,
         }

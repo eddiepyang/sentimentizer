@@ -36,6 +36,7 @@ dependencies = [
     "pyyaml>=6.0",
     "pydantic-ai-slim[openai]>=0.0.36",
     "langgraph>=0.2",
+    "rich>=13.0.0",
 ]
 
 [project.optional-dependencies]

@@ -90,6 +90,12 @@ Always verify against the installed source in `.venv/lib/python3.11/site-package
 - **Shuffle** with `ds.random_shuffle(seed=42)`.
 - **Concatenate** with `ds.union(other_ds)`.
 - **Count rows** with `ds.count()` (materializes the dataset).
+- **Rich progress bars** are enabled by default via `DataContext` configuration in
+  `sentimentizer/loader.py` and env vars in `sentimentizer/__init__.py`.
+  - `DataContext.get_current().enable_rich_progress_bars = True`
+  - `DataContext.get_current().use_ray_tqdm = False`
+  - Env vars: `RAY_DATA_ENABLE_RICH_PROGRESS_BARS=1`, `RAY_TQDM=0`
+  - Requires the `rich` package (listed in `pyproject.toml` dependencies).
 
 ### Ray Train (`ray.train`)
 
@@ -142,6 +148,8 @@ Always verify against the installed source in `.venv/lib/python3.11/site-package
 - **Never use `Checkpoint.from_dict()` or `Checkpoint.to_dict()`.** They were removed.
   Use `Checkpoint.from_directory()` / `checkpoint.as_directory()` with pickle.
 - **Never call `train.get_context()` outside a worker.** It raises `RuntimeError`.
+- **`get_dataset_shard` is a standalone function, not a method on `get_context()`.**
+  Use `train.get_dataset_shard("train")`, NOT `train.get_context().get_dataset_shard("train")`.
 - **`random_sample(fraction)` returns a single `Dataset`, not a tuple.**
   Do not unpack it like `keep, _ = ds.random_sample(0.5)`.
 
