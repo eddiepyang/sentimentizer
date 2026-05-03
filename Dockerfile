@@ -10,9 +10,12 @@ COPY pyproject.toml README.md LICENSE ./
 COPY sentimentizer/ ./sentimentizer/
 
 # Install the project + CPU-only PyTorch + Ray Serve
+# Both installs use the CPU-only PyTorch index to avoid pulling CUDA wheels
 RUN uv pip install --system --no-cache-dir \
     torch --index-url https://download.pytorch.org/whl/cpu \
-    && uv pip install --system --no-cache-dir .
+    && uv pip install --system --no-cache-dir \
+    --index-url https://download.pytorch.org/whl/cpu \
+    --default-index https://pypi.org/simple/ .
 
 # --- Runtime stage ---
 FROM python:3.11-slim

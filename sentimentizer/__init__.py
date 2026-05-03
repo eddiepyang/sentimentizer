@@ -1,4 +1,5 @@
 import logging
+import os
 import sys
 import time
 from collections.abc import Callable
@@ -8,6 +9,9 @@ from typing import Any, TextIO
 
 import psutil
 import structlog
+
+# Disable Ray's automatic uv runtime environment to prevent VIRTUAL_ENV warnings
+os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
 
 file_path = Path(__file__)
 root = file_path.parent.parent.absolute()

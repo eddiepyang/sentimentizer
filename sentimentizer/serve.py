@@ -1,3 +1,4 @@
+import threading
 import time
 from typing import Any
 
@@ -7,13 +8,14 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from sentimentizer import logger
+from sentimentizer.config import auto_detect_device
 from sentimentizer.models.decoder import Decoder
 from sentimentizer.models.decoder import get_trained_model as get_decoder
 from sentimentizer.models.encoder import Encoder
 from sentimentizer.models.encoder import get_trained_model as get_encoder
 from sentimentizer.models.rnn import RNN
 from sentimentizer.models.rnn import get_trained_model as get_rnn
-from sentimentizer.tokenizer import Tokenizer, get_trained_tokenizer
+from sentimentizer.tokenizer import Tokenizer, get_trained_tokenizer, regex_tokenize, text_sequencer
 
 # ---------------------------------------------------------------------------
 # Model registry — maps model names to their loader functions and classes
@@ -57,32 +59,35 @@ DEFAULT_MODEL = "rnn"
 
 
 class Metrics:
-    """Simple in-memory metrics collector."""
+    """Simple in-memory metrics collector with thread-safe counters."""
 
     def __init__(self) -> None:
+        self._lock = threading.Lock()
         self.request_count: int = 0
         self.error_count: int = 0
         self.total_latency_s: float = 0.0
 
     def record_request(self, latency_s: float, error: bool = False) -> None:
-        self.request_count += 1
-        self.total_latency_s += latency_s
-        if error:
-            self.error_count += 1
+        with self._lock:
+            self.request_count += 1
+            self.total_latency_s += latency_s
+            if error:
+                self.error_count += 1
 
     def to_prometheus(self) -> str:
-        lines = [
-            "# HELP sentimentizer_request_total Total requests processed",
-            "# TYPE sentimentizer_request_total counter",
-            f"sentimentizer_request_total {self.request_count}",
-            "# HELP sentimentizer_error_total Total errors",
-            "# TYPE sentimentizer_error_total counter",
-            f"sentimentizer_error_total {self.error_count}",
-            "# HELP sentimentizer_latency_seconds_total Cumulative latency in seconds",
-            "# TYPE sentimentizer_latency_seconds_total counter",
-            f"sentimentizer_latency_seconds_total {self.total_latency_s:.6f}",
-        ]
-        return "\n".join(lines) + "\n"
+        with self._lock:
+            lines = [
+                "# HELP sentimentizer_request_total Total requests processed",
+                "# TYPE sentimentizer_request_total counter",
+                f"sentimentizer_request_total {self.request_count}",
+                "# HELP sentimentizer_error_total Total errors",
+                "# TYPE sentimentizer_error_total counter",
+                f"sentimentizer_error_total {self.error_count}",
+                "# HELP sentimentizer_latency_seconds_total Cumulative latency in seconds",
+                "# TYPE sentimentizer_latency_seconds_total counter",
+                f"sentimentizer_latency_seconds_total {self.total_latency_s:.6f}",
+            ]
+            return "\n".join(lines) + "\n"
 
 
 metrics = Metrics()
@@ -119,14 +124,14 @@ class SentimentDeployment:
     """Deployment server for all sentiment models (RNN, Encoder, Decoder)."""
 
     def __init__(self) -> None:
-        self.device: str = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device: str = auto_detect_device()
         self.tokenizer: Tokenizer = get_trained_tokenizer()
 
         # Load all models at startup
         self.models: dict[str, torch.nn.Module] = {}
         for model_name, registry_entry in MODEL_REGISTRY.items():
             loader = registry_entry["loader"]
-            model = loader(batch_size=1, device=self.device)
+            model = loader(device=self.device)
             model.to(self.device)
             model.eval()
             self.models[model_name] = model
@@ -268,8 +273,6 @@ class SentimentDeployment:
                 return JSONResponse(
                     {"error": "No text provided or text is not a string"}, status_code=400
                 )
-
-            from sentimentizer.tokenizer import regex_tokenize, text_sequencer
 
             tokens = regex_tokenize(text)
             token_ids = text_sequencer(

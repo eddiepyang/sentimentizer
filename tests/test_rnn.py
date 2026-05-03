@@ -110,8 +110,8 @@ class TestExtractData:
 class TestDataTokenizer:
     def test_success(self, tokenized_df):
         parser = Tokenizer.from_data(tokenized_df)
-        parser.transform_dataframe(tokenized_df)
-        assert tokenized_df.shape == (2, 4)
+        result = parser.transform_dataframe(tokenized_df)
+        assert result.shape == (2, 4)
 
     def test_failure(self):
         # todo
@@ -136,7 +136,7 @@ class TestGetTrainedModel:
     def test_model_construction(self):
         """tests that the RNN model can be constructed with correct architecture"""
         emb_weights = torch.zeros(100, 100)  # small vocab, 100d embeddings
-        model = RNN(batch_size=64, emb_weights=emb_weights)
+        model = RNN(emb_weights=emb_weights)
         assert isinstance(model, RNN)
         assert model.lstm.bidirectional
         assert model.lstm.batch_first
@@ -145,7 +145,7 @@ class TestGetTrainedModel:
     def test_forward_pass(self):
         """tests that the forward pass produces correct output shape"""
         emb_weights = torch.randn(100, 100)
-        model = RNN(batch_size=2, emb_weights=emb_weights)
+        model = RNN(emb_weights=emb_weights)
         tokens = torch.randint(0, 100, (2, 10))
         output = model(tokens)
         assert output.shape == (2,)
@@ -159,7 +159,7 @@ class TestGetTrainedModel:
             patch(mock_path, side_effect=FileNotFoundError("No weights")),
             pytest.raises(FileNotFoundError),
         ):
-            get_trained_model(64, "cpu")
+            get_trained_model("cpu")
 
     def test_failure(self):
         # todo
@@ -307,9 +307,10 @@ class TestNewRayTrainer:
             "lr": 0.005,
             "betas": [0.7, 0.99],
             "weight_decay": 1e-4,
-            "scheduler_t_max": 100,
-            "scheduler_eta_min": 0,
-            "scheduler_last_epoch": -1,
+            "use_warmup": False,
+            "warmup_steps": 0,
+            "total_steps": 0,
+            "scheduler_eta_min": 1e-6,
             "model_type": "rnn",
             "dict_path": "/tmp/test.dict",
             "embeddings_file_path": "/tmp/test.zip",
@@ -331,9 +332,10 @@ class TestNewRayTrainer:
             "lr",
             "betas",
             "weight_decay",
-            "scheduler_t_max",
+            "use_warmup",
+            "warmup_steps",
+            "total_steps",
             "scheduler_eta_min",
-            "scheduler_last_epoch",
             "model_type",
             "dict_path",
             "embeddings_file_path",
@@ -347,9 +349,10 @@ class TestNewRayTrainer:
             "lr": 0.005,
             "betas": [0.7, 0.99],
             "weight_decay": 1e-4,
-            "scheduler_t_max": 100,
-            "scheduler_eta_min": 0,
-            "scheduler_last_epoch": -1,
+            "use_warmup": False,
+            "warmup_steps": 0,
+            "total_steps": 0,
+            "scheduler_eta_min": 1e-6,
             "model_type": "rnn",
             "dict_path": "/tmp/test.dict",
             "embeddings_file_path": "/tmp/test.zip",
@@ -391,7 +394,6 @@ class TestModelConfigs:
         cfg = RNNConfig(hidden_size=128, num_layers=3, dropout=0.3)
         emb_weights = torch.zeros(100, 100)
         model = RNN(
-            batch_size=64,
             emb_weights=emb_weights,
             hidden_size=cfg.hidden_size,
             num_layers=cfg.num_layers,
@@ -412,7 +414,6 @@ class TestModelConfigs:
         cfg = EncoderConfig(d_model=128, n_heads=2, n_layers=2, ff_multiplier=2)
         emb_weights = torch.zeros(100, 100)
         model = Encoder(
-            batch_size=64,
             input_len=200,
             emb_weights=emb_weights,
             d_model=cfg.d_model,
@@ -437,7 +438,6 @@ class TestModelConfigs:
         cfg = DecoderConfig(d_model=128, n_heads=2, n_encoder_layers=1, n_decoder_layers=2)
         emb_weights = torch.zeros(100, 100)
         model = Decoder(
-            batch_size=64,
             input_len=200,
             emb_weights=emb_weights,
             d_model=cfg.d_model,
@@ -455,7 +455,7 @@ class TestSingleTrainer:
 
     def test_new_trainer_creates_trainer(self):
         emb_weights = torch.randn(100, 100)
-        model = RNN(batch_size=64, emb_weights=emb_weights)
+        model = RNN(emb_weights=emb_weights)
         cfg = TrainerConfig(device="cpu")
         trainer = new_trainer(model=model, cfg=cfg)
         assert isinstance(trainer.loss_function, torch.nn.BCEWithLogitsLoss)

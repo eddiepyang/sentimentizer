@@ -21,7 +21,7 @@ class SearchSpaceParam(BaseModel):
     type: Literal["loguniform", "uniform", "choice", "randint"]
     low: float | None = None
     high: float | None = None
-    values: list[int] | list[float] | None = None
+    values: list[int] | list[float] | list[str] | None = None
 
 
 class TuningDecision(BaseModel):
