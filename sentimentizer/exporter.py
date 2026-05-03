@@ -15,8 +15,8 @@ import logging
 import os
 import subprocess
 import sys
-import time
 import threading
+import time
 
 import psutil
 from prometheus_client import Gauge, Info, start_http_server
@@ -192,12 +192,10 @@ def _update_ray_metrics(ray_url: str) -> None:
             # Count unique nodes by looking for ray_node_cpu_percent
             node_instances = set()
             for line in metric_lines:
-                if line.startswith("ray_node_cpu_percent"):
-                    # Extract instance label
-                    if 'instance="' in line:
-                        start = line.index('instance="') + len('instance="')
-                        end = line.index('"', start)
-                        node_instances.add(line[start:end])
+                if line.startswith("ray_node_cpu_percent") and 'instance="' in line:
+                    start = line.index('instance="') + len('instance="')
+                    end = line.index('"', start)
+                    node_instances.add(line[start:end])
             RAY_NODE_COUNT.set(len(node_instances))
     except (urllib.error.URLError, OSError):
         RAY_AVAILABLE.set(0)

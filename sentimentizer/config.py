@@ -161,7 +161,7 @@ class TrainerConfig:
     epochs: int = -1  # -1 means use model-specific default (4 for RNN, 8 for encoder/decoder)
     early_stopping_patience: int = 2  # stop if val_loss doesn't improve for this many epochs
     dataloader_workers: int = -1  # -1 means auto-detect based on device
-    ray_workers: int = 2  # Ray Train workers (only used with --distributed)
+    ray_workers: int = 1  # Ray Train workers (only used with --distributed)
     device: str = "auto"  # "auto" detects best available: cuda > mps > cpu
     memory: bool = True
     checkpoint_dir: str = ""  # directory to save checkpoints (empty = no checkpointing)

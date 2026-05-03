@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 import ray
 import torch
-from ray import train, tune
+from ray import train
 from ray.train import Checkpoint, ScalingConfig
 from ray.train.torch import TorchTrainer, prepare_model
 from torch import optim
@@ -372,8 +372,10 @@ def _train_func(config: dict) -> None:
     Reports metrics and checkpoints back to Ray Train.
     """
 
-    # Unpack training config
+    # Unpack training config (resolve -1 to model-specific default)
     epochs = config["epochs"]
+    if epochs == -1:
+        epochs = default_epochs(config["model_type"])
     batch_size = config["batch_size"]
     lr = config["lr"]
     betas = tuple(config["betas"])
@@ -386,8 +388,7 @@ def _train_func(config: dict) -> None:
     # Unpack model config
     model_type = config["model_type"]
     dict_path = config["dict_path"]
-    embeddings_file_path = config["embeddings_file_path"]
-    embeddings_sub_file_path = config["embeddings_sub_file_path"]
+    embeddings_model_name = config["embeddings_model_name"]
     embeddings_emb_length = config["embeddings_emb_length"]
     input_len = config["input_len"]
 
@@ -395,8 +396,7 @@ def _train_func(config: dict) -> None:
     from sentimentizer.config import EmbeddingsConfig
 
     embeddings_config = EmbeddingsConfig(
-        file_path=embeddings_file_path,
-        sub_file_path=embeddings_sub_file_path,
+        model_name=embeddings_model_name,
         emb_length=embeddings_emb_length,
     )
 
@@ -513,24 +513,33 @@ def _train_func(config: dict) -> None:
         )
 
         # Report metrics and checkpoint to Ray Train
-        tune.report(
-            {
-                "train_loss": train_loss,
-                "val_loss": val_loss,
-                "accuracy": metrics.accuracy,
-                "pos_acc": metrics.positive_accuracy,
-                "neg_acc": metrics.negative_accuracy,
-                "f1": metrics.f1,
-                "epoch": epoch,
-            },
-            checkpoint=Checkpoint.from_dict(
+        # Ray 2.55+ requires directory-based checkpoints (from_dict removed)
+        import os
+        import tempfile
+
+        import ray.cloudpickle as pickle
+
+        checkpoint_data = {
+            "model_state_dict": model.module.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "epoch": epoch,
+        }
+        with tempfile.TemporaryDirectory() as checkpoint_dir:
+            with open(os.path.join(checkpoint_dir, "data.pkl"), "wb") as fp:
+                pickle.dump(checkpoint_data, fp)
+            checkpoint = Checkpoint.from_directory(checkpoint_dir)
+            train.report(
                 {
-                    "model_state_dict": model.module.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(),
+                    "train_loss": train_loss,
+                    "val_loss": val_loss,
+                    "accuracy": metrics.accuracy,
+                    "pos_acc": metrics.positive_accuracy,
+                    "neg_acc": metrics.negative_accuracy,
+                    "f1": metrics.f1,
                     "epoch": epoch,
-                }
-            ),
-        )
+                },
+                checkpoint=checkpoint,
+            )
 
     logger.info(f"model fitting completed, {time.time() - start:.0f} seconds passed")
 
@@ -650,6 +659,9 @@ def new_ray_trainer(
 ) -> TorchTrainer:
     """Factory function to create a Ray Train TorchTrainer for distributed training.
 
+    See Ray Train docs:
+    https://docs.ray.io/en/2.55.1/train/api/doc/ray.train.torch.TorchTrainer.html
+
     Args:
         train_ds: Ray Dataset for training
         val_ds: Ray Dataset for validation
@@ -687,8 +699,7 @@ def new_ray_trainer(
         "scheduler_eta_min": sched.eta_min,
         "model_type": model_type,
         "dict_path": driver_config.files.dictionary_file_path,
-        "embeddings_file_path": driver_config.embeddings.file_path,
-        "embeddings_sub_file_path": driver_config.embeddings.sub_file_path,
+        "embeddings_model_name": driver_config.embeddings.model_name,
         "embeddings_emb_length": driver_config.embeddings.emb_length,
         "input_len": driver_config.tokenizer.max_len,
         "pos_weight": cfg.pos_weight,

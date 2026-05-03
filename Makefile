@@ -1,7 +1,7 @@
 .PHONY: setup setup-dev download-data train train-rnn train-encoder train-decoder \
        train-distributed train-quick serve test lint format check clean docker-build docker-run \
 	   gpu-reset tune tune-rnn tune-encoder tune-decoder tune-standalone \
-	   start-metrics stop-metrics setup-dashboards start-exporter stop-exporter
+	   start-metrics stop-metrics setup-dashboards start-exporter stop-exporter stop-ray
 
 # Default device: use auto-detect (cuda > mps > cpu)
 DEVICE ?= auto
@@ -197,6 +197,10 @@ stop-metrics:
 # ──────────────────────────────────────────────
 # Cleanup
 # ──────────────────────────────────────────────
+
+## Force stop all local Ray instances
+stop-ray:
+	uv run ray stop --force
 
 ## Remove generated data files, checkpoints, and Python caches
 clean:

@@ -210,8 +210,7 @@ def _trainable_wrapper(config: dict, train_dataset: Any = None, val_dataset: Any
     - 'model_type': str
     - 'device': str
     - 'dict_path': str
-    - 'embeddings_file_path': str
-    - 'embeddings_sub_file_path': str
+    - 'embeddings_model_name': str
     - 'embeddings_emb_length': int
     - 'input_len': int
     """
@@ -226,8 +225,7 @@ def _trainable_wrapper(config: dict, train_dataset: Any = None, val_dataset: Any
     model_type = config["model_type"]
     dict_path = config["dict_path"]
     embeddings_config = EmbeddingsConfig(
-        file_path=config["embeddings_file_path"],
-        sub_file_path=config["embeddings_sub_file_path"],
+        model_name=config["embeddings_model_name"],
         emb_length=config["embeddings_emb_length"],
     )
     input_len = config["input_len"]
@@ -375,6 +373,10 @@ def tune_model(
 ) -> dict[str, Any]:
     """Run hyperparameter tuning using Ray Tune + Optuna.
 
+    See Ray Tune docs:
+    https://docs.ray.io/en/2.55.1/tune/api/doc/ray.tune.Tuner.html
+    https://docs.ray.io/en/2.55.1/tune/api/doc/ray.tune.search.optuna.OptunaSearch.html
+
     Args:
         model_type: One of 'rnn', 'encoder', 'decoder'.
         tuner_config: Tuner configuration (loaded from YAML if None).
@@ -413,8 +415,7 @@ def tune_model(
     search_space["model_type"] = model_type
     search_space["device"] = auto_detect_device()
     search_space["dict_path"] = DriverConfig.files.dictionary_file_path
-    search_space["embeddings_file_path"] = DriverConfig.embeddings.file_path
-    search_space["embeddings_sub_file_path"] = DriverConfig.embeddings.sub_file_path
+    search_space["embeddings_model_name"] = DriverConfig.embeddings.model_name
     search_space["embeddings_emb_length"] = DriverConfig.embeddings.emb_length
     search_space["input_len"] = DriverConfig.tokenizer.max_len
     search_space["balance_classes"] = balance_classes
@@ -489,8 +490,7 @@ def tune_model(
         "model_type",
         "device",
         "dict_path",
-        "embeddings_file_path",
-        "embeddings_sub_file_path",
+        "embeddings_model_name",
         "embeddings_emb_length",
         "input_len",
         "balance_classes",

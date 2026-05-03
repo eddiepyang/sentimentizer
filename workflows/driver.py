@@ -26,7 +26,11 @@ from sentimentizer.config import (
     weights_path_for,
 )
 from sentimentizer.extractor import extract_data
-from sentimentizer.loader import load_train_val_corpus_datasets, load_train_val_ray_datasets
+from sentimentizer.loader import (
+    compute_pos_weight,
+    load_train_val_corpus_datasets,
+    load_train_val_ray_datasets,
+)
 from sentimentizer.tokenizer import Tokenizer
 from sentimentizer.trainer import latest_checkpoint, load_checkpoint, new_ray_trainer, new_trainer
 
@@ -196,8 +200,8 @@ def new_parser() -> argparse.Namespace:
     parser.add_argument(
         "--pos-weight",
         type=float,
-        default=1.0,
-        help="loss weight for the positive class (default: 1.0)",
+        default=0.0,
+        help="loss weight for the positive class (0 = auto-calculate from data, default: 0)",
     )
     args = parser.parse_args()
 
@@ -349,6 +353,19 @@ def _run_fit_single(args: argparse.Namespace) -> None:
         random_state=args.balance_seed,
     )
 
+    # Auto-compute pos_weight from training data if not explicitly set
+    pos_weight = args.pos_weight
+    if pos_weight == 0.0:
+        if balance_classes:
+            logger.info("using pos_weight=1.0 because class balancing (undersampling) is enabled")
+            pos_weight = 1.0
+        else:
+            import pandas as pd
+
+            train_df = pd.read_parquet(DriverConfig.files.processed_reviews_file_path)
+            pos_weight = compute_pos_weight(train_df)
+            del train_df
+
     model = _load_model(args)
 
     epochs = default_epochs(args.model)
@@ -358,7 +375,7 @@ def _run_fit_single(args: argparse.Namespace) -> None:
         dataloader_workers=default_dataloader_workers(args.device),
         checkpoint_dir=args.checkpoint_dir,
         checkpoint_every=args.checkpoint_every,
-        pos_weight=args.pos_weight,
+        pos_weight=pos_weight,
     )
 
     trainer = new_trainer(
@@ -395,18 +412,34 @@ def _run_fit_single(args: argparse.Namespace) -> None:
 def _run_fit_distributed(args: argparse.Namespace) -> None:
     """Distributed training using Ray Train TorchTrainer."""
     balance_classes = not args.no_balance_classes
+
+    # Auto-compute pos_weight from full dataset if not explicitly set
+    pos_weight = args.pos_weight
+    if pos_weight == 0.0:
+        if balance_classes:
+            logger.info("using pos_weight=1.0 because class balancing (undersampling) is enabled")
+            pos_weight = 1.0
+        else:
+            import pandas as pd
+
+            full_df = pd.read_parquet(DriverConfig.files.processed_reviews_file_path)
+            pos_weight = compute_pos_weight(full_df)
+            del full_df
+
     train_ds, val_ds = load_train_val_ray_datasets(
         DriverConfig.files.processed_reviews_file_path,
         balance_classes=balance_classes,
         random_state=args.balance_seed,
     )
 
+    epochs = default_epochs(args.model)
     cfg = DriverConfig.trainer(
+        epochs=epochs,
         device=args.device,
         ray_workers=args.num_workers,
         checkpoint_dir=args.checkpoint_dir,
         checkpoint_every=args.checkpoint_every,
-        pos_weight=args.pos_weight,
+        pos_weight=pos_weight,
     )
 
     ray_trainer = new_ray_trainer(
@@ -430,12 +463,19 @@ def _run_fit_distributed(args: argparse.Namespace) -> None:
 
     if args.save:
         # Load best checkpoint and save model weights
+        # Ray 2.55+ uses directory-based checkpoints (to_dict removed)
+        import os
+
+        import ray.cloudpickle as pickle
+
         weights_path = weights_path_for(args.model)
-        checkpoint_data = result.checkpoint.to_dict()
-        torch.save(
-            checkpoint_data["model_state_dict"],
-            weights_path,
-        )
+        with result.checkpoint.as_directory() as checkpoint_dir:
+            with open(os.path.join(checkpoint_dir, "data.pkl"), "rb") as fp:
+                checkpoint_data = pickle.load(fp)
+            torch.save(
+                checkpoint_data["model_state_dict"],
+                weights_path,
+            )
         logger.info(f"model weights saved to: {weights_path}")
 
 

@@ -11,6 +11,42 @@ from sentimentizer.config import DEFAULT_LOG_LEVEL
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
 
+def compute_pos_weight(df: pd.DataFrame, target_col: str = "target") -> float:
+    """Compute pos_weight for BCEWithLogitsLoss from class distribution.
+
+    Returns neg_count / pos_count, which downweights the majority class
+    (typically positive in Yelp reviews) so the loss contribution is
+    balanced without throwing away any data.
+
+    Args:
+        df: DataFrame with a binary target column (0.0 and 1.0).
+        target_col: Name of the target column.
+
+    Returns:
+        pos_weight = neg_count / pos_count.  Falls back to 1.0 if
+        either class is empty.
+    """
+    neg_count = int((df[target_col] == 0.0).sum())
+    pos_count = int((df[target_col] == 1.0).sum())
+
+    if pos_count == 0 or neg_count == 0:
+        logger.warning(
+            "cannot compute pos_weight: one class is empty, using 1.0",
+            neg_count=neg_count,
+            pos_count=pos_count,
+        )
+        return 1.0
+
+    weight = neg_count / pos_count
+    logger.info(
+        "computed pos_weight from class distribution",
+        neg_count=neg_count,
+        pos_count=pos_count,
+        pos_weight=round(weight, 4),
+    )
+    return weight
+
+
 class CorpusDataset(Dataset):
     """Dataset class required for pytorch to output items by index.
 
@@ -103,6 +139,9 @@ def _balance_ray_dataset(
     Only balances training data — validation data should reflect real-world
     distribution for meaningful metrics.
 
+    Uses ``random_sample`` to keep a fraction of the majority class rows.
+    See https://docs.ray.io/en/2.55.1/data/api/doc/ray.data.Dataset.random_sample.html
+
     Args:
         ds: Ray Dataset with a binary target column (0.0 and 1.0).
         target_col: Name of the target column.
@@ -120,11 +159,11 @@ def _balance_ray_dataset(
 
     if pos_count > neg_count and neg_count > 0:
         keep_ratio = neg_count / pos_count
-        pos_keep, _ = pos_ds.random_split([keep_ratio, 1 - keep_ratio], seed=random_state)
+        pos_keep = pos_ds.random_sample(keep_ratio, seed=random_state)
         balanced = pos_keep.union(neg_ds)
     elif neg_count > pos_count and pos_count > 0:
         keep_ratio = pos_count / neg_count
-        neg_keep, _ = neg_ds.random_split([keep_ratio, 1 - keep_ratio], seed=random_state)
+        neg_keep = neg_ds.random_sample(keep_ratio, seed=random_state)
         balanced = neg_keep.union(pos_ds)
     else:
         # Already balanced or one class is empty
@@ -147,12 +186,14 @@ def load_train_val_ray_datasets(
 ) -> tuple[ray.data.Dataset, ray.data.Dataset]:
     """Load processed parquet data as Ray Datasets for distributed training.
 
-    Splits into train and validation datasets using random_split.
+    Splits into train and validation datasets using ``train_test_split``.
+    See https://docs.ray.io/en/2.55.1/data/api/doc/ray.data.Dataset.train_test_split.html
+
     Optionally balances classes in the training set by undersampling
     the majority class.
     """
     ds = ray.data.read_parquet(data_path)
-    train_ds, val_ds = ds.random_split([1 - test_size, test_size])
+    train_ds, val_ds = ds.train_test_split(test_size=test_size, shuffle=True, seed=random_state)
 
     if balance_classes:
         train_ds = _balance_ray_dataset(train_ds, target_col="target", random_state=random_state)

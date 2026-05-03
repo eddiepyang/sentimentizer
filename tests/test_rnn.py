@@ -313,8 +313,7 @@ class TestNewRayTrainer:
             "scheduler_eta_min": 1e-6,
             "model_type": "rnn",
             "dict_path": "/tmp/test.dict",
-            "embeddings_file_path": "/tmp/test.zip",
-            "embeddings_sub_file_path": "test.txt",
+            "embeddings_model_name": "glove-wiki-gigaword-100",
             "embeddings_emb_length": 100,
             "input_len": 200,
         }
@@ -338,8 +337,7 @@ class TestNewRayTrainer:
             "scheduler_eta_min",
             "model_type",
             "dict_path",
-            "embeddings_file_path",
-            "embeddings_sub_file_path",
+            "embeddings_model_name",
             "embeddings_emb_length",
             "input_len",
         }
@@ -355,8 +353,7 @@ class TestNewRayTrainer:
             "scheduler_eta_min": 1e-6,
             "model_type": "rnn",
             "dict_path": "/tmp/test.dict",
-            "embeddings_file_path": "/tmp/test.zip",
-            "embeddings_sub_file_path": "test.txt",
+            "embeddings_model_name": "glove-wiki-gigaword-100",
             "embeddings_emb_length": 100,
             "input_len": 200,
         }
