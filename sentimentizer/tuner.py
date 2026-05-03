@@ -266,6 +266,7 @@ def _trainable_wrapper(config: dict, train_dataset: Any = None, val_dataset: Any
         epochs=config.get("epochs", 4),
         device=device,
         dataloader_workers=0,  # Avoid multiprocessing in Ray workers
+        pos_weight=config.get("pos_weight", 1.0),
     )
 
     trainer = new_trainer(
@@ -277,8 +278,12 @@ def _trainable_wrapper(config: dict, train_dataset: Any = None, val_dataset: Any
     if train_dataset is None or val_dataset is None:
         from sentimentizer.loader import load_train_val_corpus_datasets
 
+        balance_classes = config.get("balance_classes", True)
+        random_state = config.get("balance_seed", 42)
         train_dataset, val_dataset = load_train_val_corpus_datasets(
-            DriverConfig.files.processed_reviews_file_path
+            DriverConfig.files.processed_reviews_file_path,
+            balance_classes=balance_classes,
+            random_state=random_state,
         )
 
     train_loader, val_loader = _new_loaders(
@@ -354,8 +359,6 @@ def _build_model_config(model_type: str, config: dict) -> Any:
         raise ValueError(f"Unknown model type: {model_type}")
 
 
-
-
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -366,6 +369,9 @@ def tune_model(
     tuner_config: TunerConfig | None = None,
     search_space_overrides: dict[str, dict[str, Any]] | None = None,
     config_path: str | Path | None = None,
+    balance_classes: bool = True,
+    balance_seed: int = 42,
+    pos_weight: float = 1.0,
 ) -> dict[str, Any]:
     """Run hyperparameter tuning using Ray Tune + Optuna.
 
@@ -375,6 +381,9 @@ def tune_model(
         search_space_overrides: Optional overrides from the agent's
             TuningDecision.
         config_path: Path to config YAML.
+        balance_classes: Whether to balance classes in training data
+            by undersampling the majority class (default: True).
+        balance_seed: Random seed for class balancing (default: 42).
 
     Returns:
         Dict with keys:
@@ -408,12 +417,17 @@ def tune_model(
     search_space["embeddings_sub_file_path"] = DriverConfig.embeddings.sub_file_path
     search_space["embeddings_emb_length"] = DriverConfig.embeddings.emb_length
     search_space["input_len"] = DriverConfig.tokenizer.max_len
+    search_space["balance_classes"] = balance_classes
+    search_space["balance_seed"] = balance_seed
+    search_space["pos_weight"] = pos_weight
 
     from sentimentizer.loader import load_train_val_corpus_datasets
 
     logger.info("loading_datasets_for_tuning")
     train_dataset, val_dataset = load_train_val_corpus_datasets(
-        DriverConfig.files.processed_reviews_file_path
+        DriverConfig.files.processed_reviews_file_path,
+        balance_classes=balance_classes,
+        random_state=balance_seed,
     )
 
     scheduler = _get_scheduler(tuner_config)
@@ -424,9 +438,13 @@ def tune_model(
 
     reporter = CLIReporter(
         metric_columns=[
-            "val_accuracy", "val_loss", "train_loss",
-            "val_f1", "val_cohen_kappa",
-            "val_positive_accuracy", "val_negative_accuracy",
+            "val_accuracy",
+            "val_loss",
+            "train_loss",
+            "val_f1",
+            "val_cohen_kappa",
+            "val_positive_accuracy",
+            "val_negative_accuracy",
             "epoch",
         ],
     )
@@ -475,6 +493,8 @@ def tune_model(
         "embeddings_sub_file_path",
         "embeddings_emb_length",
         "input_len",
+        "balance_classes",
+        "balance_seed",
     }
     clean_config = {k: v for k, v in best_config.items() if k not in internal_keys}
 

@@ -27,6 +27,7 @@ dependencies = [
     "smart_open>=7.0.1",
     "structlog",
     "psutil",
+    "prometheus_client>=0.14.0",
     "ray[data]>=2.5.0",
     "ray[serve]>=2.5.0",
     "ray[train]>=2.5.0",

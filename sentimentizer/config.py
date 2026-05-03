@@ -131,7 +131,28 @@ class FileConfig:
     dictionary_file_path: str = f"{data_path}/data/yelp.dictionary"
     raw_reviews_file_path: str = f"{data_path}/data/review_data_raw.parquet"
     processed_reviews_file_path: str = f"{data_path}/data/review_data.parquet"
-    weights_file_path: str = f"{data_path}/data/weights.pth"
+    rnn_weights_file_path: str = f"{data_path}/data/rnn_weights.pth"
+    encoder_weights_file_path: str = f"{data_path}/data/encoder_weights.pth"
+    decoder_weights_file_path: str = f"{data_path}/data/decoder_weights.pth"
+
+
+def weights_path_for(model_type: str) -> str:
+    """Return the weights file path for the given model type.
+
+    Args:
+        model_type: One of 'rnn', 'encoder', 'decoder'.
+
+    Returns:
+        Absolute path to the weights file for that model type.
+    """
+    if model_type == "rnn":
+        return FileConfig.rnn_weights_file_path
+    elif model_type == "encoder":
+        return FileConfig.encoder_weights_file_path
+    elif model_type == "decoder":
+        return FileConfig.decoder_weights_file_path
+    else:
+        raise ValueError(f"Unknown model type: {model_type!r}")
 
 
 @dataclass
@@ -146,14 +167,12 @@ class TrainerConfig:
     checkpoint_dir: str = ""  # directory to save checkpoints (empty = no checkpointing)
     checkpoint_every: int = 1  # save checkpoint every N epochs (0 = disabled)
     checkpoint_best: bool = True  # save the best model (lowest val loss) separately
+    pos_weight: float = 1.0  # weight for the positive class in the loss function
 
 
 @dataclass
 class EmbeddingsConfig:
-    file_path: str = str(external_data / "glove.6B.zip")
-    # sub_file_path: str = "glove.6B.zip/glove.6B.100d.txt"
-    sub_file_path: str = "glove.6B.100d.txt"
-
+    model_name: str = "glove-wiki-gigaword-100"  # auto-downloaded via gensim.downloader
     emb_length: int = 100
 
 

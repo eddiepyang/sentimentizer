@@ -7,9 +7,8 @@ from typing import Any
 
 import numpy as np
 import ray
-from ray import tune
 import torch
-from ray import train
+from ray import train, tune
 from ray.train import Checkpoint, ScalingConfig
 from ray.train.torch import TorchTrainer, prepare_model
 from torch import optim
@@ -107,6 +106,7 @@ def _new_loaders(
         batch_size=cfg.batch_size,
         num_workers=workers,
         pin_memory=pin_mem,
+        shuffle=True,
     )
 
     val_loader = DataLoader(
@@ -153,7 +153,9 @@ class Trainer:
                     f"[epoch {epoch}] {i / n:.2f} of rows completed in "
                     f"{j + 1} cycles, current loss at {np.mean(self.losses[-60:]):.6f}"
                 )
-                logger.info(f"[epoch {epoch}] current learning rate at {self.optimizer.param_groups[0]['lr']:.6f}")
+                logger.info(
+                    f"[epoch {epoch}] current learning rate at {self.optimizer.param_groups[0]['lr']:.6f}"  # noqa: E501
+                )
 
     def fit(
         self, model: torch.nn.Module, train_data: CorpusDataset, val_data: CorpusDataset
@@ -228,28 +230,46 @@ class Trainer:
 
     def evaluate(self, model: torch.nn.Module, val_loader: DataLoader, epoch: int) -> None:
         logger.info(f"[epoch {epoch}] evaluating predictions...")
-        losses = []
-        i = 0
-        n = len(val_loader.dataset)  # type: ignore[arg-type]
         model.to(self.cfg.device)
         model.eval()
 
-        for j, (sent, target) in enumerate(val_loader):
-            loss_val = val_step(
-                model,
-                data=sent.to(self.cfg.device),
-                target=target.to(self.cfg.device),
-                loss_function=self.loss_function,
-            )
-            losses.append(loss_val)
-            i += len(target)
-            if i % (self.cfg.batch_size * 100) == 0:
-                logger.info(
-                    f"[epoch {epoch}] {i / n:.2f} of rows completed in "
-                    f"{j + 1} cycles, validation loss at {np.mean(losses[-60:]):.6f}"
-                )
+        all_probs: list[torch.Tensor] = []
+        all_targets: list[torch.Tensor] = []
+        losses = []
+
+        with torch.no_grad():
+            for sent, target in val_loader:
+                sent = sent.to(self.cfg.device)
+                target = target.to(self.cfg.device)
+                logits = model(sent)
+                loss_val = self.loss_function(logits, target)
+                losses.append(loss_val.item())
+
+                all_probs.append(torch.sigmoid(logits).cpu())
+                all_targets.append(target.cpu())
+
+        probabilities = torch.cat(all_probs).numpy()
+        targets = torch.cat(all_targets).numpy()
+        predictions = (probabilities >= 0.5).astype(int)
+
+        from sentimentizer.metrics import compute_classification_metrics
+
+        metrics = compute_classification_metrics(
+            predictions=predictions,
+            targets=targets,
+            probabilities=probabilities,
+        )
+
         self.val_loss = np.mean(losses)
-        logger.info(f"[epoch {epoch}] validation loss: {self.val_loss:.6f}")
+        logger.info(  # type: ignore[call-arg]
+            f"[epoch {epoch}] evaluation complete",
+            val_loss=self.val_loss,
+            accuracy=metrics.accuracy,
+            pos_acc=metrics.positive_accuracy,
+            neg_acc=metrics.negative_accuracy,
+            f1=metrics.f1,
+            auc_roc=metrics.auc_roc,
+        )
 
 
 def _get_opt_params(model_type: str) -> OptimizationParams | EncoderOptimizationParams:
@@ -324,8 +344,12 @@ def new_trainer(
             last_epoch=sched.last_epoch,
         )
 
+    loss_function = torch.nn.BCEWithLogitsLoss(
+        pos_weight=torch.tensor([cfg.pos_weight]).to(cfg.device)
+    )
+
     trainer = Trainer(
-        loss_function=torch.nn.BCEWithLogitsLoss(),
+        loss_function=loss_function,
         optimizer=optimizer,
         scheduler=scheduler,
         cfg=cfg,
@@ -419,7 +443,9 @@ def _train_func(config: dict) -> None:
             T_max=epochs,
             eta_min=scheduler_eta_min,
         )
-    loss_function = torch.nn.BCEWithLogitsLoss()
+    loss_function = torch.nn.BCEWithLogitsLoss(
+        pos_weight=torch.tensor([config.get("pos_weight", 1.0)]).to(device)
+    )
 
     # Get dataset shards for this worker
     train_shard = train.get_context().get_dataset_shard("train")
@@ -447,26 +473,56 @@ def _train_func(config: dict) -> None:
 
         # Validation
         val_losses = []
+        all_probs = []
+        all_targets = []
         model.eval()
-        for batch in val_shard.iter_torch_batches(batch_size=batch_size):
-            loss_val = val_step(
-                model,
-                data=batch["data"].long().to(device),
-                target=batch["target"].float().to(device),
-                loss_function=loss_function,
-            )
-            val_losses.append(loss_val)
+        with torch.no_grad():
+            for batch in val_shard.iter_torch_batches(batch_size=batch_size):
+                data = batch["data"].long().to(device)
+                target = batch["target"].float().to(device)
+                logits = model(data)
+                loss_val = loss_function(logits, target)
+                val_losses.append(loss_val.item())
+
+                all_probs.append(torch.sigmoid(logits).cpu())
+                all_targets.append(target.cpu())
 
         val_loss = np.mean(val_losses) if val_losses else 0.0
         train_loss = np.mean(epoch_losses) if epoch_losses else 0.0
 
-        logger.info(
-            f"[epoch {epoch}] completed, train_loss={train_loss:.6f}, val_loss={val_loss:.6f}"
+        from sentimentizer.metrics import compute_classification_metrics
+
+        probabilities = torch.cat(all_probs).numpy()
+        targets = torch.cat(all_targets).numpy()
+        predictions = (probabilities >= 0.5).astype(int)
+
+        metrics = compute_classification_metrics(
+            predictions=predictions,
+            targets=targets,
+            probabilities=probabilities,
+        )
+
+        logger.info(  # type: ignore[call-arg]
+            f"[epoch {epoch}] completed",
+            train_loss=train_loss,
+            val_loss=val_loss,
+            accuracy=metrics.accuracy,
+            pos_acc=metrics.positive_accuracy,
+            neg_acc=metrics.negative_accuracy,
+            f1=metrics.f1,
         )
 
         # Report metrics and checkpoint to Ray Train
         tune.report(
-            {"train_loss": train_loss, "val_loss": val_loss, "epoch": epoch},
+            {
+                "train_loss": train_loss,
+                "val_loss": val_loss,
+                "accuracy": metrics.accuracy,
+                "pos_acc": metrics.positive_accuracy,
+                "neg_acc": metrics.negative_accuracy,
+                "f1": metrics.f1,
+                "epoch": epoch,
+            },
             checkpoint=Checkpoint.from_dict(
                 {
                     "model_state_dict": model.module.state_dict(),
@@ -635,6 +691,7 @@ def new_ray_trainer(
         "embeddings_sub_file_path": driver_config.embeddings.sub_file_path,
         "embeddings_emb_length": driver_config.embeddings.emb_length,
         "input_len": driver_config.tokenizer.max_len,
+        "pos_weight": cfg.pos_weight,
     }
 
     use_gpu = cfg.device in ("cuda", "mps")

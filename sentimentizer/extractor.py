@@ -8,6 +8,7 @@ import numpy as np
 import orjson as json
 import ray
 from gensim import corpora
+from gensim import downloader as gensim_api
 
 from sentimentizer import new_logger, time_decorator
 from sentimentizer.config import (
@@ -77,28 +78,30 @@ def extract_data(file_path: str, compressed_file_name: str, stop: int = 0) -> ra
 @time_decorator
 def extract_embeddings(
     dictionary: corpora.Dictionary, cfg: EmbeddingsConfig
-) -> dict[str, np.ndarray]:
-    """load glove vectors"""
+) -> dict[int, np.ndarray]:
+    """Load pre-trained word vectors via gensim.downloader.
 
-    embeddings_dict: dict = {}
+    Auto-downloads and caches the model (e.g. glove-wiki-gigaword-100)
+    to ~/gensim-data/ on first use.
+    """
+    logger.info(f"loading embeddings model: {cfg.model_name} ...")
+    glove = gensim_api.load(cfg.model_name)
 
-    with zipfile.ZipFile(cfg.file_path, "r") as f, f.open(cfg.sub_file_path, "r") as z:
-        for line in z:
-            values = line.split()
-            key = values[0].decode()
+    embeddings_dict: dict[int, np.ndarray] = {}
+    for word, token_id in dictionary.token2id.items():
+        if word in glove:
+            embeddings_dict[token_id + 1] = glove[word].astype(EMBEDDING_DTYPE)
 
-            if key in dictionary.token2id:
-                embeddings_dict.setdefault(
-                    dictionary.token2id[key] + 1,
-                    np.asarray(values[1:], dtype=EMBEDDING_DTYPE),
-                )
-
+    logger.info(
+        f"matched {len(embeddings_dict)}/{len(dictionary)} dictionary words "
+        f"to {cfg.model_name} vectors"
+    )
     return embeddings_dict
 
 
 @time_decorator
 def new_embedding_weights(dictionary: corpora.Dictionary, cfg: EmbeddingsConfig) -> np.ndarray:
-    """converts local dictionary to embeddings from glove
+    """Build the embedding weight matrix from pre-trained vectors.
 
     Embedding matrix layout:
         Row 0:              padding (all zeros)

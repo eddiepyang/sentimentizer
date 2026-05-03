@@ -10,7 +10,6 @@ Tests cover:
 """
 
 import numpy as np
-import pytest
 import torch
 
 from sentimentizer.metrics import (

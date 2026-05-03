@@ -49,6 +49,7 @@ from sentimentizer.config import (
     TrainerConfig,
     auto_detect_device,
     default_epochs,
+    weights_path_for,
 )
 from sentimentizer.tuner import TunerConfig, tune_model
 
@@ -117,6 +118,9 @@ class TuningRunConfig:
     validate_predictions: bool = True
     validation_threshold: float = 0.75
     max_retries: int = 2
+    balance_classes: bool = True
+    balance_seed: int = 42
+    pos_weight: float = 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -264,7 +268,9 @@ class TuningRun:
                 result.model_path = str(model_path)
 
                 if self.config.validate_predictions:
-                    validation_passed, validation_results, validation_metrics = self._validate_model(model_path)
+                    validation_passed, validation_results, validation_metrics = (
+                        self._validate_model(model_path)
+                    )
                     result.validation_passed = validation_passed
                     result.validation_results = validation_results
                     result.validation_metrics = validation_metrics
@@ -298,16 +304,16 @@ class TuningRun:
 
         result.retry_count = retry_count
 
-        # Copy best weights to default path if validation passed
+        # Copy best weights to model-specific path if validation passed
         if result.validation_passed and result.model_path:
-            default_weights_path = Path(DriverConfig.files.weights_file_path)
+            model_weights_path = Path(weights_path_for(self.config.model_type))
             try:
-                default_weights_path.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(result.model_path, default_weights_path)
+                model_weights_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(result.model_path, model_weights_path)
                 logger.info(
                     "weights_copied_to_default",
                     source=result.model_path,
-                    destination=str(default_weights_path),
+                    destination=str(model_weights_path),
                 )
             except OSError as e:
                 logger.warning(f"failed_to_copy_weights: {e}")
@@ -412,6 +418,9 @@ class TuningRun:
             tuner_config=tuner_config,
             search_space_overrides=self.config.search_space_overrides,
             config_path=self.config.config_path,
+            balance_classes=self.config.balance_classes,
+            balance_seed=self.config.balance_seed,
+            pos_weight=self.config.pos_weight,
         )
 
         tuning_result = TuningResult(
@@ -487,6 +496,7 @@ class TuningRun:
             checkpoint_dir=str(self._output_dir / "checkpoints"),
             checkpoint_every=1,
             checkpoint_best=True,
+            pos_weight=self.config.pos_weight,
         )
 
         trainer = new_trainer(
@@ -497,7 +507,9 @@ class TuningRun:
 
         # Load data
         train_dataset, val_dataset = load_train_val_corpus_datasets(
-            DriverConfig.files.processed_reviews_file_path
+            DriverConfig.files.processed_reviews_file_path,
+            balance_classes=self.config.balance_classes,
+            random_state=self.config.balance_seed,
         )
 
         # Train
@@ -514,9 +526,7 @@ class TuningRun:
     # Model validation
     # ------------------------------------------------------------------
 
-    def _validate_model(
-        self, model_path: str
-    ) -> tuple[bool, list[dict[str, Any]], dict[str, Any]]:
+    def _validate_model(self, model_path: str) -> tuple[bool, list[dict[str, Any]], dict[str, Any]]:
         """Validate model predictions against known sentiment examples.
 
         Loads the trained model and tests it against a set of known
@@ -838,6 +848,8 @@ def create_tuning_run(
     validate_predictions: bool = True,
     validation_threshold: float = 0.75,
     max_retries: int = 2,
+    balance_classes: bool = True,
+    balance_seed: int = 42,
 ) -> TuningRunResult:
     """Create and execute a tuning run with sensible defaults.
 
@@ -861,6 +873,8 @@ def create_tuning_run(
         validate_predictions: Whether to validate model predictions.
         validation_threshold: Minimum fraction of correct predictions.
         max_retries: Max re-tuning attempts if validation fails.
+        balance_classes: Whether to balance classes by undersampling (default: True).
+        balance_seed: Random seed for class balancing (default: 42).
 
     Returns:
         ``TuningRunResult`` with best config, metrics, and file paths.
@@ -888,6 +902,8 @@ def create_tuning_run(
         validate_predictions=validate_predictions,
         validation_threshold=validation_threshold,
         max_retries=max_retries,
+        balance_classes=balance_classes,
+        balance_seed=balance_seed,
     )
     run = TuningRun(config)
     return run.execute()

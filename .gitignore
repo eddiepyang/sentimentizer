@@ -23,6 +23,10 @@ src/__pycache__/*
 /data/*
 vendor
 model_weight.pt
+weights.pth
+rnn_weights.pth
+encoder_weights.pth
+decoder_weights.pth
 yelp_nlp.egg-info
 build
 dist
@@ -36,4 +40,9 @@ checkpoints/
 .mypy_cache/
 .bsp/
 *.egg-info/
-weights.pth
+
+
+# Ray Grafana dashboards (copied from installed package)
+# Keep custom dashboards, only ignore generated Ray ones
+metrics/grafana/dashboards/*_grafana_dashboard.json
+metrics/grafana/dashboards/*_grafana_dashboard_base.json

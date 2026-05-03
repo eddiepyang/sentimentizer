@@ -7,3 +7,8 @@ scrape_configs:
     # Scrape Ray metrics from the host machine
     static_configs:
       - targets: ['host.docker.internal:8080']
+
+  - job_name: 'sentimentizer'
+    # Scrape Sentimentizer application metrics (system, GPU, Ray health)
+    static_configs:
+      - targets: ['host.docker.internal:8081']

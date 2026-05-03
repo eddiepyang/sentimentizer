@@ -23,6 +23,7 @@ from sentimentizer.config import (
     auto_detect_device,
     default_dataloader_workers,
     default_epochs,
+    weights_path_for,
 )
 from sentimentizer.extractor import extract_data
 from sentimentizer.loader import load_train_val_corpus_datasets, load_train_val_ray_datasets
@@ -180,6 +181,24 @@ def new_parser() -> argparse.Namespace:
         default=False,
         help="resume training from the latest checkpoint in --checkpoint-dir",
     )
+    parser.add_argument(
+        "--no-balance-classes",
+        action="store_true",
+        default=False,
+        help="disable class balancing (undersampling majority class in training data)",  # noqa: E501
+    )
+    parser.add_argument(
+        "--balance-seed",
+        type=int,
+        default=42,
+        help="random seed for class balancing undersampling (default: 42)",
+    )
+    parser.add_argument(
+        "--pos-weight",
+        type=float,
+        default=1.0,
+        help="loss weight for the positive class (default: 1.0)",
+    )
     args = parser.parse_args()
 
     if args.type not in ("new", "update"):
@@ -323,8 +342,11 @@ def run_fit(args: argparse.Namespace) -> None:
 
 def _run_fit_single(args: argparse.Namespace) -> None:
     """Single-node training using the existing Trainer class."""
+    balance_classes = not args.no_balance_classes
     train_dataset, val_dataset = load_train_val_corpus_datasets(
-        DriverConfig.files.processed_reviews_file_path
+        DriverConfig.files.processed_reviews_file_path,
+        balance_classes=balance_classes,
+        random_state=args.balance_seed,
     )
 
     model = _load_model(args)
@@ -336,6 +358,7 @@ def _run_fit_single(args: argparse.Namespace) -> None:
         dataloader_workers=default_dataloader_workers(args.device),
         checkpoint_dir=args.checkpoint_dir,
         checkpoint_every=args.checkpoint_every,
+        pos_weight=args.pos_weight,
     )
 
     trainer = new_trainer(
@@ -364,19 +387,26 @@ def _run_fit_single(args: argparse.Namespace) -> None:
         _cuda_cleanup()
 
     if args.save:
-        torch.save(model.state_dict(), DriverConfig.files.weights_file_path)
-        logger.info(f"model weights saved to: {DriverConfig.files.weights_file_path}")
+        weights_path = weights_path_for(args.model)
+        torch.save(model.state_dict(), weights_path)
+        logger.info(f"model weights saved to: {weights_path}")
 
 
 def _run_fit_distributed(args: argparse.Namespace) -> None:
     """Distributed training using Ray Train TorchTrainer."""
-    train_ds, val_ds = load_train_val_ray_datasets(DriverConfig.files.processed_reviews_file_path)
+    balance_classes = not args.no_balance_classes
+    train_ds, val_ds = load_train_val_ray_datasets(
+        DriverConfig.files.processed_reviews_file_path,
+        balance_classes=balance_classes,
+        random_state=args.balance_seed,
+    )
 
     cfg = DriverConfig.trainer(
         device=args.device,
         ray_workers=args.num_workers,
         checkpoint_dir=args.checkpoint_dir,
         checkpoint_every=args.checkpoint_every,
+        pos_weight=args.pos_weight,
     )
 
     ray_trainer = new_ray_trainer(
@@ -400,12 +430,13 @@ def _run_fit_distributed(args: argparse.Namespace) -> None:
 
     if args.save:
         # Load best checkpoint and save model weights
+        weights_path = weights_path_for(args.model)
         checkpoint_data = result.checkpoint.to_dict()
         torch.save(
             checkpoint_data["model_state_dict"],
-            DriverConfig.files.weights_file_path,
+            weights_path,
         )
-        logger.info(f"model weights saved to: {DriverConfig.files.weights_file_path}")
+        logger.info(f"model weights saved to: {weights_path}")
 
 
 def run_agent_tune(args: argparse.Namespace) -> None:
@@ -484,6 +515,9 @@ def run_tune(args: argparse.Namespace) -> None:
         validate_predictions=not args.no_validate,
         validation_threshold=args.validation_threshold,
         max_retries=args.max_retries,
+        balance_classes=not args.no_balance_classes,
+        balance_seed=args.balance_seed,
+        pos_weight=args.pos_weight,
     )
 
     run = TuningRun(config)

@@ -6,7 +6,7 @@ per-class accuracy, precision/recall/F1, Cohen's kappa, and AUC-ROC.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -243,7 +243,6 @@ def compute_metrics_from_examples(
     # AUC-ROC requires probability scores, which we have in 'score'
     probabilities = np.array([r.get("score", 0.5) for r in results])
     targets = np.array([1 if r.get("expected") == "positive" else 0 for r in results])
-    predictions = (probabilities >= 0.5).astype(int)
 
     auc_roc = _auc_roc(probabilities, targets)
 
@@ -323,9 +322,7 @@ def _auc_roc_manual(probabilities: np.ndarray, targets: np.ndarray) -> float:
     Sorts by probability descending and computes the ROC curve,
     then integrates using the trapezoidal rule.
     """
-    # Sort by probability descending
     sorted_indices = np.argsort(-probabilities)
-    sorted_probs = probabilities[sorted_indices]
     sorted_targets = targets[sorted_indices]
 
     total_pos = max(np.sum(targets == 1), 1)

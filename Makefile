@@ -1,7 +1,7 @@
 .PHONY: setup setup-dev download-data train train-rnn train-encoder train-decoder \
-       train-distributed train-quick serve test lint format clean docker-build docker-run \
+       train-distributed train-quick serve test lint format check clean docker-build docker-run \
 	   gpu-reset tune tune-rnn tune-encoder tune-decoder tune-standalone \
-	   start-metrics stop-metrics
+	   start-metrics stop-metrics setup-dashboards start-exporter stop-exporter
 
 # Default device: use auto-detect (cuda > mps > cpu)
 DEVICE ?= auto
@@ -145,6 +145,12 @@ format:
 	uv run black .
 	uv run isort .
 
+## Auto-format, auto-fix, then lint (run after every change)
+check:
+	uv run black .
+	uv run ruff check . --fix
+	uv run ruff check .
+
 # ──────────────────────────────────────────────
 # Docker
 # ──────────────────────────────────────────────
@@ -161,12 +167,31 @@ docker-run:
 # Metrics
 # ──────────────────────────────────────────────
 
-## Start Prometheus and Grafana for Ray Dashboard metrics
-start-metrics:
-	cd metrics && docker compose up -d
+## Setup Ray Grafana dashboards using Ray's internal factory
+setup-dashboards:
+	@mkdir -p metrics/grafana/dashboards
+	uv run python scripts/generate_ray_dashboards.py
+	@echo "Generated Ray dashboards in metrics/grafana/dashboards/"
 
-## Stop Prometheus and Grafana
+## Start the Sentimentizer Prometheus metrics exporter (system, GPU, Ray health)
+start-exporter:
+	uv run python sentimentizer/exporter.py &
+
+## Stop the Sentimentizer metrics exporter
+stop-exporter:
+	@pkill -f "sentimentizer/exporter.py" 2>/dev/null || true
+
+## Start Prometheus, Grafana, and metrics exporter for dashboard metrics
+start-metrics: setup-dashboards
+	cd metrics && docker compose up -d
+	@echo "Starting metrics exporter (port 8081)..."
+	uv run python sentimentizer/exporter.py &
+	@sleep 2
+	@echo "All metrics services running. Grafana: http://localhost:3000 (admin/admin)"
+
+## Stop Prometheus, Grafana, and metrics exporter
 stop-metrics:
+	@pkill -f "sentimentizer/exporter.py" 2>/dev/null || true
 	cd metrics && docker compose down
 
 # ──────────────────────────────────────────────

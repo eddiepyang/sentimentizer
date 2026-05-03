@@ -11,15 +11,16 @@ echo "Creating data directory at: $DATA_DIR"
 mkdir -p "$DATA_DIR"
 
 echo "=========================================================="
-echo "Downloading GloVe 6B embeddings..."
+echo "GloVe Embeddings"
 echo "=========================================================="
-if [ ! -f "$DATA_DIR/glove.6B.zip" ]; then
-    wget -nc https://nlp.stanford.edu/data/glove.6B.zip -P "$DATA_DIR"
-else
-    echo "glove.6B.zip already exists. Skipping."
-fi
-
+echo "GloVe embeddings are now auto-downloaded via gensim.downloader"
+echo "on first training run. They are cached to ~/gensim-data/ and"
+echo "only downloaded once."
 echo ""
+echo "To pre-download manually, run:"
+echo "  uv run python -c \"import gensim.downloader as api; api.load('glove-wiki-gigaword-100')\""
+echo ""
+
 echo "=========================================================="
 echo "Yelp Open Dataset Instructions"
 echo "=========================================================="

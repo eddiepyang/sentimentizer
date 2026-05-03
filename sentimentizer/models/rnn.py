@@ -179,7 +179,7 @@ def get_trained_model(
     if device not in VALID_DEVICES:
         raise ValueError("device must be cpu, cuda, or mps")
 
-    weights_path = str(files("sentimentizer.data").joinpath("weights.pth"))
+    weights_path = str(files("sentimentizer.data").joinpath("rnn_weights.pth"))
 
     try:
         weights = torch.load(
