@@ -301,9 +301,7 @@ def _trainable_wrapper(config: dict, train_dataset: Any = None, val_dataset: Any
         if val_loss < best_val_loss:
             best_val_loss = val_loss
 
-        from ray import train
-
-        train.report(
+        tune.report(
             {
                 "val_accuracy": val_accuracy,
                 "val_loss": val_loss,

@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 import ray
+from ray import tune
 import torch
 from ray import train
 from ray.train import Checkpoint, ScalingConfig
@@ -464,7 +465,7 @@ def _train_func(config: dict) -> None:
         )
 
         # Report metrics and checkpoint to Ray Train
-        train.report(
+        tune.report(
             {"train_loss": train_loss, "val_loss": val_loss, "epoch": epoch},
             checkpoint=Checkpoint.from_dict(
                 {
