@@ -132,7 +132,7 @@ class Trainer:
     losses: list[float] = field(default_factory=list)
     val_loss: float = float("inf")
 
-    def _train_epoch(self, model: torch.nn.Module, train_loader: DataLoader) -> None:
+    def _train_epoch(self, model: torch.nn.Module, train_loader: DataLoader, epoch: int) -> None:
         i = 0
         n = len(train_loader.dataset)  # type: ignore[arg-type]
         model.train()
@@ -150,10 +150,10 @@ class Trainer:
             self.losses.append(loss_val)
             if i % (self.cfg.batch_size * 100) == 0:
                 logger.info(
-                    f"{i / n:.2f} of rows completed in "
+                    f"[epoch {epoch}] {i / n:.2f} of rows completed in "
                     f"{j + 1} cycles, current loss at {np.mean(self.losses[-60:]):.6f}"
                 )
-                logger.info(f"current learning rate at {self.optimizer.param_groups[0]['lr']:.6f}")
+                logger.info(f"[epoch {epoch}] current learning rate at {self.optimizer.param_groups[0]['lr']:.6f}")
 
     def fit(
         self, model: torch.nn.Module, train_data: CorpusDataset, val_data: CorpusDataset
@@ -181,8 +181,8 @@ class Trainer:
 
         try:
             for epoch in range(epochs):
-                self._train_epoch(model, train_loader)
-                self.evaluate(model, val_loader)
+                self._train_epoch(model, train_loader, epoch)
+                self.evaluate(model, val_loader, epoch)
 
                 if self.scheduler:
                     self.scheduler.step()
@@ -215,7 +215,7 @@ class Trainer:
                             )
                             break
 
-                logger.info(f"epoch {epoch} completed")
+                logger.info(f"[epoch {epoch}] completed, val_loss={self.val_loss:.6f}")
         finally:
             # Release CUDA resources even on Ctrl-C or exception.
             # Prevents error 804 ("forward compatibility was attempted on
@@ -226,8 +226,8 @@ class Trainer:
 
         logger.info(f"model fitting completed, {time.time() - start:.0f} seconds passed")
 
-    def evaluate(self, model: torch.nn.Module, val_loader: DataLoader) -> None:
-        logger.info("evaluating predictions...")
+    def evaluate(self, model: torch.nn.Module, val_loader: DataLoader, epoch: int) -> None:
+        logger.info(f"[epoch {epoch}] evaluating predictions...")
         losses = []
         i = 0
         n = len(val_loader.dataset)  # type: ignore[arg-type]
@@ -245,11 +245,11 @@ class Trainer:
             i += len(target)
             if i % (self.cfg.batch_size * 100) == 0:
                 logger.info(
-                    f"{i / n:.2f} of rows completed in "
+                    f"[epoch {epoch}] {i / n:.2f} of rows completed in "
                     f"{j + 1} cycles, validation loss at {np.mean(losses[-60:]):.6f}"
                 )
         self.val_loss = np.mean(losses)
-        logger.info(f"validation loss at: {self.val_loss: .6f}")
+        logger.info(f"[epoch {epoch}] validation loss: {self.val_loss:.6f}")
 
 
 def _get_opt_params(model_type: str) -> OptimizationParams | EncoderOptimizationParams:
@@ -461,7 +461,7 @@ def _train_func(config: dict) -> None:
         train_loss = np.mean(epoch_losses) if epoch_losses else 0.0
 
         logger.info(
-            f"epoch {epoch} completed, train_loss={train_loss:.6f}, val_loss={val_loss:.6f}"
+            f"[epoch {epoch}] completed, train_loss={train_loss:.6f}, val_loss={val_loss:.6f}"
         )
 
         # Report metrics and checkpoint to Ray Train

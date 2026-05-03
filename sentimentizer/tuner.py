@@ -292,8 +292,8 @@ def _trainable_wrapper(config: dict, train_dataset: Any = None, val_dataset: Any
     best_val_loss = float("inf")
 
     for epoch in range(epochs):
-        trainer._train_epoch(model, train_loader)  # noqa: SLF001
-        trainer.evaluate(model, val_loader)
+        trainer._train_epoch(model, train_loader, epoch)  # noqa: SLF001
+        trainer.evaluate(model, val_loader, epoch)
 
         from sentimentizer.metrics import compute_metrics_from_model
 
