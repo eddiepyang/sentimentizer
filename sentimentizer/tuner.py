@@ -436,7 +436,7 @@ def tune_model(
         scheduler=tuner_config.scheduler,
         search_algorithm="optuna",
     )
-    
+
     _check_memory_for_workers(num_workers=4)
 
     result = tune.Tuner(
@@ -516,23 +516,24 @@ def _check_memory_for_workers(num_workers: int) -> None:
     """Check and log if there is enough GPU memory for the requested workers."""
     if not _gpu_available():
         return
-        
+
     import torch
+
     try:
         free_mem, total_mem = torch.cuda.mem_get_info()
-        free_mem_gb = free_mem / (1024 ** 3)
-        
+        free_mem_gb = free_mem / (1024**3)
+
         # Estimate ~1.5 GB per worker for these text classification models
         # (embeddings + hidden states + adam optimizer)
         required_gb = num_workers * 1.5
-        
+
         if free_mem_gb < required_gb:
             logger.warning(
                 "insufficient_gpu_memory_warning",
                 free_mem_gb=f"{free_mem_gb:.2f}GB",
                 estimated_required_gb=f"{required_gb:.2f}GB",
                 num_workers=num_workers,
-                message="You may experience CUDA OutOfMemory errors during tuning."
+                message="You may experience CUDA OutOfMemory errors during tuning.",
             )
         else:
             logger.info(

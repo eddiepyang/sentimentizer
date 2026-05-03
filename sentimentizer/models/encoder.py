@@ -147,7 +147,9 @@ class Encoder(nn.Module):
         src_key_padding_mask = torch.cat([cls_mask, pad_mask], dim=1)  # (B, seq_len+1)
 
         # Transformer encoder — self-attention with padding mask
-        encoded = self.encoder(x, src_key_padding_mask=src_key_padding_mask)  # (B, seq_len+1, d_model)
+        encoded = self.encoder(
+            x, src_key_padding_mask=src_key_padding_mask
+        )  # (B, seq_len+1, d_model)
         if self.verbose:
             logger.info(f"encoder out shape {encoded.shape}")
 
