@@ -120,6 +120,7 @@ class Encoder(nn.Module):
 
         Args:
             inputs: Token IDs of shape (batch, seq_len)
+                    Zero-padding is used to build the padding mask.
 
         Returns:
             Logits of shape (batch,)
@@ -137,8 +138,14 @@ class Encoder(nn.Module):
         # Add positional encoding
         x = self.pos_encoder(x)  # (B, seq_len+1, d_model)
 
-        # Transformer encoder — self-attention over all tokens including CLS
-        encoded = self.encoder(x)  # (B, seq_len+1, d_model)
+        # Padding mask: True where padding (so attention ignores those positions).
+        # CLS token at position 0 is never padded, so prepend False.
+        pad_mask = inputs == 0  # (B, seq_len)
+        cls_mask = torch.zeros(inputs.size(0), 1, dtype=torch.bool, device=inputs.device)
+        src_key_padding_mask = torch.cat([cls_mask, pad_mask], dim=1)  # (B, seq_len+1)
+
+        # Transformer encoder — self-attention with padding mask
+        encoded = self.encoder(x, src_key_padding_mask=src_key_padding_mask)  # (B, seq_len+1, d_model)
         logger.debug(f"encoder out shape {encoded.shape}")
 
         # Pool from CLS token position
@@ -209,11 +216,21 @@ def get_trained_model(
     if device not in VALID_DEVICES:
         raise ValueError("device must be cpu, cuda, or mps")
 
-    weights = torch.load(
-        str(files("sentimentizer.data").joinpath("encoder_weights.pth")),
-        map_location=torch.device(device=device),
-        weights_only=True,
-    )
+    weights_path = str(files("sentimentizer.data").joinpath("encoder_weights.pth"))
+
+    try:
+        weights = torch.load(
+            weights_path,
+            map_location=torch.device(device=device),
+            weights_only=True,
+        )
+    except FileNotFoundError as e:
+        raise FileNotFoundError(
+            f"Weights file not found at {weights_path}. "
+            "Please train the model first: "
+            "python workflows/driver.py --device cuda --model encoder --type new --save True"
+        ) from e
+
     # Infer vocab size and d_model from saved weights
     emb_shape = weights["embed_layer.weight"].shape
     d_model = weights["proj.weight"].shape[0]  # output dim of proj layer
@@ -229,6 +246,13 @@ def get_trained_model(
         ff_multiplier=model_config.ff_multiplier,
     )
 
-    model.load_state_dict(weights)
+    try:
+        model.load_state_dict(weights)
+    except RuntimeError as e:
+        raise RuntimeError(
+            "Saved weights are incompatible with the current model architecture. "
+            "Please retrain the model: "
+            "python workflows/driver.py --device cuda --model encoder --type new --save True"
+        ) from e
 
     return model

@@ -124,6 +124,7 @@ class Decoder(nn.Module):
 
         Args:
             inputs: Token IDs of shape (batch, seq_len)
+                    Zero-padding is used to build the padding mask.
 
         Returns:
             Logits of shape (batch,)
@@ -137,15 +138,23 @@ class Decoder(nn.Module):
         # Add positional encoding to input
         memory_input = self.pos_encoder(projected)  # (B, seq_len, d_model)
 
-        # Encode input text into memory
-        memory = self.encoder(memory_input)  # (B, seq_len, d_model)
+        # Padding mask for encoder: True where padding (attention ignores those positions)
+        src_key_padding_mask = inputs == 0  # (B, seq_len)
+
+        # Encode input text into memory (with padding mask)
+        memory = self.encoder(
+            memory_input, src_key_padding_mask=src_key_padding_mask
+        )  # (B, seq_len, d_model)
         logger.debug(f"memory shape {memory.shape}")
 
         # Expand query token for the batch
         query = self.query_token.expand(inputs.size(0), -1, -1)  # (B, 1, d_model)
 
-        # Query cross-attends to memory via decoder
-        decoded = self.decoder(tgt=query, memory=memory)  # (B, 1, d_model)
+        # Query cross-attends to memory via decoder (memory_key_padding_mask
+        # ensures cross-attention also ignores padding)
+        decoded = self.decoder(
+            tgt=query, memory=memory, memory_key_padding_mask=src_key_padding_mask
+        )  # (B, 1, d_model)
         logger.debug(f"decoded shape {decoded.shape}")
 
         # Extract query output and classify
@@ -214,11 +223,21 @@ def get_trained_model(
     if device not in VALID_DEVICES:
         raise ValueError("device must be cpu, cuda, or mps")
 
-    weights = torch.load(
-        str(files("sentimentizer.data").joinpath("decoder_weights.pth")),
-        map_location=torch.device(device=device),
-        weights_only=True,
-    )
+    weights_path = str(files("sentimentizer.data").joinpath("decoder_weights.pth"))
+
+    try:
+        weights = torch.load(
+            weights_path,
+            map_location=torch.device(device=device),
+            weights_only=True,
+        )
+    except FileNotFoundError as e:
+        raise FileNotFoundError(
+            f"Weights file not found at {weights_path}. "
+            "Please train the model first: "
+            "python workflows/driver.py --device cuda --model decoder --type new --save True"
+        ) from e
+
     # Infer dimensions from saved weights
     emb_shape = weights["embed_layer.weight"].shape
     d_model = weights["proj.weight"].shape[0]
@@ -235,6 +254,13 @@ def get_trained_model(
         ff_multiplier=model_config.ff_multiplier,
     )
 
-    model.load_state_dict(weights)
+    try:
+        model.load_state_dict(weights)
+    except RuntimeError as e:
+        raise RuntimeError(
+            "Saved weights are incompatible with the current model architecture. "
+            "Please retrain the model: "
+            "python workflows/driver.py --device cuda --model decoder --type new --save True"
+        ) from e
 
     return model

@@ -84,6 +84,7 @@ class RNN(nn.Module):
 
         Args:
             inputs: Token IDs of shape (batch, seq_len)
+                    Zero-padding is used to compute sequence lengths.
 
         Returns:
             Logits of shape (batch,)
@@ -95,13 +96,21 @@ class RNN(nn.Module):
 
         embeds = F.relu(self.fc0(embeds), inplace=True)  # (B, seq_len, emb_dim)
 
-        # LSTM processes tokens in order — no permute needed
-        out, (hidden, cell) = self.lstm(embeds)  # out: (B, seq_len, hidden*2)
-        if self.verbose:
-            logger.info(f"lstm out shape {out.shape}")
+        # Compute actual (non-padding) lengths so the bidirectional LSTM
+        # can skip padding.  Without packing, the backward pass starts
+        # from position max_len-1 (all zeros), so its final hidden state
+        # is dominated by padding noise instead of real content.
+        lengths = (inputs != 0).sum(dim=1).clamp(min=1)  # (B,)
+
+        packed = nn.utils.rnn.pack_padded_sequence(
+            embeds, lengths.cpu(), batch_first=True, enforce_sorted=False
+        )
+        _, (hidden, _) = self.lstm(packed)
 
         # hidden shape: (num_layers * 2, B, hidden_size)
-        # Take final layer's forward and backward hidden states
+        # Take final layer's forward and backward hidden states.
+        # With packed input, these are correctly computed from the
+        # last real token (forward) and first real token (backward).
         hidden_fwd = hidden[-2]  # last forward layer: (B, hidden_size)
         hidden_bwd = hidden[-1]  # last backward layer: (B, hidden_size)
         hidden_cat = torch.cat([hidden_fwd, hidden_bwd], dim=1)  # (B, hidden*2)

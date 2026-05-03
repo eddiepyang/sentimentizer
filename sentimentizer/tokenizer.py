@@ -38,10 +38,10 @@ def text_sequencer(
     """
 
     processed = np.zeros(max_len, dtype=int)
-    # in case the word is not in the dictionary because it was
-    # filtered out use this number to represent an out of set id
-    # Use max ID + 1 to avoid collisions with existing IDs after filter_extremes
-    dict_final = max(dictionary.keys()) + 1 if dictionary.keys() else 1
+    # OOV token index: after compactify(), IDs are 0..N-1 so the
+    # embedding matrix has rows [pad, word_0, word_1, ..., word_{N-1}, OOV].
+    # Row N+1 = len(dictionary) + 1 is the dedicated OOV row.
+    dict_final = len(dictionary) + 1
 
     for i, word in enumerate(text):
         if i >= max_len:
@@ -72,6 +72,9 @@ def _new_dictionary(data: pd.DataFrame, cfg: TokenizerConfig) -> corpora.Diction
         no_above=cfg.no_above,
         keep_n=cfg.dict_keep,
     )
+    # Remap IDs to contiguous 0..N-1 after filter_extremes leaves gaps.
+    # Required for embedding matrix row alignment (row k = token ID k-1).
+    dictionary.compactify()
     logger.info("dictionary created...")
 
     if cfg.save_dictionary:
@@ -135,6 +138,8 @@ class Tokenizer:
             no_above=cfg.no_above,
             keep_n=cfg.dict_keep,
         )
+        # Remap IDs to contiguous 0..N-1 after filter_extremes leaves gaps.
+        dictionary.compactify()
         logger.info("dictionary created...")
 
         if cfg.save_dictionary:

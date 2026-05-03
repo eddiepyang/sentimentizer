@@ -98,21 +98,35 @@ def extract_embeddings(
 
 @time_decorator
 def new_embedding_weights(dictionary: corpora.Dictionary, cfg: EmbeddingsConfig) -> np.ndarray:
-    """converts local dictionary to embeddings from glove"""
+    """converts local dictionary to embeddings from glove
+
+    Embedding matrix layout:
+        Row 0:              padding (all zeros)
+        Rows 1..N:          word embeddings, sorted by token ID
+                            (row k = embedding for token ID k-1)
+        Row N+1:            out-of-vocabulary (OOV) random vector
+    Where N = len(dictionary).
+    """
 
     embeddings_dict: dict = extract_embeddings(dictionary, cfg)
 
     for word in dictionary.values():
-        if word not in embeddings_dict:
-            embeddings_dict.setdefault(
-                dictionary.token2id[word] + 1,
-                np.random.normal(EMBEDDING_RANDOM_MEAN, EMBEDDING_RANDOM_STD, cfg.emb_length),
+        key = dictionary.token2id[word] + 1
+        if key not in embeddings_dict:
+            embeddings_dict[key] = np.random.normal(
+                EMBEDDING_RANDOM_MEAN, EMBEDDING_RANDOM_STD, cfg.emb_length
             )
+
+    # Sort by key (token_id + 1) to ensure row alignment:
+    # row k in the matrix must correspond to token ID k-1.
+    # Without sorting, dict insertion order (GloVe file order)
+    # shuffles embeddings relative to token IDs.
+    sorted_embeddings = [embeddings_dict[k] for k in sorted(embeddings_dict.keys())]
 
     return np.vstack(
         (
             np.zeros(cfg.emb_length),
-            list(embeddings_dict.values()),
+            sorted_embeddings,
             np.random.randn(cfg.emb_length),
         )
     )

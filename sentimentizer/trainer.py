@@ -178,42 +178,51 @@ class Trainer:
         if checkpoint_dir:
             Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
 
-        for epoch in range(epochs):
-            self._train_epoch(model, train_loader)
-            self.evaluate(model, val_loader)
+        try:
+            for epoch in range(epochs):
+                self._train_epoch(model, train_loader)
+                self.evaluate(model, val_loader)
 
-            if self.scheduler:
-                self.scheduler.step()
+                if self.scheduler:
+                    self.scheduler.step()
 
-            # Save periodic checkpoint
-            if checkpoint_dir and checkpoint_every > 0 and (epoch + 1) % checkpoint_every == 0:
-                ckpt_path = Path(checkpoint_dir) / f"checkpoint_epoch_{epoch + 1}.pth"
-                save_checkpoint(model, self.optimizer, epoch + 1, ckpt_path)
-                logger.info(f"saved checkpoint: {ckpt_path}")
+                # Save periodic checkpoint
+                if checkpoint_dir and checkpoint_every > 0 and (epoch + 1) % checkpoint_every == 0:
+                    ckpt_path = Path(checkpoint_dir) / f"checkpoint_epoch_{epoch + 1}.pth"
+                    save_checkpoint(model, self.optimizer, epoch + 1, ckpt_path)
+                    logger.info(f"saved checkpoint: {ckpt_path}")
 
-            # Save best model checkpoint
-            if checkpoint_dir and checkpoint_best and self.val_loss < best_val_loss:
-                best_path = Path(checkpoint_dir) / "best_model.pth"
-                save_checkpoint(model, self.optimizer, epoch + 1, best_path)
-                logger.info(
-                    f"saved best model checkpoint (val_loss={self.val_loss:.6f}): {best_path}"
-                )
+                # Save best model checkpoint
+                if checkpoint_dir and checkpoint_best and self.val_loss < best_val_loss:
+                    best_path = Path(checkpoint_dir) / "best_model.pth"
+                    save_checkpoint(model, self.optimizer, epoch + 1, best_path)
+                    logger.info(
+                        f"saved best model checkpoint (val_loss={self.val_loss:.6f}): {best_path}"
+                    )
 
-            # Early stopping based on validation loss
-            if self.cfg.early_stopping_patience > 0:
-                if self.val_loss < best_val_loss:
-                    best_val_loss = self.val_loss
-                    patience_counter = 0
-                else:
-                    patience_counter += 1
-                    if patience_counter >= self.cfg.early_stopping_patience:
-                        logger.info(
-                            f"early stopping at epoch {epoch}, "
-                            f"val_loss hasn't improved for {patience_counter} epochs"
-                        )
-                        break
+                # Early stopping based on validation loss
+                if self.cfg.early_stopping_patience > 0:
+                    if self.val_loss < best_val_loss:
+                        best_val_loss = self.val_loss
+                        patience_counter = 0
+                    else:
+                        patience_counter += 1
+                        if patience_counter >= self.cfg.early_stopping_patience:
+                            logger.info(
+                                f"early stopping at epoch {epoch}, "
+                                f"val_loss hasn't improved for {patience_counter} epochs"
+                            )
+                            break
 
-            logger.info(f"epoch {epoch} completed")
+                logger.info(f"epoch {epoch} completed")
+        finally:
+            # Release CUDA resources even on Ctrl-C or exception.
+            # Prevents error 804 ("forward compatibility was attempted on
+            # non supported HW") caused by orphaned GPU contexts.
+            if self.cfg.device in ("cuda", "mps") and torch.cuda.is_available():
+                torch.cuda.synchronize()
+                torch.cuda.empty_cache()
+
         logger.info(f"model fitting completed, {time.time() - start:.0f} seconds passed")
 
     def evaluate(self, model: torch.nn.Module, val_loader: DataLoader) -> None:

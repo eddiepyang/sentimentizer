@@ -1,7 +1,9 @@
 import argparse
 import asyncio
+import atexit
 import os
 import shutil
+import signal
 from pathlib import Path
 
 # Disable Ray's automatic uv runtime environment to prevent VIRTUAL_ENV warnings
@@ -28,6 +30,45 @@ from sentimentizer.tokenizer import Tokenizer
 from sentimentizer.trainer import latest_checkpoint, load_checkpoint, new_ray_trainer, new_trainer
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
+
+
+# ──────────────────────────────────────────────
+# CUDA cleanup: graceful GPU release on exit
+# ──────────────────────────────────────────────
+
+
+def _cuda_cleanup() -> None:
+    """Release cached CUDA memory and synchronize pending GPU ops.
+
+    Safe to call even when CUDA is not available.  Called by atexit
+    and signal handlers to prevent orphaned GPU contexts after Ctrl-C.
+    """
+    if torch.cuda.is_available():
+        try:
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+        except RuntimeError:
+            # CUDA context may already be torn down during shutdown
+            pass
+
+
+# Register cleanup for normal process exit (including unhandled exceptions)
+atexit.register(_cuda_cleanup)
+
+
+def _sigint_handler(signum: int, frame: object) -> None:
+    """Handle Ctrl-C by cleaning up CUDA before re-raising KeyboardInterrupt.
+
+    Without this, a Ctrl-C during CUDA training can leave the GPU context
+    in a bad state, causing error 804 on subsequent runs.
+    """
+    logger.info("Received SIGINT, cleaning up CUDA...")
+    _cuda_cleanup()
+    raise KeyboardInterrupt
+
+
+# Install the handler for interactive Ctrl-C
+signal.signal(signal.SIGINT, _sigint_handler)
 
 
 class RunTypeError(Exception):
@@ -269,7 +310,11 @@ def _run_fit_single(args: argparse.Namespace) -> None:
                 f"resumed from checkpoint: {ckpt_path}, epoch={checkpoint.get('epoch', '?')}"
             )
 
-    trainer.fit(model, train_data=train_dataset, val_data=val_dataset)
+    try:
+        trainer.fit(model, train_data=train_dataset, val_data=val_dataset)
+    finally:
+        # Ensure CUDA resources are released even on Ctrl-C or exception
+        _cuda_cleanup()
 
     if args.save:
         torch.save(model.state_dict(), DriverConfig.files.weights_file_path)
@@ -294,7 +339,11 @@ def _run_fit_distributed(args: argparse.Namespace) -> None:
         model_type=args.model,
     )
 
-    result = ray_trainer.fit()
+    try:
+        result = ray_trainer.fit()
+    finally:
+        # Ensure CUDA resources are released even on Ctrl-C or exception
+        _cuda_cleanup()
 
     logger.info(  # type: ignore[call-arg]
         "distributed training completed",

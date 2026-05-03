@@ -1,12 +1,13 @@
 .PHONY: setup setup-dev download-data train train-rnn train-encoder train-decoder \
-       train-distributed train-quick serve test lint format clean docker-build docker-run
+       train-distributed train-quick serve test lint format clean docker-build docker-run \
+	   gpu-reset
 
 # Default device: use auto-detect (cuda > mps > cpu)
 DEVICE ?= auto
 # Default model type
 MODEL ?= rnn
 # Default number of lines to load
-STOP ?= 10000
+STOP ?= 300000
 # Checkpoint directory (empty = no checkpointing)
 CHECKPOINT_DIR ?=
 
@@ -137,3 +138,22 @@ clean:
 	rm -rf __pycache__/
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name "*.pyc" -delete 2>/dev/null || true
+
+# Fix NVIDIA driver/library mismatch without rebooting
+gpu-reset:
+	@echo "==> Stopping services that might use the GPU..."
+	-sudo systemctl stop ollama
+	-sudo systemctl stop docker
+	@echo "==> Unloading NVIDIA kernel modules..."
+	-sudo rmmod nvidia_drm
+	-sudo rmmod nvidia_modeset
+	-sudo rmmod nvidia_uvm
+	-sudo rmmod nvidia
+	@echo "==> Reloading NVIDIA kernel modules..."
+	sudo modprobe nvidia
+	sudo modprobe nvidia_uvm
+	@echo "==> Restarting services..."
+	-sudo systemctl start docker
+	-sudo systemctl start ollama
+	@echo "==> Verifying NVML initialization..."
+	nvidia-smi
