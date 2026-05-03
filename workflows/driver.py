@@ -439,24 +439,24 @@ def run_agent_tune(args: argparse.Namespace) -> None:
         best_config=result.best_config,
     )
 
-    if args.save:
-        import json
-        from pathlib import Path
+    # Always save best config JSON
+    import json
+    from pathlib import Path
 
-        output_path = Path("best_config.json")
-        with open(output_path, "w") as f:
-            json.dump(
-                {
-                    "best_config": result.best_config,
-                    "best_accuracy": result.best_accuracy,
-                    "best_loss": result.best_loss,
-                    "iterations": result.iterations_completed,
-                    "converged": result.converged,
-                },
-                f,
-                indent=2,
-            )
-        logger.info(f"best config saved to: {output_path}")
+    output_path = Path("best_config.json")
+    with open(output_path, "w") as f:
+        json.dump(
+            {
+                "best_config": result.best_config,
+                "best_accuracy": result.best_accuracy,
+                "best_loss": result.best_loss,
+                "iterations": result.iterations_completed,
+                "converged": result.converged,
+            },
+            f,
+            indent=2,
+        )
+    logger.info(f"best config saved to: {output_path}")
 
 
 def run_tune(args: argparse.Namespace) -> None:

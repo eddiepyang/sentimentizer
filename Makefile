@@ -1,6 +1,7 @@
 .PHONY: setup setup-dev download-data train train-rnn train-encoder train-decoder \
        train-distributed train-quick serve test lint format clean docker-build docker-run \
-	   gpu-reset tune tune-rnn tune-encoder tune-decoder tune-standalone
+	   gpu-reset tune tune-rnn tune-encoder tune-decoder tune-standalone \
+	   start-metrics stop-metrics
 
 # Default device: use auto-detect (cuda > mps > cpu)
 DEVICE ?= auto
@@ -155,6 +156,18 @@ docker-build:
 ## Run the Docker container
 docker-run:
 	docker run -p 8000:8000 -p 8265:8265 sentimentizer
+
+# ──────────────────────────────────────────────
+# Metrics
+# ──────────────────────────────────────────────
+
+## Start Prometheus and Grafana for Ray Dashboard metrics
+start-metrics:
+	cd metrics && docker compose up -d
+
+## Stop Prometheus and Grafana
+stop-metrics:
+	cd metrics && docker compose down
 
 # ──────────────────────────────────────────────
 # Cleanup
