@@ -33,6 +33,7 @@ Usage::
 from __future__ import annotations
 
 import json
+import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -112,7 +113,7 @@ class TuningRunConfig:
     save_best_model: bool = True
     output_dir: str = "tuning_results"
     search_space_overrides: dict[str, dict[str, Any]] | None = None
-    stop: int = 10000
+    stop: int = 100000
     validate_predictions: bool = True
     validation_threshold: float = 0.75
     max_retries: int = 2
@@ -281,6 +282,20 @@ class TuningRun:
                     break
 
         result.retry_count = retry_count
+
+        # Copy best weights to default path if validation passed
+        if result.validation_passed and result.model_path:
+            default_weights_path = Path(DriverConfig.files.weights_file_path)
+            try:
+                default_weights_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(result.model_path, default_weights_path)
+                logger.info(
+                    "weights_copied_to_default",
+                    source=result.model_path,
+                    destination=str(default_weights_path),
+                )
+            except OSError as e:
+                logger.warning(f"failed_to_copy_weights: {e}")
 
         # Save results to JSON
         results_path = self._save_results(result)

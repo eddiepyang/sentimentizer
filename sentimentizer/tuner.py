@@ -402,10 +402,10 @@ def tune_model(
         config_path=config_path,
     )
 
-    from sentimentizer.config import DriverConfig
+    from sentimentizer.config import DriverConfig, auto_detect_device
 
     search_space["model_type"] = model_type
-    search_space["device"] = "cpu"
+    search_space["device"] = auto_detect_device()
     search_space["dict_path"] = DriverConfig.files.dictionary_file_path
     search_space["embeddings_file_path"] = DriverConfig.embeddings.file_path
     search_space["embeddings_sub_file_path"] = DriverConfig.embeddings.sub_file_path
@@ -436,6 +436,8 @@ def tune_model(
         scheduler=tuner_config.scheduler,
         search_algorithm="optuna",
     )
+    
+    _check_memory_for_workers(num_workers=4)
 
     result = tune.Tuner(
         tune.with_resources(
@@ -444,13 +446,14 @@ def tune_model(
                 train_dataset=train_dataset,
                 val_dataset=val_dataset,
             ),
-            resources={"cpu": 1, "gpu": 1 if _gpu_available() else 0},
+            resources={"cpu": 1, "gpu": 0.25 if _gpu_available() else 0},
         ),
         param_space=search_space,
         tune_config=tune.TuneConfig(
             scheduler=scheduler,
             search_alg=search_alg,
             num_samples=tuner_config.num_samples,
+            max_concurrent_trials=4,
         ),
         run_config=RunConfig(
             progress_reporter=reporter,
@@ -507,3 +510,36 @@ def _gpu_available() -> bool:
         return torch.cuda.is_available()
     except ImportError:
         return False
+
+
+def _check_memory_for_workers(num_workers: int) -> None:
+    """Check and log if there is enough GPU memory for the requested workers."""
+    if not _gpu_available():
+        return
+        
+    import torch
+    try:
+        free_mem, total_mem = torch.cuda.mem_get_info()
+        free_mem_gb = free_mem / (1024 ** 3)
+        
+        # Estimate ~1.5 GB per worker for these text classification models
+        # (embeddings + hidden states + adam optimizer)
+        required_gb = num_workers * 1.5
+        
+        if free_mem_gb < required_gb:
+            logger.warning(
+                "insufficient_gpu_memory_warning",
+                free_mem_gb=f"{free_mem_gb:.2f}GB",
+                estimated_required_gb=f"{required_gb:.2f}GB",
+                num_workers=num_workers,
+                message="You may experience CUDA OutOfMemory errors during tuning."
+            )
+        else:
+            logger.info(
+                "gpu_memory_check_passed",
+                free_mem_gb=f"{free_mem_gb:.2f}GB",
+                estimated_required_gb=f"{required_gb:.2f}GB",
+                num_workers=num_workers,
+            )
+    except Exception as e:
+        logger.warning(f"Could not calculate GPU memory: {e}")

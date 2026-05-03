@@ -199,6 +199,13 @@ The `--distributed` flag enables Ray Train, which distributes data and model tra
 | `--num-workers` | `2` | Ray Train workers (distributed mode only; single-node ignores this) |
 | `--agent-tune` | off | Use Pydantic AI + LangGraph agent for hyperparameter tuning (GLM 5.1 via Ollama) (flag, no value needed) |
 | `--agent-config` | `None` | Path to agent config YAML (default: `sentimentizer/agent/config.yaml`) |
+| `--tune` | off | Use TuningRun skill to tune hyperparameters and validate model predictions (flag, no value needed) |
+| `--tune-mode` | `agent` | Tuning mode: `agent` (LLM-guided loop) or `standalone` (single Ray Tune run) |
+| `--tune-samples` | `20` | Number of Ray Tune trials per tuning iteration |
+| `--tune-max-iterations`| `5` | Maximum agent tuning iterations |
+| `--no-validate` | off | Skip model prediction validation after tuning (flag, no value needed) |
+| `--validation-threshold`| `0.75` | Minimum fraction of correct predictions to pass validation |
+| `--max-retries` | `2` | Maximum re-tuning attempts if validation fails |
 | `--checkpoint-dir` | `""` | Directory to save training checkpoints (empty = no checkpointing) |
 | `--checkpoint-every` | `1` | Save checkpoint every N epochs (0 = disabled) |
 | `--resume` | off | Resume training from the latest checkpoint in `--checkpoint-dir` (flag, no value needed) |
@@ -274,15 +281,37 @@ ollama pull glm5.1
 
 ### Usage
 
+The recommended way to run tuning is via the **Tuning Skill** commands in the Makefile. The skill wraps the LLM agent loop with an automatic post-tuning validation step, which checks if the model predicts correctly on sample text and retries if it fails.
+
 ```bash
-# Run the tuning agent with default config
-python workflows/driver.py --model rnn --agent-tune
+# Run agent-guided tuning with model validation (defaults to RNN)
+make tune
+
+# Tune specific models
+make tune-rnn
+make tune-encoder
+make tune-decoder
+
+# Run without the LLM agent (single standard Ray Tune sweep)
+make tune-standalone
+
+# Customize the number of trials and agent iterations
+make tune-custom SAMPLES=50 ITERATIONS=10
+
+# Skip model validation
+make tune-no-validate
+```
+
+You can also run the agent directly without the validation skill wrappers:
+
+```bash
+# Run just the LLM tuning agent
+make train-agent
+# or
+python workflows/driver.py --model encoder --agent-tune --save
 
 # With a custom agent config
-python workflows/driver.py --model encoder --agent-tune --agent-config path/to/custom.yaml
-
-# Save the best configuration to JSON
-python workflows/driver.py --model rnn --agent-tune --save
+python workflows/driver.py --model encoder --tune --agent-config path/to/custom.yaml
 ```
 
 ### Configuration
