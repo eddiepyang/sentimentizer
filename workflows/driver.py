@@ -433,6 +433,7 @@ def _run_fit_single(args: argparse.Namespace) -> None:
 
         if args.push_to_hub:
             from sentimentizer.hf import push_model_to_hub
+
             push_model_to_hub(
                 local_path=weights_path,
                 repo_id=args.hf_repo,
@@ -511,6 +512,7 @@ def _run_fit_distributed(args: argparse.Namespace) -> None:
 
         if args.push_to_hub:
             from sentimentizer.hf import push_model_to_hub
+
             push_model_to_hub(
                 local_path=weights_path,
                 repo_id=args.hf_repo,
@@ -648,6 +650,7 @@ def main() -> None:
 
     if args.pull_from_hub:
         from sentimentizer.hf import download_weights
+
         weights_path = weights_path_for(args.model)
         # download_weights uses HF_WEIGHTS_REPOS mapping from config
         result_path = download_weights(
