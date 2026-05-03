@@ -292,6 +292,12 @@ Returns a dict with the best configuration and metrics from the single search:
 | `best_config` | Best hyperparameter configuration found (e.g., `{"lr": 0.003, "hidden_size": 256}`) |
 | `best_accuracy` | Best validation accuracy across all trials |
 | `best_loss` | Best validation loss across all trials |
+| `best_precision` | Best positive-class precision (TP / (TP + FP)) |
+| `best_recall` | Best positive-class recall (TP / (TP + FN)) |
+| `best_f1` | Best positive-class F1 score |
+| `best_cohen_kappa` | Best Cohen's kappa coefficient |
+| `best_positive_accuracy` | Best accuracy on positive samples |
+| `best_negative_accuracy` | Best accuracy on negative samples |
 | `trial_count` | Number of Ray Tune trials completed |
 
 When run via the Tuning Skill (`--tune --tune-mode standalone`), this is wrapped with model training, validation, and retry logic (see below).
@@ -396,12 +402,19 @@ Returns a [`TuningRunResult`](sentimentizer/agent/skill.py) with:
 | `best_config` | Best hyperparameter configuration found |
 | `best_accuracy` | Best validation accuracy achieved |
 | `best_loss` | Best validation loss achieved |
+| `best_precision` | Best positive-class precision (TP / (TP + FP)) |
+| `best_recall` | Best positive-class recall (TP / (TP + FN)) |
+| `best_f1` | Best positive-class F1 score |
+| `best_cohen_kappa` | Best Cohen's kappa coefficient |
+| `best_positive_accuracy` | Best accuracy on positive samples |
+| `best_negative_accuracy` | Best accuracy on negative samples |
 | `iterations_completed` | Number of tuning iterations (1 for standalone, variable for agent) |
 | `converged` | Whether the agent converged before max iterations |
 | `model_path` | Path to the saved model weights (`.pth` file) |
 | `results_path` | Path to the saved JSON results file |
 | `validation_passed` | Whether model predictions met the validation threshold |
 | `validation_results` | Per-example validation details (text, expected, score, correct) |
+| `validation_metrics` | Full [`ClassificationMetrics`](sentimentizer/metrics.py) dict from model validation |
 | `retry_count` | Number of re-tuning attempts due to failed validation |
 | `elapsed_seconds` | Wall-clock time for the entire run |
 
@@ -526,6 +539,41 @@ The config flows: **`config.py` → `DriverConfig` → `new_model(model_config=.
 | `EncoderConfig` | `d_model=256`, `n_heads=4`, `n_layers=4`, `dropout=0.2`, `ff_multiplier=4` | Transformer encoder + CLS token |
 | `DecoderConfig` | `d_model=256`, `n_heads=4`, `n_encoder_layers=2`, `n_decoder_layers=4`, `dropout=0.2`, `ff_multiplier=4` | Encoder-decoder + query token |
 
+## Metrics
+
+All tuning and validation outputs include comprehensive classification metrics via [`sentimentizer/metrics.py`](sentimentizer/metrics.py):
+
+| Metric | Description |
+|--------|-------------|
+| `accuracy` | Overall accuracy (correct / total) |
+| `positive_accuracy` | Accuracy on positive samples only (TP / (TP + FN)) |
+| `negative_accuracy` | Accuracy on negative samples only (TN / (TN + FP)) |
+| `precision` | Positive-class precision (TP / (TP + FP)) |
+| `recall` | Positive-class recall (TP / (TP + FN)) |
+| `f1` | Positive-class F1 score (harmonic mean of precision and recall) |
+| `cohen_kappa` | Cohen's kappa coefficient (agreement beyond chance, -1 to 1) |
+| `auc_roc` | Area under the ROC curve (requires probability scores) |
+| `confusion_matrix` | TP, TN, FP, FN counts |
+
+These metrics are computed in three places:
+
+- **Ray Tune trials** — reported per epoch during hyperparameter search
+- **Tuning Skill validation** — computed from known sentiment examples after model training
+- **Programmatic API** — available via [`compute_metrics_from_model()`](sentimentizer/metrics.py) and [`compute_metrics_from_examples()`](sentimentizer/metrics.py)
+
+```python
+from sentimentizer.metrics import compute_metrics_from_model, compute_metrics_from_examples
+
+# From a model and dataloader
+metrics = compute_metrics_from_model(model, val_loader, device="cpu")
+print(f"Accuracy: {metrics.accuracy:.4f}, F1: {metrics.f1:.4f}, Kappa: {metrics.cohen_kappa:.4f}")
+
+# From validation result dicts
+metrics = compute_metrics_from_examples(validation_results)
+print(f"Positive accuracy: {metrics.positive_accuracy:.4f}")
+print(f"Negative accuracy: {metrics.negative_accuracy:.4f}")
+```
+
 ## Architecture
 
 The pipeline consists of three stages, all powered by Ray:
@@ -608,6 +656,7 @@ sentimentizer/
 ├── config.py            # Configuration dataclasses and constants
 ├── extractor.py         # Ray Data extraction from zip/tar archives
 ├── loader.py            # Data loading utilities
+├── metrics.py           # Classification metrics (accuracy, F1, Cohen's kappa, AUC-ROC)
 ├── tokenizer.py         # Text tokenizer with pre-trained support
 ├── trainer.py           # Training logic
 ├── tuner.py             # Ray Tune + Optuna hyperparameter search

@@ -101,6 +101,12 @@ class TestTuningRunResult:
         assert result.best_config == {}
         assert result.best_accuracy == 0.0
         assert result.best_loss == float("inf")
+        assert result.best_precision == 0.0
+        assert result.best_recall == 0.0
+        assert result.best_f1 == 0.0
+        assert result.best_cohen_kappa == 0.0
+        assert result.best_positive_accuracy == 0.0
+        assert result.best_negative_accuracy == 0.0
         assert result.iterations_completed == 0
         assert result.converged is False
         assert result.history == []
@@ -109,6 +115,7 @@ class TestTuningRunResult:
         assert result.elapsed_seconds == 0.0
         assert result.validation_passed is False
         assert result.validation_results == []
+        assert result.validation_metrics is None
         assert result.retry_count == 0
 
     def test_custom_values(self) -> None:
@@ -117,6 +124,12 @@ class TestTuningRunResult:
             best_config={"lr": 0.001, "hidden_size": 256},
             best_accuracy=0.89,
             best_loss=0.31,
+            best_precision=0.88,
+            best_recall=0.90,
+            best_f1=0.89,
+            best_cohen_kappa=0.78,
+            best_positive_accuracy=0.92,
+            best_negative_accuracy=0.86,
             iterations_completed=3,
             converged=True,
             validation_passed=True,
@@ -125,6 +138,12 @@ class TestTuningRunResult:
         assert result.best_config == {"lr": 0.001, "hidden_size": 256}
         assert result.best_accuracy == 0.89
         assert result.best_loss == 0.31
+        assert result.best_precision == 0.88
+        assert result.best_recall == 0.90
+        assert result.best_f1 == 0.89
+        assert result.best_cohen_kappa == 0.78
+        assert result.best_positive_accuracy == 0.92
+        assert result.best_negative_accuracy == 0.86
         assert result.iterations_completed == 3
         assert result.converged is True
         assert result.validation_passed is True

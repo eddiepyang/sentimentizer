@@ -295,7 +295,9 @@ def _trainable_wrapper(config: dict, train_dataset: Any = None, val_dataset: Any
         trainer._train_epoch(model, train_loader)  # noqa: SLF001
         trainer.evaluate(model, val_loader)
 
-        val_accuracy = _compute_accuracy(model, val_loader, device)
+        from sentimentizer.metrics import compute_metrics_from_model
+
+        metrics = compute_metrics_from_model(model, val_loader, device)
         val_loss = trainer.val_loss
 
         if val_loss < best_val_loss:
@@ -303,9 +305,15 @@ def _trainable_wrapper(config: dict, train_dataset: Any = None, val_dataset: Any
 
         tune.report(
             {
-                "val_accuracy": val_accuracy,
+                "val_accuracy": metrics.accuracy,
                 "val_loss": val_loss,
                 "train_loss": trainer.losses[-1] if trainer.losses else 0.0,
+                "val_precision": metrics.precision,
+                "val_recall": metrics.recall,
+                "val_f1": metrics.f1,
+                "val_cohen_kappa": metrics.cohen_kappa,
+                "val_positive_accuracy": metrics.positive_accuracy,
+                "val_negative_accuracy": metrics.negative_accuracy,
                 "epoch": epoch,
             }
         )
@@ -346,21 +354,6 @@ def _build_model_config(model_type: str, config: dict) -> Any:
         raise ValueError(f"Unknown model type: {model_type}")
 
 
-def _compute_accuracy(model: Any, dataloader: Any, device: str) -> float:
-    """Compute validation accuracy from a model and dataloader."""
-    import torch
-
-    correct = 0
-    total = 0
-    model.eval()
-    with torch.no_grad():
-        for inputs, targets in dataloader:
-            outputs = model(inputs.to(device))
-            preds = torch.sigmoid(outputs) >= 0.5
-            targets_binary = targets.to(device) >= 0.5
-            correct += (preds == targets_binary).sum().item()
-            total += targets_binary.numel()
-    return correct / max(total, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -386,8 +379,14 @@ def tune_model(
     Returns:
         Dict with keys:
         - 'best_config': dict of best hyperparameters
-        - 'best_accuracy': float
-        - 'best_loss': float
+        - 'best_accuracy': float — overall accuracy
+        - 'best_loss': float — best validation loss
+        - 'best_precision': float — positive-class precision
+        - 'best_recall': float — positive-class recall
+        - 'best_f1': float — positive-class F1 score
+        - 'best_cohen_kappa': float — Cohen's kappa coefficient
+        - 'best_positive_accuracy': float — accuracy on positive samples
+        - 'best_negative_accuracy': float — accuracy on negative samples
         - 'trial_count': int
         - 'results': list of all trial results
     """
@@ -424,7 +423,12 @@ def tune_model(
     )
 
     reporter = CLIReporter(
-        metric_columns=["val_accuracy", "val_loss", "train_loss", "epoch"],
+        metric_columns=[
+            "val_accuracy", "val_loss", "train_loss",
+            "val_f1", "val_cohen_kappa",
+            "val_positive_accuracy", "val_negative_accuracy",
+            "epoch",
+        ],
     )
 
     logger.info(
@@ -485,6 +489,12 @@ def tune_model(
         "best_config": clean_config,
         "best_accuracy": best_metrics.get("val_accuracy", 0.0),
         "best_loss": best_metrics.get("val_loss", float("inf")),
+        "best_precision": best_metrics.get("val_precision", 0.0),
+        "best_recall": best_metrics.get("val_recall", 0.0),
+        "best_f1": best_metrics.get("val_f1", 0.0),
+        "best_cohen_kappa": best_metrics.get("val_cohen_kappa", 0.0),
+        "best_positive_accuracy": best_metrics.get("val_positive_accuracy", 0.0),
+        "best_negative_accuracy": best_metrics.get("val_negative_accuracy", 0.0),
         "trial_count": len(result),
         "results": all_results,
     }
@@ -493,6 +503,10 @@ def tune_model(
         "tuning_complete",
         best_accuracy=output["best_accuracy"],
         best_loss=output["best_loss"],
+        best_f1=output["best_f1"],
+        best_cohen_kappa=output["best_cohen_kappa"],
+        best_positive_accuracy=output["best_positive_accuracy"],
+        best_negative_accuracy=output["best_negative_accuracy"],
         trial_count=output["trial_count"],
         best_config=clean_config,
     )

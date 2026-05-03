@@ -132,6 +132,12 @@ class TuningRunResult:
         best_config: Best hyperparameter configuration found.
         best_accuracy: Best validation accuracy achieved.
         best_loss: Best validation loss achieved.
+        best_precision: Best positive-class precision achieved.
+        best_recall: Best positive-class recall achieved.
+        best_f1: Best positive-class F1 score achieved.
+        best_cohen_kappa: Best Cohen's kappa coefficient achieved.
+        best_positive_accuracy: Best accuracy on positive samples.
+        best_negative_accuracy: Best accuracy on negative samples.
         iterations_completed: Number of tuning iterations completed.
         converged: Whether the agent converged before max iterations.
         history: List of TuningResult dicts from each iteration.
@@ -140,12 +146,19 @@ class TuningRunResult:
         elapsed_seconds: Wall-clock time for the entire run.
         validation_passed: Whether model predictions passed validation.
         validation_results: Detailed validation results per example.
+        validation_metrics: Classification metrics from model validation.
         retry_count: Number of re-tuning attempts due to failed validation.
     """
 
     best_config: dict[str, Any] = field(default_factory=dict)
     best_accuracy: float = 0.0
     best_loss: float = float("inf")
+    best_precision: float = 0.0
+    best_recall: float = 0.0
+    best_f1: float = 0.0
+    best_cohen_kappa: float = 0.0
+    best_positive_accuracy: float = 0.0
+    best_negative_accuracy: float = 0.0
     iterations_completed: int = 0
     converged: bool = False
     history: list[dict[str, Any]] = field(default_factory=list)
@@ -154,6 +167,7 @@ class TuningRunResult:
     elapsed_seconds: float = 0.0
     validation_passed: bool = False
     validation_results: list[dict[str, Any]] = field(default_factory=list)
+    validation_metrics: dict[str, Any] | None = None
     retry_count: int = 0
 
 
@@ -250,9 +264,10 @@ class TuningRun:
                 result.model_path = str(model_path)
 
                 if self.config.validate_predictions:
-                    validation_passed, validation_results = self._validate_model(model_path)
+                    validation_passed, validation_results, validation_metrics = self._validate_model(model_path)
                     result.validation_passed = validation_passed
                     result.validation_results = validation_results
+                    result.validation_metrics = validation_metrics
 
                     if validation_passed:
                         logger.info(
@@ -306,6 +321,10 @@ class TuningRun:
             "tuning_run_complete",
             best_accuracy=result.best_accuracy,
             best_loss=result.best_loss,
+            best_f1=result.best_f1,
+            best_cohen_kappa=result.best_cohen_kappa,
+            best_positive_accuracy=result.best_positive_accuracy,
+            best_negative_accuracy=result.best_negative_accuracy,
             iterations=result.iterations_completed,
             converged=result.converged,
             validation_passed=result.validation_passed,
@@ -407,6 +426,12 @@ class TuningRun:
             best_config=result["best_config"],
             best_accuracy=result["best_accuracy"],
             best_loss=result["best_loss"],
+            best_precision=result.get("best_precision", 0.0),
+            best_recall=result.get("best_recall", 0.0),
+            best_f1=result.get("best_f1", 0.0),
+            best_cohen_kappa=result.get("best_cohen_kappa", 0.0),
+            best_positive_accuracy=result.get("best_positive_accuracy", 0.0),
+            best_negative_accuracy=result.get("best_negative_accuracy", 0.0),
             iterations_completed=1,
             converged=True,  # single run is always "converged"
             history=[tuning_result.model_dump()],
@@ -489,7 +514,9 @@ class TuningRun:
     # Model validation
     # ------------------------------------------------------------------
 
-    def _validate_model(self, model_path: str) -> tuple[bool, list[dict[str, Any]]]:
+    def _validate_model(
+        self, model_path: str
+    ) -> tuple[bool, list[dict[str, Any]], dict[str, Any]]:
         """Validate model predictions against known sentiment examples.
 
         Loads the trained model and tests it against a set of known
@@ -497,15 +524,22 @@ class TuningRun:
         - For positive text: model output > 0.5
         - For negative text: model output < 0.5
 
+        Also computes comprehensive classification metrics including
+        per-class accuracy, precision/recall/F1, Cohen's kappa, and
+        AUC-ROC.
+
         Args:
             model_path: Path to the saved model weights.
 
         Returns:
-            Tuple of (passed, results) where passed is True if the
-            fraction of correct predictions >= validation_threshold,
-            and results is a list of per-example validation details.
+            Tuple of (passed, results, metrics) where passed is True if
+            the fraction of correct predictions >= validation_threshold,
+            results is a list of per-example validation details, and
+            metrics is a dict of ClassificationMetrics fields.
         """
         import torch
+
+        from sentimentizer.metrics import compute_metrics_from_examples
 
         model_type = self.config.model_type
         device = self.config.device
@@ -524,14 +558,14 @@ class TuningRun:
             tokenizer = get_trained_tokenizer()
         except Exception as e:
             logger.warning(f"tokenizer_load_failed: {e}")
-            return False, [{"error": str(e)}]
+            return False, [{"error": str(e)}], {}
 
         # Load model
         try:
             model = _load_trained_model(model_type, model_path, device)
         except Exception as e:
             logger.warning(f"model_load_failed: {e}")
-            return False, [{"error": str(e)}]
+            return False, [{"error": str(e)}], {}
 
         model.to(device)
         model.eval()
@@ -578,15 +612,23 @@ class TuningRun:
         accuracy = correct / len(KNOWN_SENTIMENT_EXAMPLES)
         passed = accuracy >= self.config.validation_threshold
 
+        # Compute comprehensive classification metrics
+        metrics_obj = compute_metrics_from_examples(results)
+        metrics_dict = metrics_obj.to_dict()
+
         logger.info(
             "validation_summary",
             correct=correct,
             total=len(KNOWN_SENTIMENT_EXAMPLES),
             accuracy=round(accuracy, 4),
             passed=passed,
+            f1=metrics_obj.f1,
+            cohen_kappa=metrics_obj.cohen_kappa,
+            positive_accuracy=metrics_obj.positive_accuracy,
+            negative_accuracy=metrics_obj.negative_accuracy,
         )
 
-        return passed, results
+        return passed, results, metrics_dict
 
     # ------------------------------------------------------------------
     # Results persistence
@@ -611,12 +653,19 @@ class TuningRun:
             "best_config": result.best_config,
             "best_accuracy": result.best_accuracy,
             "best_loss": result.best_loss,
+            "best_precision": result.best_precision,
+            "best_recall": result.best_recall,
+            "best_f1": result.best_f1,
+            "best_cohen_kappa": result.best_cohen_kappa,
+            "best_positive_accuracy": result.best_positive_accuracy,
+            "best_negative_accuracy": result.best_negative_accuracy,
             "iterations_completed": result.iterations_completed,
             "converged": result.converged,
             "history": result.history,
             "model_path": result.model_path,
             "validation_passed": result.validation_passed,
             "validation_results": result.validation_results,
+            "validation_metrics": result.validation_metrics,
             "retry_count": result.retry_count,
             "elapsed_seconds": result.elapsed_seconds,
         }

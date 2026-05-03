@@ -452,9 +452,13 @@ def run_agent_tune(args: argparse.Namespace) -> None:
                 "best_loss": result.best_loss,
                 "iterations": result.iterations_completed,
                 "converged": result.converged,
+                "history": [
+                    h.model_dump() if hasattr(h, "model_dump") else h for h in result.history
+                ],
             },
             f,
             indent=2,
+            default=str,
         )
     logger.info(f"best config saved to: {output_path}")
 
@@ -503,6 +507,10 @@ def run_tune(args: argparse.Namespace) -> None:
         "tuning_skill_complete",
         best_accuracy=result.best_accuracy,
         best_loss=result.best_loss,
+        best_f1=result.best_f1,
+        best_cohen_kappa=result.best_cohen_kappa,
+        best_positive_accuracy=result.best_positive_accuracy,
+        best_negative_accuracy=result.best_negative_accuracy,
         iterations=result.iterations_completed,
         converged=result.converged,
         validation_passed=result.validation_passed,

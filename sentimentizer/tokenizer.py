@@ -104,6 +104,9 @@ class Tokenizer:
 
         # Work on a copy to avoid mutating the input DataFrame
         data = data.copy()
+        
+        # Drop neutral (3-star) reviews for strict binary classification
+        data = data[data[self.cfg.label_col] != 3].copy()
         data[self.cfg.inputs] = data[self.cfg.text_col].map(
             lambda text: text_sequencer(self.dictionary, text, self.cfg.max_len)  # type: ignore[arg-type]
         )
@@ -157,6 +160,9 @@ class Tokenizer:
         # Capture for closure
         dictionary = self.dictionary
         cfg = self.cfg
+
+        # Drop neutral (3-star) reviews for strict binary classification
+        ds = ds.filter(lambda row: row[cfg.label_col] != 3)
 
         def transform_batch(batch: dict) -> dict:
             inputs = []
