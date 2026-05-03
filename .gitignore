@@ -1,4 +1,5 @@
 .DS_Store
+*.txt
 *.csv
 *.zip
 *.tsv
@@ -6,7 +7,6 @@
 *.tar
 *.h5
 *.npy
-*.txt
 *.pyc
 *.ipynb
 *.arrow
@@ -30,3 +30,10 @@ dist
 .venv312
 agent_checkpoints.db
 checkpoints/
+
+# Additional patterns
+.ruff_cache/
+.mypy_cache/
+.bsp/
+*.egg-info/
+weights.pth

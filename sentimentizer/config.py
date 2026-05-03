@@ -1,4 +1,3 @@
-import enum
 import os
 from dataclasses import dataclass
 from logging import INFO
@@ -58,19 +57,8 @@ def default_dataloader_workers(device: str) -> int:
     return min(os.cpu_count() or 4, 10)
 
 
-Devices: frozenset[str] = frozenset(("auto", "cpu", "cuda", "mps"))
-
-
-class Device(enum.Enum):
-    CPU = 0
-    CUDA = 1
-    MPS = 2
-
-
-class FitModes(enum.Enum):
-    fitting = 0
-    training = 1
-    evaluation = 2
+# Valid device strings for model loading (excludes "auto" — must be resolved first)
+VALID_DEVICES: frozenset[str] = frozenset(("cpu", "cuda", "mps"))
 
 
 @dataclass
@@ -163,7 +151,9 @@ class TrainerConfig:
 @dataclass
 class EmbeddingsConfig:
     file_path: str = str(external_data / "glove.6B.zip")
-    sub_file_path: str = "glove.6B.zip/glove.6B.100d.txt"
+    # sub_file_path: str = "glove.6B.zip/glove.6B.100d.txt"
+    sub_file_path: str = "glove.6B.100d.txt"
+
     emb_length: int = 100
 
 

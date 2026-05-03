@@ -140,7 +140,7 @@ class TestConfigLoader:
 
     def test_env_var_config_path(self):
         """get_config_path should read from environment variable."""
-        from sentimentizer.tuner import get_config_path
+        from sentimentizer.agent.loader import get_config_path
 
         original = os.environ.get("SENTIMENTIZER_AGENT_CONFIG")
         try:
@@ -155,7 +155,7 @@ class TestConfigLoader:
 
     def test_env_var_not_set(self):
         """get_config_path should return None when env var is not set."""
-        from sentimentizer.tuner import get_config_path
+        from sentimentizer.agent.loader import get_config_path
 
         original = os.environ.pop("SENTIMENTIZER_AGENT_CONFIG", None)
         try:

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sentimentizer"
-version = "0.99.0"
+version = "0.101.0"
 description = "straight forward rnn model"
 readme = "README.md"
 authors = [{ name = "Edward Yang", email = "edwardpyang@gmail.com" }]
@@ -20,7 +20,7 @@ dependencies = [
     "numpy>=1.23.0",
     "pandas>=1.5.2",
     "polars>=1.27.1",
-    "torch>=2.10",
+    "torch>=2.0",
     "orjson>=3.8.5",
     "pyarrow>=11.0.0",
     "scikit-learn",

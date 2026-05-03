@@ -29,11 +29,6 @@ def convert_rating(rating: int) -> float:
         return 0.5
 
 
-def convert_rating_linear(rating: int, max_rating: int) -> float:
-    """scaling ratings from 0 to 1 linearly"""
-    return rating / max_rating
-
-
 def text_sequencer(
     dictionary: corpora.Dictionary, text: list[str], max_len: int = 200
 ) -> np.ndarray:
@@ -45,7 +40,8 @@ def text_sequencer(
     processed = np.zeros(max_len, dtype=int)
     # in case the word is not in the dictionary because it was
     # filtered out use this number to represent an out of set id
-    dict_final = len(dictionary.keys()) + 1
+    # Use max ID + 1 to avoid collisions with existing IDs after filter_extremes
+    dict_final = max(dictionary.keys()) + 1 if dictionary.keys() else 1
 
     for i, word in enumerate(text):
         if i >= max_len:
@@ -98,18 +94,20 @@ class Tokenizer:
         return cls(dictionary=_new_dictionary(data, TokenizerConfig(save_dictionary=False)))
 
     @time_decorator
-    def transform_dataframe(self, data: pd.DataFrame) -> "Tokenizer":
+    def transform_dataframe(self, data: pd.DataFrame) -> pd.DataFrame:
         """transforms dataframe with text and target"""
         if self.dictionary is None:
             raise ValueError("no dictionary loaded")
 
+        # Work on a copy to avoid mutating the input DataFrame
+        data = data.copy()
         data[self.cfg.inputs] = data[self.cfg.text_col].map(
             lambda text: text_sequencer(self.dictionary, text, self.cfg.max_len)  # type: ignore[arg-type]
         )
 
         data[self.cfg.labels] = data[self.cfg.label_col].map(convert_rating)
         logger.info("converted tokens to numbers...")
-        return self
+        return data
 
     def tokenize_text(self, text: str) -> np.ndarray:
         """converts string phrase to numpy array"""

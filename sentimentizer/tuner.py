@@ -10,7 +10,6 @@ tuning library that the agent calls into.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -198,7 +197,7 @@ def _get_scheduler(
 # ---------------------------------------------------------------------------
 
 
-def _trainable_wrapper(config: dict) -> None:
+def _trainable_wrapper(config: dict, train_dataset: Any = None, val_dataset: Any = None) -> None:
     """Ray Tune trainable that wraps sentimentizer training.
 
     This function is executed by each Ray Tune trial. It:
@@ -222,7 +221,6 @@ def _trainable_wrapper(config: dict) -> None:
         TrainerConfig,
         default_epochs,
     )
-    from sentimentizer.loader import load_train_val_corpus_datasets
     from sentimentizer.trainer import _new_loaders, new_trainer
 
     model_type = config["model_type"]
@@ -260,13 +258,11 @@ def _trainable_wrapper(config: dict) -> None:
     model = new_model(
         dict_path=dict_path,
         embeddings_config=embeddings_config,
-        batch_size=config.get("batch_size", 64),
         input_len=input_len,
         model_config=model_config,
     )
 
     trainer_config = TrainerConfig(
-        batch_size=config.get("batch_size", 64),
         epochs=config.get("epochs", 4),
         device=device,
         dataloader_workers=0,  # Avoid multiprocessing in Ray workers
@@ -278,9 +274,12 @@ def _trainable_wrapper(config: dict) -> None:
         model_type=model_type,
     )
 
-    train_dataset, val_dataset = load_train_val_corpus_datasets(
-        DriverConfig.files.processed_reviews_file_path
-    )
+    if train_dataset is None or val_dataset is None:
+        from sentimentizer.loader import load_train_val_corpus_datasets
+
+        train_dataset, val_dataset = load_train_val_corpus_datasets(
+            DriverConfig.files.processed_reviews_file_path
+        )
 
     train_loader, val_loader = _new_loaders(
         train_dataset,
@@ -294,7 +293,7 @@ def _trainable_wrapper(config: dict) -> None:
 
     for epoch in range(epochs):
         trainer._train_epoch(model, train_loader)  # noqa: SLF001
-        trainer.eval(model, val_loader)
+        trainer.evaluate(model, val_loader)
 
         val_accuracy = _compute_accuracy(model, val_loader, device)
         val_loss = trainer.val_loss
@@ -302,11 +301,15 @@ def _trainable_wrapper(config: dict) -> None:
         if val_loss < best_val_loss:
             best_val_loss = val_loss
 
+        from ray import tune
+
         tune.report(
-            val_accuracy=val_accuracy,
-            val_loss=val_loss,
-            train_loss=trainer.losses[-1] if trainer.losses else 0.0,
-            epoch=epoch,
+            {
+                "val_accuracy": val_accuracy,
+                "val_loss": val_loss,
+                "train_loss": trainer.losses[-1] if trainer.losses else 0.0,
+                "epoch": epoch,
+            }
         )
 
 
@@ -409,6 +412,13 @@ def tune_model(
     search_space["embeddings_emb_length"] = DriverConfig.embeddings.emb_length
     search_space["input_len"] = DriverConfig.tokenizer.max_len
 
+    from sentimentizer.loader import load_train_val_corpus_datasets
+
+    logger.info("loading_datasets_for_tuning")
+    train_dataset, val_dataset = load_train_val_corpus_datasets(
+        DriverConfig.files.processed_reviews_file_path
+    )
+
     scheduler = _get_scheduler(tuner_config)
     search_alg = OptunaSearch(
         metric=tuner_config.metric,
@@ -429,7 +439,11 @@ def tune_model(
 
     result = tune.Tuner(
         tune.with_resources(
-            _trainable_wrapper,
+            tune.with_parameters(
+                _trainable_wrapper,
+                train_dataset=train_dataset,
+                val_dataset=val_dataset,
+            ),
             resources={"cpu": 1, "gpu": 1 if _gpu_available() else 0},
         ),
         param_space=search_space,
@@ -493,15 +507,3 @@ def _gpu_available() -> bool:
         return torch.cuda.is_available()
     except ImportError:
         return False
-
-
-# Allow overriding config path via environment variable
-CONFIG_PATH_ENV = "SENTIMENTIZER_AGENT_CONFIG"
-
-
-def get_config_path() -> Path | None:
-    """Get config path from environment variable, or None for default."""
-    env_path = os.environ.get(CONFIG_PATH_ENV)
-    if env_path:
-        return Path(env_path)
-    return None

@@ -9,7 +9,7 @@ from gensim import corpora
 from sentimentizer import new_logger
 from sentimentizer.config import (
     DEFAULT_LOG_LEVEL,
-    Devices,
+    VALID_DEVICES,
     EmbeddingsConfig,
     RNNConfig,
 )
@@ -29,7 +29,6 @@ class RNN(nn.Module):
     the final forward and backward hidden states for classification.
 
     Args:
-        batch_size: Batch size
         emb_weights: Pre-trained embedding weights of shape (vocab_size, emb_dim)
         hidden_size: LSTM hidden state dimension
         num_layers: Number of LSTM layers
@@ -39,7 +38,6 @@ class RNN(nn.Module):
 
     def __init__(
         self,
-        batch_size: int,
         emb_weights: torch.Tensor,
         hidden_size: int = RNNConfig.hidden_size,
         num_layers: int = RNNConfig.num_layers,
@@ -47,7 +45,6 @@ class RNN(nn.Module):
         dropout: float = RNNConfig.dropout,
     ) -> None:
         super().__init__()
-        _ = batch_size  # batch_size not stored; runtime uses inputs.size(0)
         emb_dim = emb_weights.shape[1]
 
         # Embedding layer with pre-trained GloVe weights
@@ -55,7 +52,7 @@ class RNN(nn.Module):
         self.fc0 = nn.Linear(emb_dim, emb_dim)
 
         self.dropout = dropout
-        self.dropout_layer = nn.Dropout1d(p=self.dropout, inplace=True)
+        self.dropout_layer = nn.Dropout(p=self.dropout)
 
         # Bidirectional LSTM with batch_first=True
         # Processes tokens in sequence order — word 1, word 2, ..., word 200
@@ -92,7 +89,7 @@ class RNN(nn.Module):
             Logits of shape (batch,)
         """
         embeds = self.embed_layer(inputs)  # (B, seq_len, emb_dim)
-        self.dropout_layer(embeds)
+        embeds = self.dropout_layer(embeds)
         if self.verbose:
             logger.info(f"embedding shape {embeds.shape}")
 
@@ -133,7 +130,6 @@ class RNN(nn.Module):
 def new_model(
     dict_path: str,
     embeddings_config: EmbeddingsConfig,
-    batch_size: int,
     input_len: int,
     model_config: RNNConfig = _DEFAULT_RNN_CONFIG,
 ) -> RNN:
@@ -142,7 +138,6 @@ def new_model(
     Args:
         dict_path: Path to the gensim dictionary file
         embeddings_config: Configuration for GloVe embeddings
-        batch_size: Batch size
         input_len: Maximum sequence length
         model_config: RNN architecture configuration (defaults from RNNConfig)
     """
@@ -150,7 +145,6 @@ def new_model(
     embedding_matrix = new_embedding_weights(dict_yelp, embeddings_config)
     emb_t = torch.from_numpy(embedding_matrix)
     model = RNN(
-        batch_size=batch_size,
         emb_weights=emb_t,
         hidden_size=model_config.hidden_size,
         num_layers=model_config.num_layers,
@@ -160,27 +154,27 @@ def new_model(
 
 
 def get_trained_model(
-    batch_size: int,
     device: str,
     model_config: RNNConfig = _DEFAULT_RNN_CONFIG,
 ) -> RNN:
     """Load a pre-trained RNN model from saved weights.
 
     Args:
-        batch_size: Batch size for the model
         device: Device to load weights onto ("cpu", "cuda", or "mps")
         model_config: RNN architecture configuration (must match saved weights)
 
     Returns:
         RNN model with loaded weights
     """
-    if device not in Devices:
+    if device not in VALID_DEVICES:
         raise ValueError("device must be cpu, cuda, or mps")
 
     weights_path = str(files("sentimentizer.data").joinpath("weights.pth"))
 
     try:
-        weights = torch.load(weights_path, map_location=torch.device(device=device))
+        weights = torch.load(
+            weights_path, map_location=torch.device(device=device), weights_only=True
+        )
     except FileNotFoundError as e:
         raise FileNotFoundError(
             f"Weights file not found at {weights_path}. "
@@ -201,7 +195,6 @@ def get_trained_model(
 
     empty_embeddings = torch.zeros(emb_shape)
     model = RNN(
-        batch_size=batch_size,
         emb_weights=empty_embeddings,
         hidden_size=hidden_size,
         num_layers=model_config.num_layers,

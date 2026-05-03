@@ -31,6 +31,66 @@ from sentimentizer.loader import CorpusDataset
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
 
+# ──────────────────────────────────────────────
+# Shared training primitives
+# ──────────────────────────────────────────────
+
+
+def train_step(
+    model: torch.nn.Module,
+    data: torch.Tensor,
+    target: torch.Tensor,
+    optimizer: torch.optim.Optimizer,
+    loss_function: Callable,
+    max_grad_norm: float = 1.0,
+) -> float:
+    """Single training step: forward, loss, backward, clip, step.
+
+    Args:
+        model: The model to train.
+        data: Input tensor (already on the correct device).
+        target: Target tensor (already on the correct device).
+        optimizer: Optimizer to update parameters.
+        loss_function: Loss function to compute loss.
+        max_grad_norm: Max gradient norm for clipping.
+
+    Returns:
+        The scalar loss value for this step.
+    """
+    optimizer.zero_grad()
+    output = model(data)
+    loss = loss_function(output, target)
+    loss.backward()
+    torch.nn.utils.clip_grad.clip_grad_norm_(
+        model.parameters(), max_norm=max_grad_norm, norm_type=2
+    )
+    optimizer.step()
+    return loss.item()
+
+
+def val_step(
+    model: torch.nn.Module,
+    data: torch.Tensor,
+    target: torch.Tensor,
+    loss_function: Callable,
+) -> float:
+    """Single validation step: forward, loss (no grad).
+
+    Args:
+        model: The model to evaluate.
+        data: Input tensor (already on the correct device).
+        target: Target tensor (already on the correct device).
+        loss_function: Loss function to compute loss.
+
+    Returns:
+        The scalar loss value for this step.
+    """
+    with torch.no_grad():
+        output = model(data)
+        loss = loss_function(output, target)
+    return loss.item()
+
+
 def _new_loaders(
     train_data: CorpusDataset, val_data: CorpusDataset, cfg: TrainerConfig
 ) -> tuple[DataLoader, DataLoader]:
@@ -67,8 +127,9 @@ class Trainer:
     optimizer: optim.Adam
     scheduler: optim.lr_scheduler.LRScheduler
     cfg: TrainerConfig
-    losses: list[float] = field(default_factory=lambda: list())
-    _mode: str = field(default="training")
+    model_type: str = "rnn"
+    losses: list[float] = field(default_factory=list)
+    val_loss: float = float("inf")
 
     def _train_epoch(self, model: torch.nn.Module, train_loader: DataLoader) -> None:
         i = 0
@@ -76,22 +137,16 @@ class Trainer:
         model.train()
 
         for j, (sent, target) in enumerate(train_loader):
-            self.optimizer.zero_grad()
-
-            log_probs = model(sent.to(self.cfg.device))
-            loss = self.loss_function(log_probs, target.to(self.cfg.device))
-
-            # gets gradient
-            loss.backward()
-
-            # clips high gradients
-            torch.nn.utils.clip_grad.clip_grad_norm_(model.parameters(), max_norm=1.0, norm_type=2)
-
-            # updates with new gradient
-            self.optimizer.step()
+            loss_val = train_step(
+                model,
+                data=sent.to(self.cfg.device),
+                target=target.to(self.cfg.device),
+                optimizer=self.optimizer,
+                loss_function=self.loss_function,
+            )
 
             i += len(target)
-            self.losses.append(loss.item())
+            self.losses.append(loss_val)
             if i % (self.cfg.batch_size * 100) == 0:
                 logger.info(
                     f"{i / n:.2f} of rows completed in "
@@ -109,7 +164,7 @@ class Trainer:
         # Resolve default epochs if auto (-1)
         epochs = self.cfg.epochs
         if epochs == -1:
-            epochs = default_epochs("rnn")  # fallback; driver resolves this
+            epochs = default_epochs(self.model_type)
 
         logger.info("fitting model...")
 
@@ -125,7 +180,7 @@ class Trainer:
 
         for epoch in range(epochs):
             self._train_epoch(model, train_loader)
-            self.eval(model, val_loader)
+            self.evaluate(model, val_loader)
 
             if self.scheduler:
                 self.scheduler.step()
@@ -161,26 +216,30 @@ class Trainer:
             logger.info(f"epoch {epoch} completed")
         logger.info(f"model fitting completed, {time.time() - start:.0f} seconds passed")
 
-    def eval(self, model: torch.nn.Module, val_loader: DataLoader) -> None:
+    def evaluate(self, model: torch.nn.Module, val_loader: DataLoader) -> None:
         logger.info("evaluating predictions...")
         losses = []
         i = 0
         n = len(val_loader.dataset)  # type: ignore[arg-type]
         model.to(self.cfg.device)
+        model.eval()
 
-        with torch.no_grad():
-            model.eval()
-            for j, (sent, target) in enumerate(val_loader):
-                preds = model(sent.to(self.cfg.device))
-                losses.append(self.loss_function(preds, target.to(self.cfg.device)).item())
-                i += len(target)
-                if i % (self.cfg.batch_size * 100) == 0:
-                    logger.info(
-                        f"{i / n:.2f} of rows completed in "
-                        f"{j + 1} cycles, validation loss at {np.mean(losses[-60:]):.6f}"
-                    )
-            self.val_loss = np.mean(losses)
-            logger.info(f"validation loss at: {self.val_loss: .6f}")
+        for j, (sent, target) in enumerate(val_loader):
+            loss_val = val_step(
+                model,
+                data=sent.to(self.cfg.device),
+                target=target.to(self.cfg.device),
+                loss_function=self.loss_function,
+            )
+            losses.append(loss_val)
+            i += len(target)
+            if i % (self.cfg.batch_size * 100) == 0:
+                logger.info(
+                    f"{i / n:.2f} of rows completed in "
+                    f"{j + 1} cycles, validation loss at {np.mean(losses[-60:]):.6f}"
+                )
+        self.val_loss = np.mean(losses)
+        logger.info(f"validation loss at: {self.val_loss: .6f}")
 
 
 def _get_opt_params(model_type: str) -> OptimizationParams | EncoderOptimizationParams:
@@ -237,8 +296,10 @@ def new_trainer(
 
     # Use warmup+cosine for transformer models, simple cosine for RNN
     if isinstance(sched, EncoderSchedulerParams) and sched.warmup_epochs > 0:
-        warmup_steps = sched.warmup_epochs * cfg.epochs  # approximate
-        total_steps = sched.T_max * cfg.epochs
+        # Estimate total steps: epochs * batches_per_epoch
+        # We'll use a rough estimate; the scheduler steps per optimizer call
+        warmup_steps = sched.warmup_epochs  # number of epoch-level steps for warmup
+        total_steps = sched.T_max  # total epoch-level steps
         scheduler = _LinearWarmupCosineScheduler(
             optimizer,
             warmup_steps=warmup_steps,
@@ -258,6 +319,7 @@ def new_trainer(
         optimizer=optimizer,
         scheduler=scheduler,
         cfg=cfg,
+        model_type=model_type,
     )
 
     return trainer
@@ -316,7 +378,6 @@ def _train_func(config: dict) -> None:
     model = new_model(
         dict_path=dict_path,
         embeddings_config=embeddings_config,
-        batch_size=batch_size,
         input_len=input_len,
     )
 
@@ -362,18 +423,14 @@ def _train_func(config: dict) -> None:
         epoch_losses = []
 
         for batch in train_shard.iter_torch_batches(batch_size=batch_size):
-            data = batch["data"].long().to(device)
-            target = batch["target"].float().to(device)
-
-            optimizer.zero_grad()
-            log_probs = model(data)
-            loss = loss_function(log_probs, target)
-            loss.backward()
-
-            torch.nn.utils.clip_grad.clip_grad_norm_(model.parameters(), max_norm=1.0, norm_type=2)
-            optimizer.step()
-
-            epoch_losses.append(loss.item())
+            loss_val = train_step(
+                model,
+                data=batch["data"].long().to(device),
+                target=batch["target"].float().to(device),
+                optimizer=optimizer,
+                loss_function=loss_function,
+            )
+            epoch_losses.append(loss_val)
 
         if scheduler:
             scheduler.step()
@@ -381,12 +438,14 @@ def _train_func(config: dict) -> None:
         # Validation
         val_losses = []
         model.eval()
-        with torch.no_grad():
-            for batch in val_shard.iter_torch_batches(batch_size=batch_size):
-                data = batch["data"].long().to(device)
-                target = batch["target"].float().to(device)
-                preds = model(data)
-                val_losses.append(loss_function(preds, target).item())
+        for batch in val_shard.iter_torch_batches(batch_size=batch_size):
+            loss_val = val_step(
+                model,
+                data=batch["data"].long().to(device),
+                target=batch["target"].float().to(device),
+                loss_function=loss_function,
+            )
+            val_losses.append(loss_val)
 
         val_loss = np.mean(val_losses) if val_losses else 0.0
         train_loss = np.mean(epoch_losses) if epoch_losses else 0.0
@@ -542,8 +601,8 @@ def new_ray_trainer(
 
     use_warmup = isinstance(sched, EncoderSchedulerParams) and sched.warmup_epochs > 0
     if isinstance(sched, EncoderSchedulerParams):
-        warmup_steps = sched.warmup_epochs * cfg.epochs
-        total_steps = sched.T_max * cfg.epochs
+        warmup_steps = sched.warmup_epochs
+        total_steps = sched.T_max
     else:
         warmup_steps = 0
         total_steps = 0
@@ -568,7 +627,7 @@ def new_ray_trainer(
         "input_len": driver_config.tokenizer.max_len,
     }
 
-    use_gpu = cfg.device in ("cuda",)
+    use_gpu = cfg.device in ("cuda", "mps")
 
     trainer = TorchTrainer(
         train_loop_per_worker=_train_func,
