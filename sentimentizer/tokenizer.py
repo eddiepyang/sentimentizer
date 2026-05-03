@@ -73,11 +73,8 @@ def regex_tokenize(x: str) -> list[str]:
     return pattern.findall(x.lower())
 
 
-def _get_data(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
-    return df.loc[:, columns].reset_index(drop=True)
-
-
-def _new_dictionary(data: pd.DataFrame, cfg: TokenizerConfig) -> corpora.Dictionary:
+def new_dictionary(data: pd.DataFrame, cfg: TokenizerConfig) -> corpora.Dictionary:
+    """builds a dictionary from a dataframe"""
     dictionary = corpora.Dictionary(data[cfg.text_col])
     dictionary.filter_extremes(
         no_below=cfg.dict_min,
@@ -106,7 +103,7 @@ class Tokenizer:
     @classmethod
     def from_data(cls: type[TokenizerType], data: pd.DataFrame) -> TokenizerType:
         """creates tokenizer from dataframe"""
-        return cls(dictionary=_new_dictionary(data, TokenizerConfig(save_dictionary=False)))
+        return cls(dictionary=new_dictionary(data, TokenizerConfig(save_dictionary=False)))
 
     @time_decorator
     def transform_dataframe(self, data: pd.DataFrame) -> pd.DataFrame:
@@ -137,21 +134,53 @@ class Tokenizer:
         )
 
     @classmethod
-    def from_dataset(cls: type[TokenizerType], ds: ray.data.Dataset) -> TokenizerType:
+    def from_dataset(
+        cls: type[TokenizerType],
+        ds: ray.data.Dataset,
+        cfg: TokenizerConfig | None = None,
+    ) -> TokenizerType:
         """Creates tokenizer from ray dataset using distributed Map-Reduce.
 
         Instead of pulling every row to the driver via iter_rows(), this
         distributes word counting across Ray workers and aggregates the
         results on the driver to build the Gensim dictionary.
+
+        By default the dictionary is saved to disk (save_dictionary=True)
+        so that ``new_model()`` loads the same token-to-ID mapping that was
+        used during tokenization.  Pass ``TokenizerConfig(save_dictionary=False)``
+        to skip persistence (e.g. in tests).
+
+        Args:
+            ds: Ray dataset with a text column to build the dictionary from.
+            cfg: Optional tokenizer config.  Defaults to
+                ``TokenizerConfig(save_dictionary=True)``.
         """
-        cfg = TokenizerConfig(save_dictionary=False)
+        if cfg is None:
+            cfg = TokenizerConfig(save_dictionary=True)
+
         dictionary = _build_dictionary_distributed(ds, cfg)
 
         if cfg.save_dictionary:
             dictionary.save(f"{FileConfig.dictionary_file_path}")
             logger.info(f"dictionary saved to {FileConfig.dictionary_file_path}...")
 
-        return cls(dictionary=dictionary)
+        return cls(dictionary=dictionary, cfg=cfg)
+
+    def update_from_dataset(self, ds: ray.data.Dataset) -> None:
+        """Updates the existing dictionary with new tokens from a Ray dataset.
+
+        Uses the same distributed Map-Reduce approach as ``from_dataset()``
+        to count tokens, but calls ``add_documents()`` on the existing
+        dictionary instead of creating a new one.
+
+        Args:
+            ds: Ray dataset with a text column to update the dictionary from.
+        """
+        _update_dictionary_distributed(self.dictionary, ds, self.cfg)
+
+        if self.cfg.save_dictionary:
+            self.dictionary.save(f"{FileConfig.dictionary_file_path}")
+            logger.info(f"updated dictionary saved to {FileConfig.dictionary_file_path}...")
 
     @time_decorator
     def transform_dataset(self, ds: ray.data.Dataset) -> ray.data.Dataset:
@@ -188,12 +217,6 @@ class Tokenizer:
         ds = ds.map_batches(transform_batch, batch_format="numpy")
         logger.info("converted tokens to numbers...")
         return ds
-
-    def save(self, data: pd.DataFrame) -> None:
-        _get_data(data, [self.cfg.inputs] + [self.cfg.labels]).to_parquet(
-            f"{FileConfig.processed_reviews_file_path}", index=False
-        )
-        logger.info(f"file saved to {FileConfig.processed_reviews_file_path}")  # noqa: E501
 
 
 def get_trained_tokenizer() -> Tokenizer:
@@ -253,8 +276,13 @@ def _build_dictionary_distributed(ds: ray.data.Dataset, cfg: TokenizerConfig) ->
     dictionary = corpora.Dictionary()
     dictionary.num_docs = total_num_docs
 
-    # Assign contiguous IDs to all words
-    for idx, word in enumerate(total_word_freq.keys()):
+    # Assign contiguous IDs to all words.
+    # Sort by (descending frequency, ascending word) so the dictionary is
+    # deterministic regardless of batch processing order.  This guarantees
+    # the same token-to-ID mapping on every run.
+    for idx, word in enumerate(
+        sorted(total_word_freq.keys(), key=lambda w: (-total_word_freq[w], w))
+    ):
         dictionary.token2id[word] = idx
         dictionary.dfs[idx] = total_doc_freq[word]
 
@@ -276,3 +304,48 @@ def _build_dictionary_distributed(ds: ray.data.Dataset, cfg: TokenizerConfig) ->
     )
 
     return dictionary
+
+
+def _update_dictionary_distributed(
+    dictionary: corpora.Dictionary, ds: ray.data.Dataset, cfg: TokenizerConfig
+) -> None:
+    """Update a Gensim dictionary using distributed Map-Reduce over Ray."""
+    text_col = cfg.text_col
+
+    # Map phase: count vocab across distributed batches
+    total_word_freq: Counter = Counter()
+    total_doc_freq: Counter = Counter()
+    total_num_docs = 0
+
+    for batch in ds.iter_batches(batch_size=10000, batch_format="numpy"):
+        wf, df, nd = _count_vocab_batch(batch, text_col)
+        total_word_freq += wf
+        total_doc_freq += df
+        total_num_docs += nd
+
+    # Reduce phase: update existing dictionary
+    # We simulate add_documents by updating the internal structures.
+    # Existing IDs are preserved.
+
+    old_len = len(dictionary)
+    for word in total_word_freq:
+        if word not in dictionary.token2id:
+            idx = len(dictionary)
+            dictionary.token2id[word] = idx
+            dictionary.dfs[idx] = total_doc_freq[word]
+        else:
+            idx = dictionary.token2id[word]
+            dictionary.dfs[idx] += total_doc_freq[word]
+
+    dictionary.num_docs += total_num_docs
+    dictionary.num_pos += sum(total_word_freq.values())
+    dictionary.num_nnz += sum(total_doc_freq.values())
+
+    # We SKIP filter_extremes and compactify because they reassign IDs,
+    # which would break existing model weights.
+
+    new_len = len(dictionary)
+    logger.info(
+        f"dictionary updated via Map-Reduce: added {new_len - old_len} new terms, "
+        f"total {new_len} terms, {total_num_docs} new documents"
+    )

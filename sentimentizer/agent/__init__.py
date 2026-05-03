@@ -7,7 +7,13 @@ hyperparameter search.
 
 from sentimentizer.agent.graph import run_agent_tuning
 from sentimentizer.agent.loader import AgentConfig, TunerConfig, load_agent_config
-from sentimentizer.agent.skill import TuningRun, TuningRunConfig, TuningRunResult, create_tuning_run
+from sentimentizer.agent.skill import (
+    TuningRun,
+    TuningRunConfig,
+    TuningRunResult,
+    create_tuning_run,
+    diagnose_training_issues,
+)
 
 __all__ = [
     "AgentConfig",
@@ -16,6 +22,7 @@ __all__ = [
     "TuningRunConfig",
     "TuningRunResult",
     "create_tuning_run",
+    "diagnose_training_issues",
     "load_agent_config",
     "run_agent_tuning",
 ]

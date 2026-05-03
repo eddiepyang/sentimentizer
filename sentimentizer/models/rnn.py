@@ -153,6 +153,7 @@ def new_model(
         model_config: RNN architecture configuration (defaults from RNNConfig)
     """
     dict_yelp = corpora.Dictionary.load(dict_path)
+
     embedding_matrix = new_embedding_weights(dict_yelp, embeddings_config)
     emb_t = torch.from_numpy(embedding_matrix)
     model = RNN(

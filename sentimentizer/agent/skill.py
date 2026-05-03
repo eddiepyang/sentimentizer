@@ -538,6 +538,10 @@ class TuningRun:
         per-class accuracy, precision/recall/F1, Cohen's kappa, and
         AUC-ROC.
 
+        Before validation, runs diagnostic checks to detect common
+        training issues like dictionary misalignment. If diagnostics
+        find critical issues, validation fails early with details.
+
         Args:
             model_path: Path to the saved model weights.
 
@@ -560,6 +564,18 @@ class TuningRun:
             model_path=model_path,
             threshold=self.config.validation_threshold,
         )
+
+        # Run diagnostic checks before validation
+        diagnostics = diagnose_training_issues(model_type=model_type)
+        if diagnostics["has_critical_issues"]:
+            logger.warning(
+                "validation_skipped_due_to_diagnostics",
+                critical_issues=diagnostics["critical_issues"],
+            )
+            error_results = [
+                {"error": issue, "severity": "critical"} for issue in diagnostics["critical_issues"]
+            ]
+            return False, error_results, {}
 
         # Load tokenizer
         from sentimentizer.tokenizer import get_trained_tokenizer
@@ -699,6 +715,365 @@ class TuningRun:
         path = Path(path)
         with open(path) as f:
             return json.load(f)
+
+
+# ---------------------------------------------------------------------------
+# Diagnostics
+# ---------------------------------------------------------------------------
+
+
+def diagnose_training_issues(model_type: str = "rnn") -> dict[str, Any]:
+    """Run diagnostic checks to detect common training issues.
+
+    Checks for problems that cause incorrect or "whacky" predictions,
+    such as dictionary misalignment between tokenization and embedding
+    matrix, class imbalance, and data integrity issues.
+
+    This function is designed to be called before or after training to
+    verify the pipeline is producing correct results. It can also be
+    used as a troubleshooting tool when predictions look wrong.
+
+    Diagnostics performed:
+
+    1. **Dictionary alignment** — Verifies that the saved dictionary
+       (used by ``new_model()`` to build the embedding matrix) has
+       the same token-to-ID mapping as a freshly built dictionary
+       from the raw data. A mismatch means training data token IDs
+       don't align with embedding rows, causing the model to learn
+       wrong word associations.
+
+    2. **Embedding matrix alignment** — Verifies that each row in the
+       embedding matrix corresponds to the correct word in the
+       dictionary (row k = embedding for token ID k-1).
+
+    3. **Class balance** — Reports the positive/negative class ratio
+       in the processed training data and warns about severe imbalance.
+
+    4. **Data integrity** — Checks that token IDs in the processed
+       data fall within the valid range for the dictionary.
+
+    Args:
+        model_type: Model type to check ('rnn', 'encoder', 'decoder').
+
+    Returns:
+        Dict with keys:
+        - ``has_critical_issues`` (bool): True if any issue would cause
+          incorrect predictions.
+        - ``critical_issues`` (list[str]): Descriptions of critical issues.
+        - ``warnings`` (list[str]): Descriptions of non-critical issues.
+        - ``checks`` (dict): Detailed results of each diagnostic check.
+    """
+    from collections import Counter
+    from pathlib import Path
+
+    import numpy as np
+    import pandas as pd
+    from gensim import corpora
+
+    from sentimentizer.config import DriverConfig, EmbeddingsConfig, TokenizerConfig
+    from sentimentizer.extractor import new_embedding_weights
+
+    critical_issues: list[str] = []
+    warnings: list[str] = []
+    checks: dict[str, Any] = {}
+
+    dict_path = DriverConfig.files.dictionary_file_path
+    processed_path = DriverConfig.files.processed_reviews_file_path
+    raw_path = DriverConfig.files.raw_reviews_file_path
+
+    # ------------------------------------------------------------------
+    # Check 1: Dictionary alignment
+    # ------------------------------------------------------------------
+    # The saved dictionary is used by new_model() to build the embedding
+    # matrix. If the tokenization step used a different dictionary (e.g.,
+    # from from_dataset() which previously did NOT save), the token IDs
+    # in the training data won't match the embedding rows.
+    # ------------------------------------------------------------------
+    dict_check: dict[str, Any] = {"name": "dictionary_alignment"}
+
+    try:
+        saved_dict = corpora.Dictionary.load(dict_path)
+        dict_check["saved_dict_terms"] = len(saved_dict)
+
+        # Build a fresh dictionary from raw data (same pipeline as
+        # _build_dictionary_distributed, but using pandas)
+        if Path(raw_path).exists():
+            cfg = TokenizerConfig()
+            raw_df = pd.read_parquet(raw_path)
+
+            total_word_freq: Counter = Counter()
+            total_doc_freq: Counter = Counter()
+            num_docs = 0
+
+            batch_size = 10000
+            for start in range(0, len(raw_df), batch_size):
+                batch = raw_df.iloc[start : start + batch_size]
+                for doc_tokens in batch[cfg.text_col]:
+                    num_docs += 1
+                    total_word_freq.update(doc_tokens)
+                    total_doc_freq.update(set(doc_tokens))
+
+            new_dict = corpora.Dictionary()
+            new_dict.num_docs = num_docs
+            for idx, word in enumerate(
+                sorted(total_word_freq.keys(), key=lambda w: (-total_word_freq[w], w))
+            ):
+                new_dict.token2id[word] = idx
+                new_dict.dfs[idx] = total_doc_freq[word]
+            new_dict.num_pos = sum(total_word_freq.values())
+            new_dict.num_nnz = sum(total_doc_freq.values())
+            new_dict.filter_extremes(
+                no_below=cfg.dict_min,
+                no_above=cfg.no_above,
+                keep_n=cfg.dict_keep,
+            )
+            new_dict.compactify()
+
+            dict_check["new_dict_terms"] = len(new_dict)
+
+            # Compare token2id mappings
+            mismatches = 0
+            common_words = 0
+            sample_mismatches: list[dict[str, Any]] = []
+            for word in saved_dict.token2id:
+                if word in new_dict.token2id:
+                    common_words += 1
+                    if saved_dict.token2id[word] != new_dict.token2id[word]:
+                        mismatches += 1
+                        if len(sample_mismatches) < 5:
+                            sample_mismatches.append(
+                                {
+                                    "word": word,
+                                    "saved_id": saved_dict.token2id[word],
+                                    "new_id": new_dict.token2id[word],
+                                }
+                            )
+
+            mismatch_rate = mismatches / common_words if common_words > 0 else 0.0
+            dict_check["common_words"] = common_words
+            dict_check["mismatches"] = mismatches
+            dict_check["mismatch_rate"] = round(mismatch_rate, 4)
+            dict_check["sample_mismatches"] = sample_mismatches
+            dict_check["passed"] = mismatch_rate < 0.01  # tolerate <1% drift
+
+            if mismatch_rate >= 0.5:
+                issue = (
+                    f"Dictionary misalignment: {mismatches}/{common_words} "
+                    f"({mismatch_rate:.1%}) token IDs differ between saved "
+                    f"dictionary and freshly built dictionary. This means "
+                    f"training data token IDs don't match embedding matrix "
+                    f"rows, causing incorrect predictions. Re-tokenize with: "
+                    f"python workflows/driver.py tokenize --type new"
+                )
+                critical_issues.append(issue)
+            elif mismatch_rate >= 0.01:
+                warnings.append(
+                    f"Minor dictionary drift: {mismatches}/{common_words} "
+                    f"({mismatch_rate:.1%}) token IDs differ. Consider "
+                    f"re-tokenizing."
+                )
+        else:
+            dict_check["skipped"] = True
+            dict_check["skip_reason"] = f"Raw data not found at {raw_path}"
+            warnings.append("Could not verify dictionary alignment: raw data file not found")
+
+    except Exception as e:
+        dict_check["error"] = str(e)
+        dict_check["passed"] = False
+        critical_issues.append(f"Dictionary check failed: {e}")
+
+    checks["dictionary_alignment"] = dict_check
+
+    # ------------------------------------------------------------------
+    # Check 2: Embedding matrix alignment
+    # ------------------------------------------------------------------
+    # Verify that row k in the embedding matrix corresponds to the word
+    # with token ID k-1 in the dictionary (offset by 1 for padding).
+    # ------------------------------------------------------------------
+    emb_check: dict[str, Any] = {"name": "embedding_alignment"}
+
+    try:
+        saved_dict = corpora.Dictionary.load(dict_path)
+        emb_config = EmbeddingsConfig()
+        embedding_matrix = new_embedding_weights(saved_dict, emb_config)
+
+        expected_shape = (len(saved_dict) + 2, emb_config.emb_length)
+        emb_check["actual_shape"] = embedding_matrix.shape
+        emb_check["expected_shape"] = expected_shape
+        emb_check["shape_matches"] = embedding_matrix.shape == expected_shape
+
+        # Check that row 0 is all zeros (padding)
+        emb_check["padding_row_is_zero"] = bool(np.allclose(embedding_matrix[0], 0.0))
+
+        # Check that the OOV row (last row) is NOT all zeros
+        emb_check["oov_row_is_nonzero"] = bool(not np.allclose(embedding_matrix[-1], 0.0))
+
+        # Spot-check a few words: verify that the embedding for a word
+        # matches the GloVe vector at the correct row
+        test_words = ["the", "good", "bad", "food", "service"]
+        spot_checks: list[dict[str, Any]] = []
+        for word in test_words:
+            if word in saved_dict.token2id:
+                token_id = saved_dict.token2id[word]
+                row_idx = token_id + 1  # offset for padding
+                spot_checks.append(
+                    {
+                        "word": word,
+                        "token_id": token_id,
+                        "row_idx": row_idx,
+                        "row_is_nonzero": bool(not np.allclose(embedding_matrix[row_idx], 0.0)),
+                    }
+                )
+        emb_check["spot_checks"] = spot_checks
+        emb_check["passed"] = emb_check["shape_matches"] and emb_check["padding_row_is_zero"]
+
+        if not emb_check["shape_matches"]:
+            critical_issues.append(
+                f"Embedding matrix shape mismatch: got {embedding_matrix.shape}, "
+                f"expected {expected_shape}. Dictionary and embedding matrix are "
+                f"incompatible."
+            )
+
+    except Exception as e:
+        emb_check["error"] = str(e)
+        emb_check["passed"] = False
+        critical_issues.append(f"Embedding check failed: {e}")
+
+    checks["embedding_alignment"] = emb_check
+
+    # ------------------------------------------------------------------
+    # Check 3: Class balance
+    # ------------------------------------------------------------------
+    balance_check: dict[str, Any] = {"name": "class_balance"}
+
+    try:
+        if Path(processed_path).exists():
+            processed_df = pd.read_parquet(processed_path)
+
+            if "target" in processed_df.columns:
+                target_counts = processed_df["target"].value_counts().to_dict()
+                balance_check["target_counts"] = {str(k): int(v) for k, v in target_counts.items()}
+
+                pos_count = target_counts.get(1.0, target_counts.get(1, 0))
+                neg_count = target_counts.get(0.0, target_counts.get(0, 0))
+                total = pos_count + neg_count
+
+                if total > 0:
+                    pos_ratio = pos_count / total
+                    balance_check["positive_ratio"] = round(pos_ratio, 4)
+                    balance_check["negative_ratio"] = round(1 - pos_ratio, 4)
+                    balance_check["imbalance_ratio"] = (
+                        round(max(pos_count, neg_count) / min(pos_count, neg_count), 2)
+                        if min(pos_count, neg_count) > 0
+                        else float("inf")
+                    )
+
+                    if balance_check["imbalance_ratio"] > 3:
+                        warnings.append(
+                            f"Severe class imbalance: positive={pos_count}, "
+                            f"negative={neg_count}, ratio="
+                            f"{balance_check['imbalance_ratio']}:1. "
+                            f"Consider enabling class balancing or adjusting "
+                            f"pos_weight."
+                        )
+
+                balance_check["passed"] = True
+            else:
+                balance_check["skipped"] = True
+                balance_check["skip_reason"] = "'target' column not found"
+        else:
+            balance_check["skipped"] = True
+            balance_check["skip_reason"] = f"Processed data not found at {processed_path}"
+
+    except Exception as e:
+        balance_check["error"] = str(e)
+        balance_check["passed"] = False
+        warnings.append(f"Class balance check failed: {e}")
+
+    checks["class_balance"] = balance_check
+
+    # ------------------------------------------------------------------
+    # Check 4: Data integrity — token ID range
+    # ------------------------------------------------------------------
+    integrity_check: dict[str, Any] = {"name": "data_integrity"}
+
+    try:
+        if Path(processed_path).exists() and Path(dict_path).exists():
+            processed_df = pd.read_parquet(processed_path)
+            saved_dict = corpora.Dictionary.load(dict_path)
+
+            if "data" in processed_df.columns:
+                max_valid_id = len(saved_dict)  # token IDs are 0..N-1, +1 offset = 1..N
+                oov_id = len(saved_dict) + 1
+
+                # Sample a subset for speed
+                sample = processed_df["data"].iloc[:1000]
+                max_token_id = 0
+                oov_count = 0
+                invalid_count = 0
+
+                for row in sample:
+                    arr = np.asarray(row)
+                    row_max = int(arr.max())
+                    if row_max > max_token_id:
+                        max_token_id = row_max
+                    oov_count += int(np.sum(arr == oov_id))
+                    # Invalid: token ID > oov_id or between max_valid_id+1 and oov_id-1
+                    invalid_count += int(
+                        np.sum((arr > max_valid_id) & (arr != oov_id) & (arr != 0))
+                    )
+
+                integrity_check["max_valid_token_id"] = max_valid_id
+                integrity_check["oov_id"] = oov_id
+                integrity_check["max_token_id_in_data"] = max_token_id
+                integrity_check["oov_count_in_sample"] = oov_count
+                integrity_check["invalid_token_count_in_sample"] = invalid_count
+                integrity_check["passed"] = invalid_count == 0
+
+                if invalid_count > 0:
+                    critical_issues.append(
+                        f"Invalid token IDs in training data: {invalid_count} "
+                        f"tokens exceed valid range (max valid={max_valid_id}, "
+                        f"OOV={oov_id}, found max={max_token_id})"
+                    )
+            else:
+                integrity_check["skipped"] = True
+                integrity_check["skip_reason"] = "'data' column not found"
+        else:
+            integrity_check["skipped"] = True
+            integrity_check["skip_reason"] = "Processed data or dictionary not found"
+
+    except Exception as e:
+        integrity_check["error"] = str(e)
+        integrity_check["passed"] = False
+        warnings.append(f"Data integrity check failed: {e}")
+
+    checks["data_integrity"] = integrity_check
+
+    # ------------------------------------------------------------------
+    # Summary
+    # ------------------------------------------------------------------
+    result = {
+        "has_critical_issues": len(critical_issues) > 0,
+        "critical_issues": critical_issues,
+        "warnings": warnings,
+        "checks": checks,
+    }
+
+    if critical_issues:
+        logger.warning(
+            "diagnostics_found_critical_issues",
+            critical_issues=critical_issues,
+        )
+    if warnings:
+        logger.info(
+            "diagnostics_found_warnings",
+            warnings=warnings,
+        )
+    if not critical_issues and not warnings:
+        logger.info("diagnostics_all_checks_passed")
+
+    return result
 
 
 # ---------------------------------------------------------------------------
