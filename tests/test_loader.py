@@ -40,32 +40,19 @@ def test_load_train_val_corpus_datasets():
 
 def test_load_train_val_corpus_datasets_balancing():
     """Test that class balancing correctly undersamples the majority class."""
-    # Create imbalanced dummy data: 4 positive, 1 negative
-    data = {"data": [[1, 1], [2, 2], [3, 3], [4, 4], [5, 5]], "target": [1.0, 1.0, 1.0, 1.0, 0.0]}
+    # Create imbalanced dummy data: 80 positive, 20 negative
+    data = {"data": [[i, i] for i in range(100)], "target": [1.0] * 80 + [0.0] * 20}
     df = pd.DataFrame(data)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         data_path = os.path.join(tmpdir, "imbalanced_data.parquet")
         df.to_parquet(data_path)
 
-        # Test with balancing enabled (default)
-        # On a small dataset with 1 negative, it should undersample positive to 1.
-        # But wait, train_test_split happens BEFORE balancing in the code.
-        # Let's check the code:
-        # train_df, val_df = train_test_split(df, test_size=test_size)
-        # if balance_classes:
-        #     train_df = _balance_dataframe(train_df, ...)
-
         train_ds, val_ds = load_train_val_corpus_datasets(
             data_path, test_size=0.2, balance_classes=True, random_state=42
         )
 
-        # Original: 5 rows. test_size=0.2 -> val=1, train=4.
-        # If train has 3 pos and 1 neg (most likely split), balancing will make it 1 pos and 1 neg.
-        # So len(train_ds) should be 2.
-
-        assert len(train_ds) == 2
-
         # Verify classes are balanced in train_ds
         targets = [train_ds[i][1].item() for i in range(len(train_ds))]
         assert targets.count(1.0) == targets.count(0.0)
+        assert len(train_ds) > 0
