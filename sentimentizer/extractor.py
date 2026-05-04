@@ -1,7 +1,6 @@
 import tarfile
 import zipfile
 from collections.abc import Generator
-from itertools import islice
 from typing import IO
 
 import numpy as np
@@ -12,7 +11,6 @@ from gensim import downloader as gensim_api
 
 from sentimentizer import new_logger, time_decorator
 from sentimentizer.config import (
-    BATCH_SIZE,
     DEFAULT_LOG_LEVEL,
     EMBEDDING_DTYPE,
     EMBEDDING_RANDOM_MEAN,
@@ -23,16 +21,6 @@ from sentimentizer.config import (
 from sentimentizer.tokenizer import regex_tokenize
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
-
-
-def generate_batch(
-    generator_input: Generator[dict, str, None], iter_size: int
-) -> Generator[tuple[list, int, int], None, None]:
-    for start in range(0, iter_size, BATCH_SIZE):
-        end = min(start + BATCH_SIZE, iter_size)
-        review_dicts: list[dict] = []
-        review_dicts.extend(islice(generator_input, BATCH_SIZE))
-        yield review_dicts, start, end
 
 
 def process_json(json_file: IO[bytes], stop: int = 0) -> Generator:

@@ -9,6 +9,8 @@ DEVICE ?= auto
 MODEL ?= rnn
 # Default number of lines to load
 STOP ?= 300000
+# Default run type (new or update)
+TYPE ?= new
 # Checkpoint directory (empty = no checkpointing)
 CHECKPOINT_DIR ?=
 
@@ -38,42 +40,42 @@ download-data:
 
 ## Train a model (defaults: --model rnn --device auto --stop 10000)
 train:
-	uv run python workflows/driver.py --device $(DEVICE) --model $(MODEL) --type new --stop $(STOP) --save
+	uv run python workflows/driver.py --device $(DEVICE) --model $(MODEL) --type $(TYPE) --stop $(STOP) --save
 
 ## Train RNN model
 train-rnn:
-	uv run python workflows/driver.py --device $(DEVICE) --model rnn --type new --stop $(STOP) --save
+	uv run python workflows/driver.py --device $(DEVICE) --model rnn --type $(TYPE) --stop $(STOP) --save
 
 ## Train Transformer Encoder model (recommended)
 train-encoder:
-	uv run python workflows/driver.py --device $(DEVICE) --model encoder --type new --stop $(STOP) --save
+	uv run python workflows/driver.py --device $(DEVICE) --model encoder --type $(TYPE) --stop $(STOP) --save
 
 ## Train Transformer Decoder model
 train-decoder:
-	uv run python workflows/driver.py --device $(DEVICE) --model decoder --type new --stop $(STOP) --save
+	uv run python workflows/driver.py --device $(DEVICE) --model decoder --type $(TYPE) --stop $(STOP) --save
 
 ## Quick training run with fewer rows for iteration
 train-quick:
-	uv run python workflows/driver.py --device $(DEVICE) --model $(MODEL) --type new --stop 5000 --save
+	uv run python workflows/driver.py --device $(DEVICE) --model $(MODEL) --type $(TYPE) --stop 5000 --save
 
 ## Train with checkpointing enabled (saves to CHECKPOINT_DIR, defaults to checkpoints/)
 train-checkpoint:
-	uv run python workflows/driver.py --device $(DEVICE) --model $(MODEL) --type new --stop $(STOP) \
+	uv run python workflows/driver.py --device $(DEVICE) --model $(MODEL) --type $(TYPE) --stop $(STOP) \
 		--checkpoint-dir $(or $(CHECKPOINT_DIR),checkpoints/) --checkpoint-every 1 --save
 
 ## Resume training from the latest checkpoint
 train-resume:
-	uv run python workflows/driver.py --device $(DEVICE) --model $(MODEL) --type new --stop $(STOP) \
+	uv run python workflows/driver.py --device $(DEVICE) --model $(MODEL) --type $(TYPE) --stop $(STOP) \
 		--checkpoint-dir $(or $(CHECKPOINT_DIR),checkpoints/) --resume --save
 
 ## Distributed training with Ray Train (2 workers by default)
 train-distributed:
-	uv run python workflows/driver.py --device $(DEVICE) --model $(MODEL) --type new --stop $(STOP) \
+	uv run python workflows/driver.py --device $(DEVICE) --model $(MODEL) --type $(TYPE) --stop $(STOP) \
 		--distributed --save
 
 ## Distributed training with custom worker count (usage: make train-dist-workers WORKERS=4)
 train-dist-workers:
-	uv run python workflows/driver.py --device $(DEVICE) --model $(MODEL) --type new --stop $(STOP) \
+	uv run python workflows/driver.py --device $(DEVICE) --model $(MODEL) --type $(TYPE) --stop $(STOP) \
 		--distributed --num-workers $(WORKERS) --save
 
 ## Agent-guided hyperparameter tuning (requires Ollama with glm5.1)
@@ -114,11 +116,11 @@ tune-no-validate:
 
 ## Upload RNN weights to Hugging Face Hub
 upload-rnn:
-	uv run python -c "from sentimentizer.hf import push_model_to_hub; push_model_to_hub('sentimentizer/data/rnn_weights.pth', 'ryeyoo/sentimentizer-rnn', 'rnn')"
+	uv run python -c "from sentimentizer.hf import push_model_to_hub; push_model_to_hub('sentimentizer/data/rnn_weights.pth', 'rnn', 'ryeyoo/sentimentizer-rnn')"
 
 ## Download RNN weights from Hugging Face Hub
 download-rnn:
-	uv run python -c "from sentimentizer.hf import download_weights; download_weights('rnn', 'sentimentizer/data/rnn_weights.pth')"
+	uv run python -c "from sentimentizer.hf import download_weights; download_weights('rnn', 'sentimentizer/data/rnn_weights.pth', 'ryeyoo/sentimentizer-rnn')"
 
 # ──────────────────────────────────────────────
 # Serving
@@ -126,7 +128,7 @@ download-rnn:
 
 ## Start Ray Serve with all three models
 serve:
-	serve run sentimentizer.serve:app --host 0.0.0.0 --port 8000
+	uv run serve run sentimentizer.serve:app --host 0.0.0.0 --port 8000
 
 # ──────────────────────────────────────────────
 # Testing & Linting
@@ -211,7 +213,7 @@ stop-ray:
 	uv run ray stop --force
 
 ## Remove generated data files, checkpoints, and Python caches
-clean:
+clean: stop-ray
 	rm -rf sentimentizer/data/review_data.parquet
 	rm -rf sentimentizer/data/review_data_raw.parquet
 	rm -rf sentimentizer/data/weights.pth
@@ -221,6 +223,15 @@ clean:
 	rm -rf __pycache__/
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name "*.pyc" -delete 2>/dev/null || true
+	@echo "==> Cleaning Ray temporary files..."
+	rm -rf /tmp/ray/*
+	@echo "==> Cleaning Ray Tune results..."
+	rm -rf ~/ray_results/*
+
+## Clean only Ray-related files and logs
+clean-ray: stop-ray
+	rm -rf /tmp/ray/*
+	rm -rf ~/ray_results/*
 
 # Fix NVIDIA driver/library mismatch without rebooting
 gpu-reset:

@@ -12,11 +12,6 @@ external_data = root.parent / "data"  # data/ one level above project root
 
 DEFAULT_LOG_LEVEL = INFO
 
-BATCH_SIZE: int = 100000
-WRITE_BYTES: str = "wb"
-READ_BYTES: str = "rb"
-TEXT_COLUMN: str = "text"
-
 # Embedding constants
 EMBEDDING_DTYPE = np.float32
 EMBEDDING_RANDOM_MEAN: float = 0.0
@@ -43,7 +38,7 @@ def default_epochs(model_type: str) -> int:
     """
     if model_type in ("encoder", "decoder"):
         return 8
-    return 4
+    return 1
 
 
 def default_dataloader_workers(device: str) -> int:

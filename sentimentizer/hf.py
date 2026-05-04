@@ -11,16 +11,26 @@ logger = new_logger(DEFAULT_LOG_LEVEL)
 
 def push_model_to_hub(
     local_path: str | Path,
-    repo_id: str,
     model_type: str,
+    repo_id: str | None = None,
 ) -> None:
     """Upload model weights to the Hugging Face Hub.
 
+    If *repo_id* is provided, it uploads to that repository.
+    Otherwise, it looks up the per-model repository from ``HF_WEIGHTS_REPOS``.
+
     Args:
         local_path: Path to the local .pth weight file.
-        repo_id: Hugging Face repository ID (e.g., 'username/repo').
         model_type: Model type ('rnn', 'encoder', or 'decoder') used for the filename.
+        repo_id: Optional Hugging Face repository ID.
     """
+    if repo_id is None:
+        repo_id = HF_WEIGHTS_REPOS.get(model_type)
+
+    if repo_id is None:
+        logger.error(f"No Hugging Face repo configured for model type {model_type!r}")
+        return
+
     path = Path(local_path)
     if not path.exists():
         logger.error(f"Local weight file not found: {path}")
@@ -103,21 +113,26 @@ def pull_model_from_hub(
         return False
 
 
-def download_weights(model_type: str, local_path: str | Path) -> Path | None:
+def download_weights(
+    model_type: str, local_path: str | Path, repo_id: str | None = None
+) -> Path | None:
     """Download model weights from the Hugging Face Hub.
 
-    Looks up the per-model repository from ``HF_WEIGHTS_REPOS`` and downloads
-    the ``{model_type}_weights.pth`` file to *local_path*.
+    If *repo_id* is provided, it downloads from that repository.
+    Otherwise, it looks up the per-model repository from ``HF_WEIGHTS_REPOS``.
 
     Args:
         model_type: One of 'rnn', 'encoder', or 'decoder'.
         local_path: Destination path on the local filesystem.
+        repo_id: Optional Hugging Face repository ID.
 
     Returns:
         The path to the downloaded weights file, or ``None`` if the download
         failed (e.g. the repo or file doesn't exist, or there is no network).
     """
-    repo_id = HF_WEIGHTS_REPOS.get(model_type)
+    if repo_id is None:
+        repo_id = HF_WEIGHTS_REPOS.get(model_type)
+
     if repo_id is None:
         logger.error(f"No Hugging Face repo configured for model type {model_type!r}")
         return None

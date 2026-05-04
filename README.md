@@ -48,10 +48,10 @@ Each module exposes `get_trained_model(device, model_config=...)` to load pre-tr
 
 ### Ray Serve (Python)
 
-The `serve.py` entry point deploys a Ray Serve application that loads **all three models** (RNN, Encoder, Decoder) at startup. You can select which model to use per request via the `model` field.
+The `sentimentizer/serve.py` entry point deploys a Ray Serve application that loads **all three models** (RNN, Encoder, Decoder) at startup. You can select which model to use per request via the `model` field.
 
 ```bash
-serve run serve:app --host 0.0.0.0 --port 8000
+uv run serve run sentimentizer.serve:app --host 0.0.0.0 --port 8000
 ```
 
 Send a prediction request (defaults to RNN):
@@ -255,11 +255,13 @@ print(f"Resuming from epoch {checkpoint['epoch']}")
 
 ## Hyperparameter Tuning
 
-Sentimentizer offers three ways to tune hyperparameters, each at a different level of automation:
+Sentimentizer offers three ways to tune hyperparameters: **Standalone**, **Iterative Agent**, and **Tuning Skill**. These range from simple one-shot sweeps to LLM-guided iterative search loops with automatic model validation.
 
-| | **Standalone** | **Agent Tuning** | **Tuning Skill** |
+Detailed documentation for all tuning modes, including configuration and CLI usage, can be found in [docs/tuning.md](docs/tuning.md).
+
+| | **Standalone** | **Iterative Agent** | **Tuning Skill (Fixed Workflow)** |
 |---|---|---|---|
-| **What it does** | Single Ray Tune + Optuna search | LLM-guided iterative search loop | Full pipeline: tune → train → validate → retry |
+| **What it does** | Single Ray Tune + Optuna search | LangGraph-guided iterative search loop | High-level pipeline: tune → train → validate → retry |
 | **LLM involved** | ❌ No | ✅ GLM 5.1 via Ollama | ✅ (in agent mode) or ❌ (in standalone mode) |
 | **Iterative** | ❌ One-shot sweep | ✅ Refines search space each iteration | ✅ Refines + validates + retries |
 | **Model validation** | ❌ | ❌ | ✅ Tests predictions on known examples |
@@ -269,250 +271,35 @@ Sentimentizer offers three ways to tune hyperparameters, each at a different lev
 | **CLI flag** | `--tune --tune-mode standalone` | `--agent-tune` | `--tune` (defaults to agent mode) |
 | **When to use** | Quick sweep, no Ollama available | You want LLM-guided search but will handle model training yourself | You want a complete end-to-end pipeline |
 
-### Standalone Tuning
+## Model Synchronization (Hugging Face Hub)
 
-Runs a single Ray Tune + Optuna hyperparameter search with no LLM involvement. Best for quick sweeps or when Ollama is unavailable.
+Sentimentizer integrates with the Hugging Face Hub for robust weight management. Model weights are automatically synchronized between your local environment and the Hub.
 
-```bash
-# Via Makefile
-make tune-standalone
+### Automatic Weight Pulling
 
-# Via CLI
-python workflows/driver.py --model rnn --tune --tune-mode standalone --save
-```
-
-This executes one [`tune_model()`](sentimentizer/tuner.py) call — it searches the space defined in [`sentimentizer/agent/config.yaml`](sentimentizer/agent/config.yaml) and returns the best configuration found. No iterative refinement, no model validation.
-
-#### Output
-
-Returns a dict with the best configuration and metrics from the single search:
-
-| Key | Description |
-|-----|-------------|
-| `best_config` | Best hyperparameter configuration found (e.g., `{"lr": 0.003, "hidden_size": 256}`) |
-| `best_accuracy` | Best validation accuracy across all trials |
-| `best_loss` | Best validation loss across all trials |
-| `best_precision` | Best positive-class precision (TP / (TP + FP)) |
-| `best_recall` | Best positive-class recall (TP / (TP + FN)) |
-| `best_f1` | Best positive-class F1 score |
-| `best_cohen_kappa` | Best Cohen's kappa coefficient |
-| `best_positive_accuracy` | Best accuracy on positive samples |
-| `best_negative_accuracy` | Best accuracy on negative samples |
-| `trial_count` | Number of Ray Tune trials completed |
-
-When run via the Tuning Skill (`--tune --tune-mode standalone`), this is wrapped with model training, validation, and retry logic (see below).
-
-### Agent Tuning
-
-An LLM-guided hyperparameter tuning loop that uses **Pydantic AI Slim** (GLM 5.1 via Ollama) for reasoning, **LangGraph** for workflow orchestration, and **Ray Tune + Optuna** for the search backend. The agent iteratively refines the search space based on results from previous iterations.
-
-#### Architecture
-
-```
-analyze (GLM 5.1) → decide (GLM 5.1) → tune (Ray Tune + Optuna) → evaluate
-     ↑                                                              │
-     └──────────────────────────────────────────────────────────────┘
-                          (loop until converged)
-```
-
-1. **analyze** — GLM 5.1 examines training metrics, detects overfitting/underfitting, assesses learning rate
-2. **decide** — GLM 5.1 chooses a strategy (widen, narrow, change_focus, increase_epochs, stop) and produces a validated `TuningDecision` with an updated search space
-3. **tune** — Ray Tune + Optuna executes the hyperparameter search with ASHA scheduling
-4. **evaluate** — Checks convergence (improvement below threshold for 3 iterations, max iterations reached, or agent decides to stop)
-
-#### Prerequisites
-
-Install [Ollama](https://ollama.ai) and pull the GLM 5.1 model:
+If local weights are missing when you start training or inference, Sentimentizer will automatically attempt to pull them from the configured Hugging Face repository based on the model type (`rnn`, `encoder`, or `decoder`).
 
 ```bash
-ollama pull glm5.1
+# Pull weights manually
+make download-rnn
+
+# Pull via CLI (auto-detects per-model repo)
+python workflows/driver.py --model rnn --pull-from-hub
 ```
 
-#### Output
+### Pushing Weights
 
-The agent returns an [`AgentRunResult`](sentimentizer/agent/models.py) with:
-
-| Field | Description |
-|-------|-------------|
-| `best_config` | Best hyperparameter configuration found (e.g., `{"lr": 0.003, "hidden_size": 256}`) |
-| `best_accuracy` | Best validation accuracy achieved across all iterations |
-| `best_loss` | Best validation loss achieved |
-| `iterations_completed` | Number of agent loop iterations that ran |
-| `converged` | Whether the agent converged before reaching `max_iterations` |
-| `history` | List of [`TuningResult`](sentimentizer/agent/models.py) from each iteration |
-
-The result is always written to `best_config.json`:
-
-```json
-{
-  "best_config": {"lr": 0.003, "hidden_size": 256, "num_layers": 2, "dropout": 0.2},
-  "best_accuracy": 0.89,
-  "best_loss": 0.31,
-  "iterations": 3,
-  "converged": true
-}
-```
-
-> **Note:** Agent tuning (`--agent-tune`) only runs the LLM-guided search loop — it finds the best hyperparameters but does **not** train a final model or validate predictions. To get a trained, validated model, use the Tuning Skill below.
-
-#### Usage
+After a successful training or tuning run, you can push the best weights to the Hub:
 
 ```bash
-# Via Makefile
-make train-agent
+# Push weights manually
+make upload-rnn
 
-# Via CLI
-python workflows/driver.py --model encoder --agent-tune --save
-
-# With a custom agent config
-python workflows/driver.py --model encoder --agent-tune --agent-config path/to/custom.yaml --save
+# Push via CLI
+python workflows/driver.py --model rnn --push-to-hub
 ```
 
-### Tuning Skill
-
-The **Tuning Skill** (`TuningRun` in [`sentimentizer/agent/skill.py`](sentimentizer/agent/skill.py)) is the highest-level tuning interface. It wraps either agent-guided or standalone tuning with additional post-tuning steps:
-
-1. **Tune** — Runs agent-guided (`mode="agent"`) or standalone (`mode="standalone"`) hyperparameter search
-2. **Train** — Trains a final model using the best configuration found (2× default epochs for better convergence)
-3. **Validate** — Tests the trained model against known sentiment examples (e.g., "amazing food great service" → positive, "terrible experience" → negative)
-4. **Retry** — If validation fails (accuracy below threshold), re-tunes with adjusted parameters up to `max_retries` times
-
-```
-┌──────────────────────────────────────────────────┐
-│                Tuning Skill                       │
-│                                                   │
-│  ┌─────────┐    ┌─────────┐    ┌──────────────┐  │
-│  │  Tune    │───▶│  Train  │───▶│  Validate    │  │
-│  │(agent or │    │  final  │    │  predictions │  │
-│  │standalone)│   │  model  │    │  on known    │  │
-│  └─────────┘    └─────────┘    │  examples    │  │
-│       ▲                        └──────┬───────┘  │
-│       │                               │           │
-│       └─────────── retry ────────────┘           │
-│              (if validation fails)                 │
-└──────────────────────────────────────────────────┘
-```
-
-#### Output
-
-Returns a [`TuningRunResult`](sentimentizer/agent/skill.py) with:
-
-| Field | Description |
-|-------|-------------|
-| `best_config` | Best hyperparameter configuration found |
-| `best_accuracy` | Best validation accuracy achieved |
-| `best_loss` | Best validation loss achieved |
-| `best_precision` | Best positive-class precision (TP / (TP + FP)) |
-| `best_recall` | Best positive-class recall (TP / (TP + FN)) |
-| `best_f1` | Best positive-class F1 score |
-| `best_cohen_kappa` | Best Cohen's kappa coefficient |
-| `best_positive_accuracy` | Best accuracy on positive samples |
-| `best_negative_accuracy` | Best accuracy on negative samples |
-| `iterations_completed` | Number of tuning iterations (1 for standalone, variable for agent) |
-| `converged` | Whether the agent converged before max iterations |
-| `model_path` | Path to the saved model weights (`.pth` file) |
-| `results_path` | Path to the saved JSON results file |
-| `validation_passed` | Whether model predictions met the validation threshold |
-| `validation_results` | Per-example validation details (text, expected, score, correct) |
-| `validation_metrics` | Full [`ClassificationMetrics`](sentimentizer/metrics.py) dict from model validation |
-| `retry_count` | Number of re-tuning attempts due to failed validation |
-| `elapsed_seconds` | Wall-clock time for the entire run |
-
-Results are saved to `tuning_results/tuning_results_{model_type}.json`. If validation passes, the best model weights are also copied to the default weights path for serving.
-
-#### Usage
-
-```bash
-# Agent-guided tuning with model validation (recommended, defaults to RNN)
-make tune
-
-# Tune specific models
-make tune-rnn
-make tune-encoder
-make tune-decoder
-
-# Standalone mode (no LLM, single Ray Tune sweep, still validates model)
-make tune-standalone
-
-# Customize the number of trials and agent iterations
-make tune-custom SAMPLES=50 ITERATIONS=10
-
-# Skip model validation
-make tune-no-validate
-```
-
-Via CLI:
-
-```bash
-# Agent-guided skill (default)
-python workflows/driver.py --model rnn --tune --save
-
-# Standalone skill (no LLM)
-python workflows/driver.py --model rnn --tune --tune-mode standalone --save
-
-# Customize trials, iterations, and validation
-python workflows/driver.py --model encoder --tune --save \
-  --tune-samples 50 \
-  --tune-max-iterations 10 \
-  --validation-threshold 0.8 \
-  --max-retries 3
-
-# Skip validation
-python workflows/driver.py --model rnn --tune --no-validate --save
-```
-
-Programmatic API:
-
-```python
-from sentimentizer.agent.skill import TuningRun, TuningRunConfig
-
-# Agent-guided tuning with validation (recommended)
-config = TuningRunConfig(model_type="rnn", mode="agent")
-result = TuningRun(config).execute()
-print(f"Best accuracy: {result.best_accuracy:.4f}")
-print(f"Validation passed: {result.validation_passed}")
-
-# Standalone tuning with validation
-config = TuningRunConfig(model_type="encoder", mode="standalone")
-result = TuningRun(config).execute()
-
-# Quick convenience function
-from sentimentizer.agent.skill import create_tuning_run
-result = create_tuning_run(model_type="rnn", mode="agent")
-```
-
-### Configuration
-
-Agent and tuner settings are defined in [`sentimentizer/agent/config.yaml`](sentimentizer/agent/config.yaml):
-
-```yaml
-agent:
-  model_name: glm5.1                    # Ollama model name
-  ollama_base_url: http://localhost:11434/v1
-  max_iterations: 5                      # Max agent loop iterations
-  convergence_threshold: 0.005           # Stop if avg improvement < threshold over 3 iterations
-  temperature: 0.3                       # LLM sampling temperature
-  max_tokens: 2048                       # Max LLM output tokens
-  checkpointing:
-    enabled: true
-    db_path: agent_checkpoints.db
-  human_in_the_loop: false               # Require human approval (future)
-
-tuner:
-  scheduler: asha                        # asha, hyperband, or median
-  metric: val_accuracy
-  mode: max
-  num_samples: 20                        # Trials per tuning iteration
-  grace_period: 2
-  reduction_factor: 3
-  search_spaces:
-    rnn:
-      lr: { type: loguniform, low: 1e-5, high: 1e-2 }
-      hidden_size: { type: choice, values: [128, 256, 512] }
-      ...
-```
-
-Override the config path via the `SENTIMENTIZER_AGENT_CONFIG` environment variable.
+By default, weights are pushed to model-specific repositories (e.g., `ryeyoo/sentimentizer-rnn`). You can override this using the `--hf-repo` flag.
 
 ## Model Configuration
 
