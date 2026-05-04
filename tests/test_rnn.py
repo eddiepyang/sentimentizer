@@ -7,7 +7,6 @@ import ray
 import torch
 
 from sentimentizer.config import (
-    DEFAULT_LOG_LEVEL,
     DecoderConfig,
     EncoderConfig,
     RNNConfig,
@@ -22,12 +21,9 @@ from sentimentizer.tokenizer import (
     Tokenizer,
     convert_rating,
     get_trained_tokenizer,
-    new_logger,
     regex_tokenize,
 )
 from sentimentizer.trainer import new_ray_trainer, new_trainer
-
-logger = new_logger(DEFAULT_LOG_LEVEL)
 
 
 @pytest.fixture
@@ -171,8 +167,20 @@ class TestGetTrainedTokenizer:
     """tests if model loads"""
 
     def test_success(self):
-        tokenizer = get_trained_tokenizer()
-        assert isinstance(tokenizer, Tokenizer)
+        from unittest.mock import patch
+
+        from gensim import corpora
+
+        # Build a minimal fake dictionary so we don't need the trained file on disk
+        fake_dict = corpora.Dictionary()
+        fake_dict.token2id = {"good": 0, "bad": 1, "the": 2}
+        fake_dict.num_docs = 10
+        fake_dict.num_pos = 100
+        fake_dict.num_nnz = 30
+
+        with patch("sentimentizer.tokenizer.corpora.Dictionary.load", return_value=fake_dict):
+            tokenizer = get_trained_tokenizer()
+            assert isinstance(tokenizer, Tokenizer)
 
     def test_failure(self):
         # todo
@@ -412,7 +420,6 @@ class TestModelConfigs:
         cfg = EncoderConfig(d_model=128, n_heads=2, n_layers=2, ff_multiplier=2)
         emb_weights = torch.zeros(100, 100)
         model = Encoder(
-            input_len=200,
             emb_weights=emb_weights,
             d_model=cfg.d_model,
             n_heads=cfg.n_heads,
@@ -436,7 +443,6 @@ class TestModelConfigs:
         cfg = DecoderConfig(d_model=128, n_heads=2, n_encoder_layers=1, n_decoder_layers=2)
         emb_weights = torch.zeros(100, 100)
         model = Decoder(
-            input_len=200,
             emb_weights=emb_weights,
             d_model=cfg.d_model,
             n_heads=cfg.n_heads,

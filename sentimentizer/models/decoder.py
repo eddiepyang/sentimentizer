@@ -63,7 +63,6 @@ class Decoder(nn.Module):
 
     def __init__(
         self,
-        input_len: int,
         emb_weights: torch.Tensor,
         d_model: int = DecoderConfig.d_model,
         n_heads: int = DecoderConfig.n_heads,
@@ -202,13 +201,13 @@ def new_model(
         input_len: Maximum sequence length
         model_config: Decoder architecture configuration (defaults from DecoderConfig)
     """
+
     dict_yelp = corpora.Dictionary.load(dict_path)
     embedding_matrix = new_embedding_weights(dict_yelp, embeddings_config)
     emb_t = torch.from_numpy(embedding_matrix)
     model = Decoder(
         d_model=model_config.d_model,
         n_heads=model_config.n_heads,
-        input_len=input_len,
         emb_weights=emb_t,
         n_encoder_layers=model_config.n_encoder_layers,
         n_decoder_layers=model_config.n_decoder_layers,
@@ -221,7 +220,6 @@ def new_model(
 def get_trained_model(
     device: str,
     model_config: DecoderConfig = _DEFAULT_DECODER_CONFIG,
-    input_len: int = 200,
 ) -> Decoder:
     """Load a pre-trained Decoder model from saved weights.
 
@@ -231,7 +229,6 @@ def get_trained_model(
     Args:
         device: Device to load weights onto ("cpu", "cuda", or "mps")
         model_config: Decoder architecture configuration (must match saved weights)
-        input_len: Maximum sequence length (defaults to 200)
 
     Returns:
         Decoder model with loaded weights
@@ -268,7 +265,6 @@ def get_trained_model(
     model = Decoder(
         d_model=d_model,
         n_heads=model_config.n_heads,
-        input_len=input_len,
         emb_weights=empty_embeddings,
         n_encoder_layers=model_config.n_encoder_layers,
         n_decoder_layers=model_config.n_decoder_layers,

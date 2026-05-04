@@ -230,7 +230,7 @@ class TestGetTrainedModelHFDownload:
 
         # Create fake weights that match the Encoder architecture
         emb_weights = torch.zeros(100, 100)
-        model = Encoder(input_len=200, emb_weights=emb_weights)
+        model = Encoder(emb_weights=emb_weights)
         fake_state_dict = model.state_dict()
 
         with (
@@ -254,7 +254,7 @@ class TestGetTrainedModelHFDownload:
 
         # Create fake weights that match the Decoder architecture
         emb_weights = torch.zeros(100, 100)
-        model = Decoder(input_len=200, emb_weights=emb_weights)
+        model = Decoder(emb_weights=emb_weights)
         fake_state_dict = model.state_dict()
 
         with (

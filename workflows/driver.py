@@ -221,6 +221,15 @@ def new_parser() -> argparse.Namespace:
         help="pull model weights from Hugging Face Hub before running",
     )
     parser.add_argument(
+        "--diagnose",
+        action="store_true",
+        default=False,
+        help=(
+            "run diagnostic checks on the training pipeline (dictionary alignment, "
+            "embedding matrix, class balance, data integrity)"
+        ),
+    )
+    parser.add_argument(
         "--hf-repo",
         type=str,
         default=DriverConfig.hf.repo_id,
@@ -269,6 +278,12 @@ def _load_model(args: argparse.Namespace) -> torch.nn.Module:
         from sentimentizer.models.decoder import get_trained_model, new_model
     else:
         raise ValueError(f"no matching model for {args.model}")
+
+    if not Path(DriverConfig.files.dictionary_file_path).exists():
+        raise FileNotFoundError(
+            f"Dictionary file not found at {DriverConfig.files.dictionary_file_path}. "
+            "Ensure the tokenization step completed successfully before loading the model."
+        )
 
     if args.type == "new":
         model = new_model(
@@ -340,24 +355,41 @@ def run_extract(args: argparse.Namespace) -> None:
 
 
 def run_tokenize(args: argparse.Namespace) -> None:
-    # Skip tokenization if the processed parquet already has enough rows
-    existing_rows = _parquet_row_count(DriverConfig.files.processed_reviews_file_path)
-    if existing_rows >= args.stop:
-        logger.info(f"skipping tokenize: {existing_rows} rows already exist (need {args.stop})")
-        return
-
-    reviews_data = ray.data.read_parquet(DriverConfig.files.raw_reviews_file_path)
+    # For 'new' runs, always (re)create the dictionary and re-tokenize the
+    # data.  This guarantees the dictionary file exists on disk (needed by
+    # new_model) and that token IDs in the processed data are consistent
+    # with the dictionary.  Skipping is only safe for update/resume runs
+    # where the dictionary already exists.
     if args.type == "new":
+        reviews_data = ray.data.read_parquet(DriverConfig.files.raw_reviews_file_path)
         tokenizer = Tokenizer.from_dataset(reviews_data)
-    elif args.type == "update":
+
+        processed_ds = tokenizer.transform_dataset(reviews_data)
+        _remove_path(DriverConfig.files.processed_reviews_file_path)
+        processed_ds.write_parquet(DriverConfig.files.processed_reviews_file_path)
+    elif args.resume or args.type == "update":
+        # Skip tokenization if the processed parquet already has enough rows
+        existing_rows = _parquet_row_count(DriverConfig.files.processed_reviews_file_path)
+        if existing_rows >= args.stop:
+            logger.info(f"skipping tokenize: {existing_rows} rows already exist (need {args.stop})")
+            return
+
+        reviews_data = ray.data.read_parquet(DriverConfig.files.raw_reviews_file_path)
+        # Load existing dictionary for checkpoint runs or update runs
         dictionary = corpora.Dictionary.load(DriverConfig.files.dictionary_file_path)
         tokenizer = Tokenizer(dictionary=dictionary)
+        if args.resume:
+            logger.info(
+                f"resuming from checkpoint: updating dictionary from "
+                f"{DriverConfig.files.dictionary_file_path}"
+            )
+            tokenizer.update_from_dataset(reviews_data)
+
+        processed_ds = tokenizer.transform_dataset(reviews_data)
+        _remove_path(DriverConfig.files.processed_reviews_file_path)
+        processed_ds.write_parquet(DriverConfig.files.processed_reviews_file_path)
     else:
         raise RunTypeError
-
-    processed_ds = tokenizer.transform_dataset(reviews_data)
-    _remove_path(DriverConfig.files.processed_reviews_file_path)
-    processed_ds.write_parquet(DriverConfig.files.processed_reviews_file_path)
 
 
 def run_fit(args: argparse.Namespace) -> None:
@@ -371,7 +403,7 @@ def _run_fit_single(args: argparse.Namespace) -> None:
     """Single-node training using the existing Trainer class."""
     balance_classes = not args.no_balance_classes
     train_dataset, val_dataset = load_train_val_corpus_datasets(
-        DriverConfig.files.processed_reviews_file_path,
+        data_path=DriverConfig.files.processed_reviews_file_path,
         balance_classes=balance_classes,
         random_state=args.balance_seed,
     )
@@ -434,10 +466,13 @@ def _run_fit_single(args: argparse.Namespace) -> None:
         if args.push_to_hub:
             from sentimentizer.hf import push_model_to_hub
 
+            # Use provided repo if it's not the default placeholder
+            repo_id = args.hf_repo if args.hf_repo != DriverConfig.hf.repo_id else None
+
             push_model_to_hub(
                 local_path=weights_path,
-                repo_id=args.hf_repo,
                 model_type=args.model,
+                repo_id=repo_id,
             )
 
 
@@ -513,10 +548,13 @@ def _run_fit_distributed(args: argparse.Namespace) -> None:
         if args.push_to_hub:
             from sentimentizer.hf import push_model_to_hub
 
+            # Use provided repo if it's not the default placeholder
+            repo_id = args.hf_repo if args.hf_repo != DriverConfig.hf.repo_id else None
+
             push_model_to_hub(
                 local_path=weights_path,
-                repo_id=args.hf_repo,
                 model_type=args.model,
+                repo_id=repo_id,
             )
 
 
@@ -644,24 +682,98 @@ def run_tune(args: argparse.Namespace) -> None:
         )
 
 
+def run_diagnose(args: argparse.Namespace) -> None:
+    """Run diagnostic checks on the training pipeline.
+
+    Checks for common issues that cause incorrect predictions:
+    - Dictionary alignment between tokenization and embedding matrix
+    - Embedding matrix row alignment with dictionary token IDs
+    - Class balance in training data
+    - Data integrity (token ID range validity)
+    """
+    import json
+
+    from sentimentizer.agent.skill import diagnose_training_issues
+
+    logger.info("running_diagnostics", model_type=args.model)
+    result = diagnose_training_issues(model_type=args.model)
+
+    # Print human-readable summary
+    print("\n" + "=" * 60)
+    print("TRAINING PIPELINE DIAGNOSTICS")
+    print("=" * 60)
+
+    for check_name, check in result["checks"].items():
+        status = (
+            "PASS" if check.get("passed", False) else ("SKIP" if check.get("skipped") else "FAIL")
+        )
+        print(f"\n  [{status}] {check_name}")
+        if "mismatch_rate" in check:
+            print(
+                f"    Mismatch rate: {check['mismatch_rate']:.1%} "
+                f"({check.get('mismatches', '?')}/"
+                f"{check.get('common_words', '?')} words)"
+            )
+        if "shape_matches" in check:
+            print(
+                f"    Shape matches: {check['shape_matches']} "
+                f"(actual={check.get('actual_shape')}, "
+                f"expected={check.get('expected_shape')})"
+            )
+        if "imbalance_ratio" in check:
+            print(f"    Class imbalance ratio: {check['imbalance_ratio']}:1")
+        if "invalid_token_count_in_sample" in check:
+            print(f"    Invalid tokens in sample: {check['invalid_token_count_in_sample']}")
+        if check.get("skipped"):
+            print(f"    Skipped: {check.get('skip_reason', 'unknown')}")
+
+    if result["critical_issues"]:
+        print("\n  CRITICAL ISSUES:")
+        for issue in result["critical_issues"]:
+            print(f"    - {issue}")
+    if result["warnings"]:
+        print("\n  WARNINGS:")
+        for warning in result["warnings"]:
+            print(f"    - {warning}")
+    if not result["critical_issues"] and not result["warnings"]:
+        print("\n  All checks passed. No issues detected.")
+
+    print("=" * 60 + "\n")
+
+    # Also save full results as JSON
+    diagnostics_path = "diagnostics_results.json"
+    with open(diagnostics_path, "w") as f:
+        json.dump(result, f, indent=2, default=str)
+    logger.info(f"diagnostics_saved_to_{diagnostics_path}")
+
+
 @time_decorator
 def main() -> None:
     args = new_parser()
 
     if args.pull_from_hub:
+        from sentimentizer.config import DriverConfig
         from sentimentizer.hf import download_weights
 
         weights_path = weights_path_for(args.model)
-        # download_weights uses HF_WEIGHTS_REPOS mapping from config
+        # Use provided repo if it's not the default placeholder
+        repo_id = args.hf_repo if args.hf_repo != DriverConfig.hf.repo_id else None
+
         result_path = download_weights(
             model_type=args.model,
             local_path=weights_path,
+            repo_id=repo_id,
         )
         if result_path:
             logger.info(f"Pulled {args.model} weights from HF Hub. Forcing run type to 'update'.")
             args.type = "update"
         else:
             logger.error("Failed to pull weights from HF Hub. Proceeding with original run type.")
+
+    # Diagnostics don't need Ray — run before initializing the cluster
+    if args.diagnose:
+        run_diagnose(args)
+        return
 
     # Initialize Ray with a fixed metrics export port so Prometheus can scrape it.
     # The port must match metrics/prometheus.yml target (host.docker.internal:8080).

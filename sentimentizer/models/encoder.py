@@ -73,7 +73,6 @@ class Encoder(nn.Module):
 
     def __init__(
         self,
-        input_len: int,
         emb_weights: torch.Tensor,
         d_model: int = EncoderConfig.d_model,
         n_heads: int = EncoderConfig.n_heads,
@@ -204,7 +203,6 @@ def new_model(
     model = Encoder(
         d_model=model_config.d_model,
         n_heads=model_config.n_heads,
-        input_len=input_len,
         emb_weights=emb_t,
         n_layers=model_config.n_layers,
         dropout=model_config.dropout,
@@ -216,7 +214,6 @@ def new_model(
 def get_trained_model(
     device: str,
     model_config: EncoderConfig = _DEFAULT_ENCODER_CONFIG,
-    input_len: int = 200,
 ) -> Encoder:
     """Load a pre-trained Encoder model from saved weights.
 
@@ -226,7 +223,6 @@ def get_trained_model(
     Args:
         device: Device to load weights onto ("cpu", "cuda", or "mps")
         model_config: Encoder architecture configuration (must match saved weights)
-        input_len: Maximum sequence length (defaults to 200)
 
     Returns:
         Encoder model with loaded weights
@@ -263,7 +259,6 @@ def get_trained_model(
     model = Encoder(
         d_model=d_model,
         n_heads=model_config.n_heads,
-        input_len=input_len,
         emb_weights=empty_embeddings,
         n_layers=model_config.n_layers,
         dropout=model_config.dropout,
