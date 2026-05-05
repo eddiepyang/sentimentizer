@@ -13,8 +13,9 @@ def push_model_to_hub(
     local_path: str | Path,
     model_type: str,
     repo_id: str | None = None,
+    dict_path: str | Path | None = None,
 ) -> None:
-    """Upload model weights to the Hugging Face Hub.
+    """Upload model weights and optionally the dictionary to the Hugging Face Hub.
 
     If *repo_id* is provided, it uploads to that repository.
     Otherwise, it looks up the per-model repository from ``HF_WEIGHTS_REPOS``.
@@ -23,6 +24,7 @@ def push_model_to_hub(
         local_path: Path to the local .pth weight file.
         model_type: Model type ('rnn', 'encoder', or 'decoder') used for the filename.
         repo_id: Optional Hugging Face repository ID.
+        dict_path: Optional path to the dictionary file to also upload.
     """
     if repo_id is None:
         repo_id = HF_WEIGHTS_REPOS.get(model_type)
@@ -48,6 +50,21 @@ def push_model_to_hub(
             commit_message=f"Update {model_type} weights",
         )
         logger.info(f"Successfully pushed weights to {repo_id}/{filename}")
+
+        if dict_path is not None:
+            dict_file = Path(dict_path)
+            if dict_file.exists():
+                logger.info(f"Pushing dictionary to Hugging Face Hub: {repo_id}...")
+                api.upload_file(
+                    path_or_fileobj=str(dict_file),
+                    path_in_repo=dict_file.name,
+                    repo_id=repo_id,
+                    commit_message=f"Update dictionary for {model_type}",
+                )
+                logger.info(f"Successfully pushed dictionary to {repo_id}/{dict_file.name}")
+            else:
+                logger.error(f"Dictionary file not found: {dict_file}")
+
     except Exception as e:
         # Check if error is because repo doesn't exist
         if "Repository Not Found" in str(e) or "404 Client Error" in str(e):
@@ -62,6 +79,18 @@ def push_model_to_hub(
                     commit_message=f"Initial {model_type} weights upload",
                 )
                 logger.info(f"Successfully created repo and pushed weights to {repo_id}/{filename}")
+
+                if dict_path is not None:
+                    dict_file = Path(dict_path)
+                    if dict_file.exists():
+                        api.upload_file(
+                            path_or_fileobj=str(dict_file),
+                            path_in_repo=dict_file.name,
+                            repo_id=repo_id,
+                            commit_message=f"Initial dictionary upload for {model_type}",
+                        )
+                        logger.info(f"Successfully pushed dictionary to {repo_id}/{dict_file.name}")
+
                 return
             except Exception as create_error:
                 logger.error(f"Failed to create repository or retry upload: {create_error}")
@@ -74,16 +103,18 @@ def pull_model_from_hub(
     repo_id: str,
     model_type: str,
     local_path: str | Path,
+    dict_path: str | Path | None = None,
 ) -> bool:
-    """Download model weights from the Hugging Face Hub.
+    """Download model weights and optionally the dictionary from the Hugging Face Hub.
 
     Args:
         repo_id: Hugging Face repository ID (e.g., 'username/repo').
         model_type: Model type ('rnn', 'encoder', or 'decoder') used for the filename.
         local_path: Local path where the weights should be saved.
+        dict_path: Optional local path where the dictionary should be saved.
 
     Returns:
-        True if the download was successful, False otherwise.
+        True if the weight download was successful, False otherwise.
     """
     filename = f"{model_type}_weights.pth"
     local_path = Path(local_path)
@@ -104,6 +135,25 @@ def pull_model_from_hub(
         shutil.copy(downloaded_path, local_path)
 
         logger.info(f"Successfully pulled weights to {local_path}")
+
+        if dict_path is not None:
+            dict_file = Path(dict_path)
+            try:
+                logger.info(f"Pulling dictionary from Hugging Face Hub: {repo_id}...")
+                downloaded_dict = hf_hub_download(
+                    repo_id=repo_id,
+                    filename=dict_file.name,
+                )
+                dict_file.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy(downloaded_dict, dict_file)
+                logger.info(f"Successfully pulled dictionary to {dict_file}")
+            except EntryNotFoundError:
+                logger.warning(
+                    f"Dictionary file {dict_file.name} not found in repository {repo_id}"
+                )
+            except Exception as e:
+                logger.error(f"Failed to pull dictionary from Hugging Face Hub: {e}")
+
         return True
     except EntryNotFoundError:
         logger.warning(f"Weights file {filename} not found in repository {repo_id}")
@@ -114,9 +164,12 @@ def pull_model_from_hub(
 
 
 def download_weights(
-    model_type: str, local_path: str | Path, repo_id: str | None = None
+    model_type: str,
+    local_path: str | Path,
+    repo_id: str | None = None,
+    dict_path: str | Path | None = None,
 ) -> Path | None:
-    """Download model weights from the Hugging Face Hub.
+    """Download model weights and optionally the dictionary from the Hugging Face Hub.
 
     If *repo_id* is provided, it downloads from that repository.
     Otherwise, it looks up the per-model repository from ``HF_WEIGHTS_REPOS``.
@@ -125,6 +178,7 @@ def download_weights(
         model_type: One of 'rnn', 'encoder', or 'decoder'.
         local_path: Destination path on the local filesystem.
         repo_id: Optional Hugging Face repository ID.
+        dict_path: Optional destination path for the dictionary on the local filesystem.
 
     Returns:
         The path to the downloaded weights file, or ``None`` if the download
@@ -155,6 +209,23 @@ def download_weights(
 
         shutil.copy2(downloaded_path, local_path)
         logger.info(f"Weights downloaded to {local_path}")
+
+        if dict_path is not None:
+            dict_file = Path(dict_path)
+            try:
+                logger.info(f"Downloading dictionary from {repo_id} ...")
+                downloaded_dict = hf_hub_download(
+                    repo_id=repo_id,
+                    filename=dict_file.name,
+                )
+                dict_file.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(downloaded_dict, dict_file)
+                logger.info(f"Dictionary downloaded to {dict_file}")
+            except EntryNotFoundError:
+                logger.warning(f"Dictionary file {dict_file.name} not found in {repo_id}")
+            except Exception as e:
+                logger.error(f"Failed to download dictionary from Hugging Face Hub: {e}")
+
         return local_path
 
     except EntryNotFoundError:

@@ -27,6 +27,155 @@ logger = new_logger(DEFAULT_LOG_LEVEL)
 
 
 # ---------------------------------------------------------------------------
+# Prometheus callback for Ray Tune
+# ---------------------------------------------------------------------------
+
+
+class TunePrometheusCallback:
+    """Ray Tune callback that pushes trial metrics to Prometheus gauges.
+
+    This callback updates the ``sentimentizer_tune_*`` Prometheus gauges
+    defined in ``sentimentizer/exporter.py`` so that Grafana can display
+    real-time tuning progress alongside system and Ray metrics.
+
+    Usage::
+
+        from sentimentizer.tuner import TunePrometheusCallback
+
+        callback = TunePrometheusCallback(model_type="rnn")
+        result = tune.Tuner(
+            ...,
+            run_config=RunConfig(callbacks=[callback]),
+        ).fit()
+    """
+
+    def __init__(self, model_type: str) -> None:
+        self.model_type = model_type
+        self._completed_trials: int = 0
+        self._total_trials: int = 0
+        self._best_accuracy: float = 0.0
+        self._best_loss: float = float("inf")
+        self._best_f1: float = 0.0
+
+    def _update_trial_gauges(self, trial_id: str, metrics: dict) -> None:
+        """Push per-trial metrics to Prometheus gauges."""
+        try:
+            from sentimentizer.exporter import (
+                TUNE_TRIAL_COMPLETED_COUNT,
+                TUNE_TRIAL_COUNT,
+                TUNE_TRIAL_EPOCH,
+                TUNE_TRIAL_NEGATIVE_ACCURACY,
+                TUNE_TRIAL_POSITIVE_ACCURACY,
+                TUNE_TRIAL_TRAIN_LOSS,
+                TUNE_TRIAL_VAL_ACCURACY,
+                TUNE_TRIAL_VAL_COHEN_KAPPA,
+                TUNE_TRIAL_VAL_F1,
+                TUNE_TRIAL_VAL_LOSS,
+                TUNE_TRIAL_VAL_PRECISION,
+                TUNE_TRIAL_VAL_RECALL,
+            )
+
+            TUNE_TRIAL_VAL_ACCURACY.labels(trial_id=trial_id, model_type=self.model_type).set(
+                metrics.get("val_accuracy", 0.0)
+            )
+            TUNE_TRIAL_VAL_LOSS.labels(trial_id=trial_id, model_type=self.model_type).set(
+                metrics.get("val_loss", float("inf"))
+            )
+            TUNE_TRIAL_TRAIN_LOSS.labels(trial_id=trial_id, model_type=self.model_type).set(
+                metrics.get("train_loss", 0.0)
+            )
+            TUNE_TRIAL_VAL_F1.labels(trial_id=trial_id, model_type=self.model_type).set(
+                metrics.get("val_f1", 0.0)
+            )
+            TUNE_TRIAL_VAL_COHEN_KAPPA.labels(trial_id=trial_id, model_type=self.model_type).set(
+                metrics.get("val_cohen_kappa", 0.0)
+            )
+            TUNE_TRIAL_VAL_PRECISION.labels(trial_id=trial_id, model_type=self.model_type).set(
+                metrics.get("val_precision", 0.0)
+            )
+            TUNE_TRIAL_VAL_RECALL.labels(trial_id=trial_id, model_type=self.model_type).set(
+                metrics.get("val_recall", 0.0)
+            )
+            TUNE_TRIAL_POSITIVE_ACCURACY.labels(trial_id=trial_id, model_type=self.model_type).set(
+                metrics.get("val_positive_accuracy", 0.0)
+            )
+            TUNE_TRIAL_NEGATIVE_ACCURACY.labels(trial_id=trial_id, model_type=self.model_type).set(
+                metrics.get("val_negative_accuracy", 0.0)
+            )
+            TUNE_TRIAL_EPOCH.labels(trial_id=trial_id, model_type=self.model_type).set(
+                metrics.get("epoch", 0)
+            )
+
+            # Track best metrics across trials
+            val_accuracy = metrics.get("val_accuracy", 0.0)
+            val_loss = metrics.get("val_loss", float("inf"))
+            val_f1 = metrics.get("val_f1", 0.0)
+
+            if val_accuracy > self._best_accuracy:
+                self._best_accuracy = val_accuracy
+                from sentimentizer.exporter import TUNE_BEST_VAL_ACCURACY
+
+                TUNE_BEST_VAL_ACCURACY.labels(model_type=self.model_type).set(self._best_accuracy)
+
+            if val_loss < self._best_loss:
+                self._best_loss = val_loss
+                from sentimentizer.exporter import TUNE_BEST_VAL_LOSS
+
+                TUNE_BEST_VAL_LOSS.labels(model_type=self.model_type).set(self._best_loss)
+
+            if val_f1 > self._best_f1:
+                self._best_f1 = val_f1
+                from sentimentizer.exporter import TUNE_BEST_VAL_F1
+
+                TUNE_BEST_VAL_F1.labels(model_type=self.model_type).set(self._best_f1)
+
+            TUNE_TRIAL_COUNT.labels(model_type=self.model_type).set(self._total_trials)
+            TUNE_TRIAL_COMPLETED_COUNT.labels(model_type=self.model_type).set(
+                self._completed_trials
+            )
+
+        except ImportError:
+            logger.warning(
+                "prometheus_client_not_available", message="Cannot push tune metrics to Prometheus"
+            )
+
+    # Ray Tune callback interface methods
+    def on_trial_result(
+        self,
+        iteration: int,
+        trials: list,
+        trial: Any,
+        result: dict,
+        **kwargs: Any,
+    ) -> None:
+        """Called after each trial reports intermediate results."""
+        trial_id = trial if isinstance(trial, str) else str(trial)
+        self._update_trial_gauges(trial_id, result)
+
+    def on_trial_complete(self, iteration: int, trials: list, trial: Any, **kwargs: Any) -> None:
+        """Called when a trial completes."""
+        self._completed_trials += 1
+        try:
+            from sentimentizer.exporter import TUNE_TRIAL_COMPLETED_COUNT
+
+            TUNE_TRIAL_COMPLETED_COUNT.labels(model_type=self.model_type).set(
+                self._completed_trials
+            )
+        except ImportError:
+            pass
+
+    def on_trial_start(self, iteration: int, trials: list, trial: Any, **kwargs: Any) -> None:
+        """Called when a trial starts."""
+        self._total_trials = len(trials) if trials else 0
+        try:
+            from sentimentizer.exporter import TUNE_TRIAL_COUNT
+
+            TUNE_TRIAL_COUNT.labels(model_type=self.model_type).set(self._total_trials)
+        except ImportError:
+            pass
+
+
+# ---------------------------------------------------------------------------
 # Configuration dataclasses
 # ---------------------------------------------------------------------------
 
@@ -367,7 +516,7 @@ def tune_model(
     tuner_config: TunerConfig | None = None,
     search_space_overrides: dict[str, dict[str, Any]] | None = None,
     config_path: str | Path | None = None,
-    balance_classes: bool = True,
+    balance_classes: bool = False,
     balance_seed: int = 42,
     pos_weight: float = 1.0,
 ) -> dict[str, Any]:
@@ -460,6 +609,13 @@ def tune_model(
 
     _check_memory_for_workers(num_workers=4)
 
+    # Start a Prometheus metrics server on port 8082 so that
+    # the tune gauges in exporter.py are scrapable by Prometheus.
+    # Port 8081 is used by the standalone exporter; we use 8082
+    # here to avoid conflicts when both are running.
+    prom_callback = TunePrometheusCallback(model_type=model_type)
+    _ensure_prometheus_server(port=8082)
+
     result = tune.Tuner(
         tune.with_resources(
             tune.with_parameters(
@@ -479,10 +635,14 @@ def tune_model(
         run_config=RunConfig(
             progress_reporter=reporter,
             name=f"sentimentizer_{model_type}_tune",
+            callbacks=[prom_callback],
         ),
     ).fit()
 
-    best_result = result.get_best_result()
+    best_result = result.get_best_result(
+        metric=tuner_config.metric,
+        mode=tuner_config.mode,
+    )
     best_config = best_result.config
     best_metrics = best_result.metrics
 
@@ -532,6 +692,44 @@ def tune_model(
     )
 
     return output
+
+
+# Track whether we've already started a Prometheus server to avoid
+# "Address already in use" errors when tune_model is called more
+# than once in the same process.
+_prometheus_server_started: bool = False
+
+
+def _ensure_prometheus_server(port: int = 8082) -> None:
+    """Start a prometheus_client HTTP server for tune metrics if not running.
+
+    This is called by ``tune_model`` so that the ``sentimentizer_tune_*``
+    gauges are scrapable by Prometheus while tuning is in progress.
+    It uses a module-level flag to ensure the server is started at most once.
+    """
+    global _prometheus_server_started
+    if _prometheus_server_started:
+        logger.info("prometheus_server_already_running", port=port)
+        return
+    try:
+        from prometheus_client import start_http_server
+
+        start_http_server(port)
+        _prometheus_server_started = True
+        logger.info(
+            "prometheus_server_started",
+            port=port,
+            message="Tune metrics available for Prometheus scraping",
+        )
+    except OSError as exc:
+        # Port already in use — most likely the standalone exporter
+        # is running on 8081, or a previous tune run started 8082.
+        logger.warning("prometheus_server_port_in_use", port=port, error=str(exc))
+    except ImportError:
+        logger.warning(
+            "prometheus_client_not_available",
+            message="Cannot start Prometheus server for tune metrics",
+        )
 
 
 def _gpu_available() -> bool:

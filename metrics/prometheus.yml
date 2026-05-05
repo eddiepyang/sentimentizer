@@ -12,3 +12,9 @@ scrape_configs:
     # Scrape Sentimentizer application metrics (system, GPU, Ray health)
     static_configs:
       - targets: ['host.docker.internal:8081']
+
+  - job_name: 'sentimentizer-tune'
+    # Scrape Sentimentizer Ray Tune trial metrics (accuracy, loss, F1, etc.)
+    # This port is started automatically by tune_model() during tuning runs.
+    static_configs:
+      - targets: ['host.docker.internal:8082']

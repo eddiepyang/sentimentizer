@@ -106,6 +106,11 @@ tune-decoder:
 tune-standalone:
 	uv run python workflows/driver.py --model $(MODEL) --tune --tune-mode standalone --save
 
+## Quick tuning test with tiny dataset and few trials
+## Usage: make tune-test MODEL=rnn STOP=100 SAMPLES=2
+tune-test:
+	uv run python workflows/driver.py --model $(MODEL) --tune --tune-mode standalone --stop $(STOP) --tune-samples $(SAMPLES) --no-validate --save
+
 ## Run tuning skill with custom samples and iterations (usage: make tune-custom SAMPLES=50 ITERATIONS=10)
 tune-custom:
 	uv run python workflows/driver.py --model $(MODEL) --tune --tune-samples $(SAMPLES) --tune-max-iterations $(ITERATIONS) --save

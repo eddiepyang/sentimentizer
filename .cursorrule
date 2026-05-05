@@ -3,6 +3,10 @@
     {
       "pattern": ".*",
       "instruction": "Whenever executing python tools (like `pytest`, `ruff`, `black`, `serve` or `python` scripts), always prefix it with `uv run`, like `uv run pytest` or `uv run python workflows/driver.py`. Refer to `CLAUDE.md` for Ray APIs and coding standards."
+    },
+    {
+      "pattern": ".*",
+      "instruction": "Always run `make check` and `make test` after making code changes, and fix any tests or checks that fail."
     }
   ]
 }
