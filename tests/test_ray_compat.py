@@ -386,3 +386,49 @@ class TestRayTrainContext:
         # Verify it's a module-level function, not a method on get_context()
         with pytest.raises(RuntimeError):
             train.get_context()  # raises outside worker
+
+
+# ─── Ray Tune get_best_result Guard ──────────────────────────────────
+
+
+class TestTuneGetBestResult:
+    """Guard against calling result.get_best_result() without metric/mode args.
+
+    Ray Tune 2.55+ requires metric and mode to be explicitly passed to
+    get_best_result() when they are not set in TuneConfig. Failure to
+    do so raises: ValueError: No metric is provided.
+    """
+
+    def test_get_best_result_requires_metric_arg(self) -> None:
+        """result.get_best_result() must receive metric arg to avoid ValueError."""
+        from unittest.mock import MagicMock
+
+        from ray.tune import ResultGrid
+
+        # Simulate a ResultGrid without metric in TuneConfig
+        mock_result = MagicMock(spec=ResultGrid)
+        mock_result.get_best_result.side_effect = ValueError("No metric is provided")
+
+        with pytest.raises(ValueError, match="No metric is provided"):
+            mock_result.get_best_result()
+
+        # Verify that passing metric and mode succeeds
+        mock_result.get_best_result.side_effect = None
+        mock_result.get_best_result.return_value = MagicMock(
+            config={"lr": 0.001}, metrics={"val_accuracy": 0.95}
+        )
+
+        best = mock_result.get_best_result(metric="val_accuracy", mode="max")
+        assert best.metrics["val_accuracy"] == 0.95
+
+    def test_tuner_config_passes_metric_to_get_best_result(self) -> None:
+        """The tune_model function must pass TunerConfig.metric/mode to get_best_result()."""
+        import inspect
+
+        from sentimentizer.tuner import tune_model
+
+        source = inspect.getsource(tune_model)
+        # Ensure get_best_result is called with metric= and mode= keyword args
+        assert "result.get_best_result(" in source
+        assert "metric=tuner_config.metric" in source
+        assert "mode=tuner_config.mode" in source

@@ -182,7 +182,7 @@ class TestGetTrainedModelHFDownload:
 
     def test_rnn_downloads_from_hub_when_local_missing(self) -> None:
         """RNN get_trained_model downloads from HF Hub when local file missing."""
-        from unittest.mock import patch
+        from unittest.mock import ANY, patch
 
         import torch
 
@@ -205,7 +205,9 @@ class TestGetTrainedModelHFDownload:
 
             model = get_trained_model("cpu")
             assert isinstance(model, RNN)
-            mock_download.assert_called_once_with("rnn", mock_download.call_args[0][1])
+            mock_download.assert_called_once_with(
+                "rnn", mock_download.call_args[0][1], dict_path=ANY
+            )
 
     def test_rnn_raises_when_hub_fails(self) -> None:
         """RNN get_trained_model raises FileNotFoundError when Hub download fails."""
@@ -222,7 +224,7 @@ class TestGetTrainedModelHFDownload:
 
     def test_encoder_downloads_from_hub_when_local_missing(self) -> None:
         """Encoder get_trained_model downloads from HF Hub when local file missing."""
-        from unittest.mock import patch
+        from unittest.mock import ANY, patch
 
         import torch
 
@@ -242,11 +244,13 @@ class TestGetTrainedModelHFDownload:
 
             model = get_trained_model("cpu")
             assert isinstance(model, Encoder)
-            mock_download.assert_called_once_with("encoder", mock_download.call_args[0][1])
+            mock_download.assert_called_once_with(
+                "encoder", mock_download.call_args[0][1], dict_path=ANY
+            )
 
     def test_decoder_downloads_from_hub_when_local_missing(self) -> None:
         """Decoder get_trained_model downloads from HF Hub when local file missing."""
-        from unittest.mock import patch
+        from unittest.mock import ANY, patch
 
         import torch
 
@@ -266,4 +270,6 @@ class TestGetTrainedModelHFDownload:
 
             model = get_trained_model("cpu")
             assert isinstance(model, Decoder)
-            mock_download.assert_called_once_with("decoder", mock_download.call_args[0][1])
+            mock_download.assert_called_once_with(
+                "decoder", mock_download.call_args[0][1], dict_path=ANY
+            )

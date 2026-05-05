@@ -118,7 +118,7 @@ class TuningRunConfig:
     validate_predictions: bool = True
     validation_threshold: float = 0.75
     max_retries: int = 2
-    balance_classes: bool = True
+    balance_classes: bool = False
     balance_seed: int = 42
     pos_weight: float = 1.0
 
@@ -1223,7 +1223,7 @@ def create_tuning_run(
     validate_predictions: bool = True,
     validation_threshold: float = 0.75,
     max_retries: int = 2,
-    balance_classes: bool = True,
+    balance_classes: bool = False,
     balance_seed: int = 42,
 ) -> TuningRunResult:
     """Create and execute a tuning run with sensible defaults.
@@ -1248,7 +1248,7 @@ def create_tuning_run(
         validate_predictions: Whether to validate model predictions.
         validation_threshold: Minimum fraction of correct predictions.
         max_retries: Max re-tuning attempts if validation fails.
-        balance_classes: Whether to balance classes by undersampling (default: True).
+        balance_classes: Whether to balance classes by undersampling (default: False).
         balance_seed: Random seed for class balancing (default: 42).
 
     Returns:

@@ -126,7 +126,7 @@ def _balance_dataframe(
 def load_train_val_corpus_datasets(
     data_path: str,
     test_size: float = 0.2,
-    balance_classes: bool = True,
+    balance_classes: bool = False,
     random_state: int = 42,
 ) -> tuple[CorpusDataset, CorpusDataset]:
     df = pd.read_parquet(data_path)
@@ -189,7 +189,7 @@ def _balance_ray_dataset(
 def load_train_val_ray_datasets(
     data_path: str,
     test_size: float = 0.2,
-    balance_classes: bool = True,
+    balance_classes: bool = False,
     random_state: int = 42,
 ) -> tuple[ray.data.Dataset, ray.data.Dataset]:
     """Load processed parquet data as Ray Datasets for distributed training.

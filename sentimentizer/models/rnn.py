@@ -188,9 +188,12 @@ def get_trained_model(
 
     # Try local file first; if missing, download from Hugging Face Hub
     if not Path(weights_path).exists():
+        from sentimentizer.config import DriverConfig
         from sentimentizer.hf import download_weights
 
-        downloaded = download_weights("rnn", weights_path)
+        downloaded = download_weights(
+            "rnn", weights_path, dict_path=DriverConfig.files.dictionary_file_path
+        )
         if downloaded is None:
             raise FileNotFoundError(
                 f"Weights file not found at {weights_path} and could not be "
