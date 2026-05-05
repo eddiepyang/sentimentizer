@@ -276,14 +276,18 @@ def _get_opt_params(model_type: str) -> OptimizationParams | EncoderOptimization
     """Return optimization params appropriate for the model type."""
     if model_type in ("encoder", "decoder"):
         return EncoderOptimizationParams()
-    return OptimizationParams()
+    elif model_type == "rnn":
+        return OptimizationParams()
+    raise ValueError(f"no matching model: {model_type}")
 
 
 def _get_sched_params(model_type: str) -> SchedulerParams | EncoderSchedulerParams:
     """Return scheduler params appropriate for the model type."""
     if model_type in ("encoder", "decoder"):
         return EncoderSchedulerParams()
-    return SchedulerParams()
+    elif model_type == "rnn":
+        return SchedulerParams()
+    raise ValueError(f"no matching model: {model_type}")
 
 
 class _LinearWarmupCosineScheduler(torch.optim.lr_scheduler.LambdaLR):
@@ -526,6 +530,10 @@ def _train_func(config: dict) -> None:
             "optimizer_state_dict": optimizer.state_dict(),
             "epoch": epoch,
         }
+        # NOTE: train.report() with checkpoint= reads the checkpoint files
+        # from disk when called, so the temp directory must still exist.
+        # Keep train.report() INSIDE the with-block to avoid FileNotFoundError
+        # from pyarrow.fs.copy_files when the directory is auto-deleted.
         with tempfile.TemporaryDirectory() as checkpoint_dir:
             with open(os.path.join(checkpoint_dir, "data.pkl"), "wb") as fp:
                 pickle.dump(checkpoint_data, fp)
@@ -537,7 +545,16 @@ def _train_func(config: dict) -> None:
                     "accuracy": metrics.accuracy,
                     "pos_acc": metrics.positive_accuracy,
                     "neg_acc": metrics.negative_accuracy,
+                    "precision": metrics.precision,
+                    "recall": metrics.recall,
                     "f1": metrics.f1,
+                    "cohen_kappa": metrics.cohen_kappa,
+                    "auc_roc": metrics.auc_roc,
+                    "tp": metrics.tp,
+                    "tn": metrics.tn,
+                    "fp": metrics.fp,
+                    "fn": metrics.fn,
+                    "total": metrics.total,
                     "epoch": epoch,
                 },
                 checkpoint=checkpoint,

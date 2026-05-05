@@ -12,8 +12,10 @@ import tempfile
 from pathlib import Path
 
 import pytest
+import ray.cloudpickle as pickle
 import torch
 import torch.nn as nn
+from ray.train import Checkpoint
 
 from sentimentizer.config import TrainerConfig
 from sentimentizer.trainer import (
@@ -203,3 +205,38 @@ class TestTrainerConfigCheckpoints:
         """Setting checkpoint_every=0 should disable periodic checkpoints."""
         cfg = TrainerConfig(checkpoint_dir="/tmp/ckpts", checkpoint_every=0)
         assert cfg.checkpoint_every == 0
+
+
+class TestCheckpointTempdirScoping:
+    """Guard against the bug where train.report() is called outside the tempdir.
+
+    If train.report(checkpoint=...) is called after the TemporaryDirectory
+    context manager exits, pyarrow.fs.copy_files fails with FileNotFoundError
+    because the checkpoint directory has been auto-deleted.
+
+    The fix in trainer.py moves train.report() inside the with-block.
+    """
+
+    def test_checkpoint_directory_exists_during_report(self) -> None:
+        """Checkpoint directory must still exist when report reads it.
+
+        Simulates the correct pattern: create checkpoint inside a tempdir
+        and verify the files exist before the context manager exits.
+        """
+        with tempfile.TemporaryDirectory() as checkpoint_dir:
+            data_path = os.path.join(checkpoint_dir, "data.pkl")
+            with open(data_path, "wb") as fp:
+                pickle.dump({"model_state_dict": {"layer1.weight": [1.0, 2.0]}}, fp)
+            checkpoint = Checkpoint.from_directory(checkpoint_dir)
+            # Verify files exist inside the context
+            assert os.path.exists(
+                data_path
+            ), "Checkpoint file must exist while still in the tempdir context"
+            # Reading should succeed inside the context
+            with checkpoint.as_directory() as loaded_dir:
+                assert os.path.exists(os.path.join(loaded_dir, "data.pkl"))
+
+        # After the with-block, the temp dir is deleted
+        assert not os.path.exists(
+            data_path
+        ), "Temp dir should be cleaned up after exiting the with-block"

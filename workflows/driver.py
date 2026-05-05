@@ -8,6 +8,7 @@ from pathlib import Path
 
 # Disable Ray's automatic uv runtime environment to prevent VIRTUAL_ENV warnings
 os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
+os.environ["RAY_DEFAULT_OBJECT_STORE_MEMORY_PROPORTION"] = "0.75"
 
 # Tell the Ray Dashboard where to find Grafana and Prometheus for the Metrics tab.
 # These must be set BEFORE ray.init() so the dashboard can embed Grafana iframes.
@@ -191,10 +192,10 @@ def new_parser() -> argparse.Namespace:
         help="resume training from the latest checkpoint in --checkpoint-dir",
     )
     parser.add_argument(
-        "--no-balance-classes",
+        "--balance-classes",
         action="store_true",
         default=False,
-        help="disable class balancing (undersampling majority class in training data)",  # noqa: E501
+        help="enable class balancing (undersampling majority class in training data)",  # noqa: E501
     )
     parser.add_argument(
         "--balance-seed",
@@ -401,7 +402,7 @@ def run_fit(args: argparse.Namespace) -> None:
 
 def _run_fit_single(args: argparse.Namespace) -> None:
     """Single-node training using the existing Trainer class."""
-    balance_classes = not args.no_balance_classes
+    balance_classes = args.balance_classes
     train_dataset, val_dataset = load_train_val_corpus_datasets(
         data_path=DriverConfig.files.processed_reviews_file_path,
         balance_classes=balance_classes,
@@ -473,12 +474,13 @@ def _run_fit_single(args: argparse.Namespace) -> None:
                 local_path=weights_path,
                 model_type=args.model,
                 repo_id=repo_id,
+                dict_path=DriverConfig.files.dictionary_file_path,
             )
 
 
 def _run_fit_distributed(args: argparse.Namespace) -> None:
     """Distributed training using Ray Train TorchTrainer."""
-    balance_classes = not args.no_balance_classes
+    balance_classes = args.balance_classes
 
     # Auto-compute pos_weight from full dataset if not explicitly set
     pos_weight = args.pos_weight
@@ -555,6 +557,7 @@ def _run_fit_distributed(args: argparse.Namespace) -> None:
                 local_path=weights_path,
                 model_type=args.model,
                 repo_id=repo_id,
+                dict_path=DriverConfig.files.dictionary_file_path,
             )
 
 
@@ -634,7 +637,7 @@ def run_tune(args: argparse.Namespace) -> None:
         validate_predictions=not args.no_validate,
         validation_threshold=args.validation_threshold,
         max_retries=args.max_retries,
-        balance_classes=not args.no_balance_classes,
+        balance_classes=args.balance_classes,
         balance_seed=args.balance_seed,
         pos_weight=args.pos_weight,
     )
@@ -763,6 +766,7 @@ def main() -> None:
             model_type=args.model,
             local_path=weights_path,
             repo_id=repo_id,
+            dict_path=DriverConfig.files.dictionary_file_path,
         )
         if result_path:
             logger.info(f"Pulled {args.model} weights from HF Hub. Forcing run type to 'update'.")

@@ -96,6 +96,100 @@ GPU_TEMPERATURE_CELSIUS = Gauge(
 )
 
 # ──────────────────────────────────────────────
+# Ray Tune trial metrics
+# ──────────────────────────────────────────────
+
+TUNE_TRIAL_VAL_ACCURACY = Gauge(
+    "sentimentizer_tune_val_accuracy",
+    "Validation accuracy reported by the current Ray Tune trial",
+    ["trial_id", "model_type"],
+)
+
+TUNE_TRIAL_VAL_LOSS = Gauge(
+    "sentimentizer_tune_val_loss",
+    "Validation loss reported by the current Ray Tune trial",
+    ["trial_id", "model_type"],
+)
+
+TUNE_TRIAL_TRAIN_LOSS = Gauge(
+    "sentimentizer_tune_train_loss",
+    "Training loss reported by the current Ray Tune trial",
+    ["trial_id", "model_type"],
+)
+
+TUNE_TRIAL_VAL_F1 = Gauge(
+    "sentimentizer_tune_val_f1",
+    "Validation F1 score reported by the current Ray Tune trial",
+    ["trial_id", "model_type"],
+)
+
+TUNE_TRIAL_VAL_COHEN_KAPPA = Gauge(
+    "sentimentizer_tune_val_cohen_kappa",
+    "Validation Cohen's kappa reported by the current Ray Tune trial",
+    ["trial_id", "model_type"],
+)
+
+TUNE_TRIAL_VAL_PRECISION = Gauge(
+    "sentimentizer_tune_val_precision",
+    "Validation precision reported by the current Ray Tune trial",
+    ["trial_id", "model_type"],
+)
+
+TUNE_TRIAL_VAL_RECALL = Gauge(
+    "sentimentizer_tune_val_recall",
+    "Validation recall reported by the current Ray Tune trial",
+    ["trial_id", "model_type"],
+)
+
+TUNE_TRIAL_POSITIVE_ACCURACY = Gauge(
+    "sentimentizer_tune_val_positive_accuracy",
+    "Validation positive-class accuracy reported by the current Ray Tune trial",
+    ["trial_id", "model_type"],
+)
+
+TUNE_TRIAL_NEGATIVE_ACCURACY = Gauge(
+    "sentimentizer_tune_val_negative_accuracy",
+    "Validation negative-class accuracy reported by the current Ray Tune trial",
+    ["trial_id", "model_type"],
+)
+
+TUNE_TRIAL_EPOCH = Gauge(
+    "sentimentizer_tune_epoch",
+    "Current training epoch for the Ray Tune trial",
+    ["trial_id", "model_type"],
+)
+
+TUNE_BEST_VAL_ACCURACY = Gauge(
+    "sentimentizer_tune_best_val_accuracy",
+    "Best validation accuracy across all Ray Tune trials",
+    ["model_type"],
+)
+
+TUNE_BEST_VAL_LOSS = Gauge(
+    "sentimentizer_tune_best_val_loss",
+    "Best validation loss across all Ray Tune trials",
+    ["model_type"],
+)
+
+TUNE_BEST_VAL_F1 = Gauge(
+    "sentimentizer_tune_best_val_f1",
+    "Best validation F1 score across all Ray Tune trials",
+    ["model_type"],
+)
+
+TUNE_TRIAL_COUNT = Gauge(
+    "sentimentizer_tune_trial_count",
+    "Total number of Ray Tune trials",
+    ["model_type"],
+)
+
+TUNE_TRIAL_COMPLETED_COUNT = Gauge(
+    "sentimentizer_tune_trial_completed_count",
+    "Number of completed Ray Tune trials",
+    ["model_type"],
+)
+
+# ──────────────────────────────────────────────
 # Ray health metrics
 # ──────────────────────────────────────────────
 
