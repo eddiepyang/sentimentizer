@@ -53,6 +53,7 @@ class TestTuningRunConfig:
         assert config.max_retries == 2
         assert config.config_path is None
         assert config.search_space_overrides is None
+        assert config.push_to_hub is False
 
     def test_custom_values(self) -> None:
         """TuningRunConfig should accept custom values."""
@@ -66,6 +67,7 @@ class TestTuningRunConfig:
             output_dir="/tmp/tune",
             validation_threshold=0.9,
             max_retries=3,
+            push_to_hub=True,
         )
         assert config.model_type == "encoder"
         assert config.mode == "standalone"
@@ -76,6 +78,7 @@ class TestTuningRunConfig:
         assert config.output_dir == "/tmp/tune"
         assert config.validation_threshold == 0.9
         assert config.max_retries == 3
+        assert config.push_to_hub is True
 
     def test_invalid_mode_raises(self) -> None:
         """TuningRun with invalid mode should raise ValueError."""

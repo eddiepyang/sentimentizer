@@ -177,6 +177,169 @@ class TestPushModelToHub:
             os.unlink(tmp_path)
 
 
+class TestCreateModelCard:
+    """Test the create_model_card function."""
+
+    def test_rnn_model_card_without_metrics(self) -> None:
+        """Should generate an RNN model card without tuning metrics."""
+        from sentimentizer.hf import create_model_card
+
+        card = create_model_card("rnn")
+        assert "---\n" in card
+        assert "sentiment-analysis" in card
+        assert "text-classification" in card
+        assert "RNN" in card
+        assert "Bidirectional LSTM" in card or "bidirectional LSTM" in card
+        assert "yelp.dictionary" in card
+        assert "rnn_weights.pth" in card
+        assert "## Usage" in card
+        assert "## Files" in card
+        assert "## Description" in card
+        assert "## Training Data" in card
+
+    def test_encoder_model_card_without_metrics(self) -> None:
+        """Should generate an Encoder model card without tuning metrics."""
+        from sentimentizer.hf import create_model_card
+
+        card = create_model_card("encoder")
+        assert "ENCODER" in card
+        assert "Transformer Encoder" in card or "transformer encoder" in card.lower()
+        assert "encoder_weights.pth" in card
+
+    def test_decoder_model_card_without_metrics(self) -> None:
+        """Should generate a Decoder model card without tuning metrics."""
+        from sentimentizer.hf import create_model_card
+
+        card = create_model_card("decoder")
+        assert "DECODER" in card
+        assert "Transformer Encoder-Decoder" in card or "encoder-decoder" in card.lower()
+        assert "decoder_weights.pth" in card
+
+    def test_model_card_with_tuning_result(self) -> None:
+        """Should include metrics section when tuning_result is provided."""
+        from sentimentizer.hf import create_model_card
+
+        tuning_result = {
+            "best_accuracy": 0.8923,
+            "best_loss": 0.3145,
+            "best_precision": 0.8812,
+            "best_recall": 0.9034,
+            "best_f1": 0.8921,
+            "best_cohen_kappa": 0.7843,
+            "best_positive_accuracy": 0.9156,
+            "best_negative_accuracy": 0.8690,
+            "best_config": {"lr": 0.001, "hidden_size": 256},
+            "validation_passed": True,
+            "mode": "standalone",
+            "iterations_completed": 1,
+            "converged": True,
+            "elapsed_seconds": 42.5,
+        }
+
+        card = create_model_card("rnn", tuning_result=tuning_result)
+        assert "## Metrics" in card
+        assert "| Accuracy | 0.8923 |" in card
+        assert "| Loss | 0.3145 |" in card
+        assert "| F1 | 0.8921 |" in card
+        assert "✅ Passed" in card
+        assert "Mode: `standalone`" in card
+        assert "Iterations: 1" in card
+        assert "Converged: Yes" in card
+        assert "Elapsed: 42.5s" in card
+        assert "Best Configuration" in card
+        assert '"lr": 0.001' in card
+
+    def test_model_card_failed_validation(self) -> None:
+        """Should show failed validation status."""
+        from sentimentizer.hf import create_model_card
+
+        tuning_result = {
+            "validation_passed": False,
+        }
+        card = create_model_card("rnn", tuning_result=tuning_result)
+        assert "❌ Failed" in card
+
+    def test_invalid_model_type_raises(self) -> None:
+        """Should raise ValueError for unknown model type."""
+        from sentimentizer.hf import create_model_card
+
+        with pytest.raises(ValueError, match="Unknown model type"):
+            create_model_card("transformer")
+
+    def test_model_card_yaml_frontmatter(self) -> None:
+        """Should include valid YAML frontmatter."""
+        from sentimentizer.hf import create_model_card
+
+        card = create_model_card("rnn")
+        assert card.startswith("---\n")
+        assert "language: en" in card
+        assert "license: mit" in card
+        assert "library_name: sentimentizer" in card
+        assert "task: text-classification" in card
+        assert "- rnn" in card
+
+    def test_model_card_usage_section_has_download(self) -> None:
+        """Should include download_weights in usage section."""
+        from sentimentizer.hf import create_model_card
+
+        card = create_model_card("encoder")
+        assert "download_weights" in card
+        assert "get_trained_model" in card
+        assert "encoder" in card
+
+    def test_model_card_partial_metrics(self) -> None:
+        """Should handle tuning_result with only some metrics."""
+        from sentimentizer.hf import create_model_card
+
+        tuning_result = {
+            "best_accuracy": 0.85,
+            "validation_passed": True,
+        }
+        card = create_model_card("rnn", tuning_result=tuning_result)
+        assert "| Accuracy | 0.8500 |" in card
+        assert "✅ Passed" in card
+        # Should not include metrics that are None/missing
+        assert "Loss" not in card
+
+
+class TestPushModelToHubWithModelCard:
+    """Test that push_model_to_hub accepts and uploads tuning_result."""
+
+    @patch("sentimentizer.hf.HfApi")
+    @patch("sentimentizer.hf._upload_model_card")
+    def test_push_with_tuning_result_uploads_model_card(
+        self, mock_upload_card: MagicMock, mock_api_cls: MagicMock
+    ) -> None:
+        """push_model_to_hub should call _upload_model_card when tuning_result is provided."""
+        import tempfile
+
+        from sentimentizer.hf import push_model_to_hub
+
+        mock_api_instance = MagicMock()
+        mock_api_cls.return_value = mock_api_instance
+
+        with tempfile.NamedTemporaryFile(suffix=".pth", delete=False) as tmp:
+            tmp.write(b"fake weights data")
+            tmp_path = tmp.name
+
+        try:
+            tuning_result = {"best_accuracy": 0.89, "validation_passed": True}
+            push_model_to_hub(
+                local_path=tmp_path,
+                model_type="rnn",
+                tuning_result=tuning_result,
+            )
+            # _upload_model_card should have been called
+            mock_upload_card.assert_called_once()
+            call_args = mock_upload_card.call_args
+            assert call_args[0][2] == "rnn"  # model_type
+            assert call_args[0][3] == tuning_result  # tuning_result
+        finally:
+            import os
+
+            os.unlink(tmp_path)
+
+
 class TestGetTrainedModelHFDownload:
     """Test that get_trained_model falls back to HF Hub when local weights missing."""
 

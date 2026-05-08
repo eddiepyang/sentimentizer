@@ -209,6 +209,12 @@ The `--distributed` flag enables Ray Train, which distributes data and model tra
 | `--checkpoint-dir` | `""` | Directory to save training checkpoints (empty = no checkpointing) |
 | `--checkpoint-every` | `1` | Save checkpoint every N epochs (0 = disabled) |
 | `--resume` | off | Resume training from the latest checkpoint in `--checkpoint-dir` (flag, no value needed) |
+| `--push-to-hub` | off | Push model weights, dictionary, and model card to Hugging Face Hub after training (flag) |
+| `--pull-from-hub` | off | Pull model weights from Hugging Face Hub before running (flag) |
+| `--hf-repo` | `ryeyoo/sentimentizer` | Override Hugging Face repository ID |
+| `--balance-classes` | off | Enable class balancing via undersampling (flag) |
+| `--balance-seed` | `42` | Random seed for class balancing |
+| `--pos-weight` | `0.0` | Loss weight for positive class (0 = auto-calculate) |
 
 ## Checkpointing
 
@@ -273,33 +279,60 @@ Detailed documentation for all tuning modes, including configuration and CLI usa
 
 ## Model Synchronization (Hugging Face Hub)
 
-Sentimentizer integrates with the Hugging Face Hub for robust weight management. Model weights are automatically synchronized between your local environment and the Hub.
+Sentimentizer integrates with the Hugging Face Hub for robust weight management. Each model type has its own repository with weights, dictionary, and an auto-generated model card:
+
+| Model | Repository | Contents |
+|-------|-----------|----------|
+| RNN | `ryeyoo/sentimentizer-rnn` | `rnn_weights.pth`, `yelp.dictionary`, `README.md` |
+| Encoder | `ryeyoo/sentimentizer-encoder` | `encoder_weights.pth`, `yelp.dictionary`, `README.md` |
+| Decoder | `ryeyoo/sentimentizer-decoder` | `decoder_weights.pth`, `yelp.dictionary`, `README.md` |
 
 ### Automatic Weight Pulling
 
-If local weights are missing when you start training or inference, Sentimentizer will automatically attempt to pull them from the configured Hugging Face repository based on the model type (`rnn`, `encoder`, or `decoder`).
+If local weights are missing when you start training or inference, Sentimentizer will automatically attempt to pull them from the configured Hugging Face repository based on the model type.
 
 ```bash
-# Pull weights manually
+# Pull a specific model
 make download-rnn
+make download-encoder
+make download-decoder
+
+# Pull all models
+make pull-hub
 
 # Pull via CLI (auto-detects per-model repo)
 python workflows/driver.py --model rnn --pull-from-hub
 ```
 
-### Pushing Weights
+### Pushing Weights and Model Cards
 
-After a successful training or tuning run, you can push the best weights to the Hub:
+After a successful training or tuning run, you can push the best weights, dictionary, and an auto-generated model card to the Hub:
 
 ```bash
-# Push weights manually
+# Push a specific model (weights + dictionary + model card)
 make upload-rnn
+make upload-encoder
+make upload-decoder
 
-# Push via CLI
-python workflows/driver.py --model rnn --push-to-hub
+# Push all models
+make push-hub
+
+# Push via CLI after training
+python workflows/driver.py --model rnn --save --push-to-hub
+
+# Push via CLI after tuning
+python workflows/driver.py --model rnn --tune --save --push-to-hub
 ```
 
-By default, weights are pushed to model-specific repositories (e.g., `ryeyoo/sentimentizer-rnn`). You can override this using the `--hf-repo` flag.
+The model card (README.md) includes:
+- YAML metadata (license, tags, task)
+- Model architecture description
+- Training data info
+- **Tuning metrics** (accuracy, F1, Cohen's kappa, per-class accuracy) — when pushing after tuning
+- Usage instructions with code snippets
+- File listing
+
+You can override the default repository using the `--hf-repo` flag.
 
 ## Model Configuration
 
@@ -448,6 +481,7 @@ sentimentizer/
 ├── trainer.py           # Training logic
 ├── tuner.py             # Ray Tune + Optuna hyperparameter search
 ├── serve.py             # Ray Serve deployment app
+├── hf.py                # Hugging Face Hub push/pull + model card generation
 ├── data/                # Training data (Yelp, GloVe)
 ├── agent/               # LLM-guided tuning agent
 │   ├── __init__.py      # Package exports
