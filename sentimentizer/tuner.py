@@ -31,12 +31,16 @@ logger = new_logger(DEFAULT_LOG_LEVEL)
 # ---------------------------------------------------------------------------
 
 
-class TunePrometheusCallback:
+class TunePrometheusCallback(tune.callback.Callback):
     """Ray Tune callback that pushes trial metrics to Prometheus gauges.
 
     This callback updates the ``sentimentizer_tune_*`` Prometheus gauges
     defined in ``sentimentizer/exporter.py`` so that Grafana can display
     real-time tuning progress alongside system and Ray metrics.
+
+    Inherits from ``ray.tune.Callback`` to satisfy the callback interface
+    contract (including the ``setup`` method that Ray calls during tuning
+    initialization).
 
     Usage::
 
@@ -50,6 +54,7 @@ class TunePrometheusCallback:
     """
 
     def __init__(self, model_type: str) -> None:
+        super().__init__()
         self.model_type = model_type
         self._completed_trials: int = 0
         self._total_trials: int = 0

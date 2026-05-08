@@ -101,6 +101,8 @@ class TuningRunConfig:
         validate_predictions: Whether to validate model predictions after training.
         validation_threshold: Minimum fraction of correct predictions to pass.
         max_retries: Maximum number of re-tuning attempts if validation fails.
+        push_to_hub: Whether to push model weights, dictionary, and model card
+            to Hugging Face Hub after successful validation.
     """
 
     model_type: str = "rnn"
@@ -121,6 +123,7 @@ class TuningRunConfig:
     balance_classes: bool = False
     balance_seed: int = 42
     pos_weight: float = 1.0
+    push_to_hub: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -318,6 +321,10 @@ class TuningRun:
             except OSError as e:
                 logger.warning(f"failed_to_copy_weights: {e}")
 
+            # Push to Hugging Face Hub if requested
+            if self.config.push_to_hub:
+                self._push_to_hub(result, model_weights_path)
+
         # Save results to JSON
         results_path = self._save_results(result)
         result.results_path = str(results_path)
@@ -339,6 +346,49 @@ class TuningRun:
         )
 
         return result
+
+    # ------------------------------------------------------------------
+    # Hugging Face Hub push
+    # ------------------------------------------------------------------
+
+    def _push_to_hub(self, result: TuningRunResult, weights_path: Path) -> None:
+        """Push model weights, dictionary, and model card to Hugging Face Hub.
+
+        Args:
+            result: The ``TuningRunResult`` with metrics for the model card.
+            weights_path: Path to the model weights file to upload.
+        """
+        from sentimentizer.hf import push_model_to_hub
+
+        tuning_result_dict = {
+            "best_accuracy": result.best_accuracy,
+            "best_loss": result.best_loss,
+            "best_precision": result.best_precision,
+            "best_recall": result.best_recall,
+            "best_f1": result.best_f1,
+            "best_cohen_kappa": result.best_cohen_kappa,
+            "best_positive_accuracy": result.best_positive_accuracy,
+            "best_negative_accuracy": result.best_negative_accuracy,
+            "best_config": result.best_config,
+            "validation_passed": result.validation_passed,
+            "mode": self.config.mode,
+            "iterations_completed": result.iterations_completed,
+            "converged": result.converged,
+            "elapsed_seconds": result.elapsed_seconds,
+        }
+
+        logger.info(
+            "pushing_to_hub",
+            model_type=self.config.model_type,
+            weights_path=str(weights_path),
+        )
+
+        push_model_to_hub(
+            local_path=str(weights_path),
+            model_type=self.config.model_type,
+            dict_path=DriverConfig.files.dictionary_file_path,
+            tuning_result=tuning_result_dict,
+        )
 
     # ------------------------------------------------------------------
     # Tuning dispatch
@@ -1225,6 +1275,7 @@ def create_tuning_run(
     max_retries: int = 2,
     balance_classes: bool = False,
     balance_seed: int = 42,
+    push_to_hub: bool = False,
 ) -> TuningRunResult:
     """Create and execute a tuning run with sensible defaults.
 
@@ -1250,6 +1301,7 @@ def create_tuning_run(
         max_retries: Max re-tuning attempts if validation fails.
         balance_classes: Whether to balance classes by undersampling (default: False).
         balance_seed: Random seed for class balancing (default: 42).
+        push_to_hub: Whether to push model to Hugging Face Hub after validation (default: False).
 
     Returns:
         ``TuningRunResult`` with best config, metrics, and file paths.
@@ -1261,8 +1313,8 @@ def create_tuning_run(
         if result.validation_passed:
             print(f"Model ready! Accuracy: {result.best_accuracy:.4f}")
 
-        # Quick standalone sweep
-        result = create_tuning_run(model_type="encoder", mode="standalone")
+        # Quick standalone sweep with Hub push
+        result = create_tuning_run(model_type="encoder", mode="standalone", push_to_hub=True)
     """
     config = TuningRunConfig(
         model_type=model_type,
@@ -1279,6 +1331,7 @@ def create_tuning_run(
         max_retries=max_retries,
         balance_classes=balance_classes,
         balance_seed=balance_seed,
+        push_to_hub=push_to_hub,
     )
     run = TuningRun(config)
     return run.execute()

@@ -1,7 +1,9 @@
 .PHONY: setup setup-dev download-data train train-rnn train-encoder train-decoder \
        train-distributed train-quick serve test lint format check clean docker-build docker-run \
 	   gpu-reset tune tune-rnn tune-encoder tune-decoder tune-standalone \
-	   start-metrics stop-metrics setup-dashboards start-exporter stop-exporter stop-ray
+	   start-metrics stop-metrics setup-dashboards start-exporter stop-exporter stop-ray \
+	   upload-rnn upload-encoder upload-decoder download-rnn download-encoder download-decoder \
+	   push-hub pull-hub
 
 # Default device: use auto-detect (cuda > mps > cpu)
 DEVICE ?= auto
@@ -119,13 +121,39 @@ tune-custom:
 tune-no-validate:
 	uv run python workflows/driver.py --model $(MODEL) --tune --no-validate --save
 
-## Upload RNN weights to Hugging Face Hub
-upload-rnn:
-	uv run python -c "from sentimentizer.hf import push_model_to_hub; push_model_to_hub('sentimentizer/data/rnn_weights.pth', 'rnn', 'ryeyoo/sentimentizer-rnn')"
+# ──────────────────────────────────────────────
+# Hugging Face Hub (push/pull per model)
+# ──────────────────────────────────────────────
 
-## Download RNN weights from Hugging Face Hub
+## Upload RNN weights + dictionary + model card to Hugging Face Hub
+upload-rnn:
+	uv run python -c "from sentimentizer.config import DriverConfig; from sentimentizer.hf import push_model_to_hub; push_model_to_hub('sentimentizer/data/rnn_weights.pth', 'rnn', dict_path=DriverConfig.files.dictionary_file_path)"
+
+## Upload Encoder weights + dictionary + model card to Hugging Face Hub
+upload-encoder:
+	uv run python -c "from sentimentizer.config import DriverConfig; from sentimentizer.hf import push_model_to_hub; push_model_to_hub('sentimentizer/data/encoder_weights.pth', 'encoder', dict_path=DriverConfig.files.dictionary_file_path)"
+
+## Upload Decoder weights + dictionary + model card to Hugging Face Hub
+upload-decoder:
+	uv run python -c "from sentimentizer.config import DriverConfig; from sentimentizer.hf import push_model_to_hub; push_model_to_hub('sentimentizer/data/decoder_weights.pth', 'decoder', dict_path=DriverConfig.files.dictionary_file_path)"
+
+## Upload all models to Hugging Face Hub
+push-hub: upload-rnn upload-encoder upload-decoder
+
+## Download RNN weights + dictionary from Hugging Face Hub
 download-rnn:
-	uv run python -c "from sentimentizer.hf import download_weights; download_weights('rnn', 'sentimentizer/data/rnn_weights.pth', 'ryeyoo/sentimentizer-rnn')"
+	uv run python -c "from sentimentizer.config import DriverConfig; from sentimentizer.hf import download_weights; download_weights('rnn', 'sentimentizer/data/rnn_weights.pth', dict_path=DriverConfig.files.dictionary_file_path)"
+
+## Download Encoder weights + dictionary from Hugging Face Hub
+download-encoder:
+	uv run python -c "from sentimentizer.config import DriverConfig; from sentimentizer.hf import download_weights; download_weights('encoder', 'sentimentizer/data/encoder_weights.pth', dict_path=DriverConfig.files.dictionary_file_path)"
+
+## Download Decoder weights + dictionary from Hugging Face Hub
+download-decoder:
+	uv run python -c "from sentimentizer.config import DriverConfig; from sentimentizer.hf import download_weights; download_weights('decoder', 'sentimentizer/data/decoder_weights.pth', dict_path=DriverConfig.files.dictionary_file_path)"
+
+## Download all models from Hugging Face Hub
+pull-hub: download-rnn download-encoder download-decoder
 
 # ──────────────────────────────────────────────
 # Serving
