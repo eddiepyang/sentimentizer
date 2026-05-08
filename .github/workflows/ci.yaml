@@ -27,7 +27,23 @@ jobs:
         enable-cache: true
 
     - name: install dependencies (CPU-only torch)
-      run: uv sync --extra dev
+      run: |
+        uv sync --extra dev \
+          --no-install-package nvidia-cublas \
+          --no-install-package nvidia-cuda-cupti \
+          --no-install-package nvidia-cuda-nvrtc \
+          --no-install-package nvidia-cuda-runtime \
+          --no-install-package nvidia-cudnn-cu13 \
+          --no-install-package nvidia-cufft \
+          --no-install-package nvidia-cufile \
+          --no-install-package nvidia-curand \
+          --no-install-package nvidia-cusolver \
+          --no-install-package nvidia-cusparse \
+          --no-install-package nvidia-cusparselt-cu13 \
+          --no-install-package nvidia-nccl-cu13 \
+          --no-install-package nvidia-nvjitlink \
+          --no-install-package nvidia-nvshmem-cu13 \
+          --no-install-package nvidia-nvtx
       env:
         UV_INDEX_URL: https://download.pytorch.org/whl/cpu
         UV_EXTRA_INDEX_URL: https://pypi.org/simple
@@ -63,7 +79,23 @@ jobs:
         enable-cache: true
 
     - name: install dependencies (CPU-only torch)
-      run: uv sync --extra dev
+      run: |
+        uv sync --extra dev \
+          --no-install-package nvidia-cublas \
+          --no-install-package nvidia-cuda-cupti \
+          --no-install-package nvidia-cuda-nvrtc \
+          --no-install-package nvidia-cuda-runtime \
+          --no-install-package nvidia-cudnn-cu13 \
+          --no-install-package nvidia-cufft \
+          --no-install-package nvidia-cufile \
+          --no-install-package nvidia-curand \
+          --no-install-package nvidia-cusolver \
+          --no-install-package nvidia-cusparse \
+          --no-install-package nvidia-cusparselt-cu13 \
+          --no-install-package nvidia-nccl-cu13 \
+          --no-install-package nvidia-nvjitlink \
+          --no-install-package nvidia-nvshmem-cu13 \
+          --no-install-package nvidia-nvtx
       env:
         UV_INDEX_URL: https://download.pytorch.org/whl/cpu
         UV_EXTRA_INDEX_URL: https://pypi.org/simple
@@ -106,7 +138,23 @@ jobs:
         enable-cache: true
 
     - name: install dependencies (CPU-only torch)
-      run: uv sync --extra dev
+      run: |
+        uv sync --extra dev \
+          --no-install-package nvidia-cublas \
+          --no-install-package nvidia-cuda-cupti \
+          --no-install-package nvidia-cuda-nvrtc \
+          --no-install-package nvidia-cuda-runtime \
+          --no-install-package nvidia-cudnn-cu13 \
+          --no-install-package nvidia-cufft \
+          --no-install-package nvidia-cufile \
+          --no-install-package nvidia-curand \
+          --no-install-package nvidia-cusolver \
+          --no-install-package nvidia-cusparse \
+          --no-install-package nvidia-cusparselt-cu13 \
+          --no-install-package nvidia-nccl-cu13 \
+          --no-install-package nvidia-nvjitlink \
+          --no-install-package nvidia-nvshmem-cu13 \
+          --no-install-package nvidia-nvtx
       env:
         UV_INDEX_URL: https://download.pytorch.org/whl/cpu
         UV_EXTRA_INDEX_URL: https://pypi.org/simple
