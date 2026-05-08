@@ -1,4 +1,8 @@
+from __future__ import annotations
+
+import tempfile
 from pathlib import Path
+from typing import Any
 
 from huggingface_hub import HfApi, hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError
@@ -9,22 +13,275 @@ from sentimentizer.config import DEFAULT_LOG_LEVEL, HF_WEIGHTS_REPOS
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
 
+# ---------------------------------------------------------------------------
+# Model descriptions per model type
+# ---------------------------------------------------------------------------
+
+_MODEL_DESCRIPTIONS: dict[str, str] = {
+    "rnn": (
+        "A bidirectional LSTM for sentiment classification built on pre-trained GloVe "
+        "embeddings. The model processes token sequences through a multi-layer "
+        "bidirectional LSTM, concatenates the final forward and backward hidden "
+        "states, and classifies via a two-layer MLP head."
+    ),
+    "encoder": (
+        "A Transformer Encoder for sentiment classification built on pre-trained GloVe "
+        "embeddings. The model uses multi-head self-attention with positional "
+        "encodings and a classification token (CLS) to produce a sentiment score."
+    ),
+    "decoder": (
+        "A Transformer Encoder-Decoder for sentiment classification built on "
+        "pre-trained GloVe embeddings. The encoder processes the input sequence, "
+        "and the decoder attends to the encoder outputs to produce a sentiment "
+        "prediction."
+    ),
+}
+
+
+def create_model_card(
+    model_type: str,
+    tuning_result: dict[str, Any] | None = None,
+) -> str:
+    """Generate a HuggingFace model card (README.md) for a Sentimentizer model.
+
+    The model card includes YAML frontmatter, a description of the model
+    architecture, usage instructions, and optionally the tuning metrics
+    from a ``TuningRunResult``.
+
+    Args:
+        model_type: One of 'rnn', 'encoder', 'decoder'.
+        tuning_result: Optional dict with tuning metrics (as produced by
+            ``TuningRunResult`` or loaded from the saved JSON). If provided,
+            the model card includes a metrics table.
+
+    Returns:
+        The model card content as a string.
+
+    Raises:
+        ValueError: If *model_type* is not recognized.
+    """
+    if model_type not in _MODEL_DESCRIPTIONS:
+        valid_types = ", ".join(_MODEL_DESCRIPTIONS.keys())
+        raise ValueError(f"Unknown model type: {model_type!r}. Must be one of: {valid_types}")
+
+    description = _MODEL_DESCRIPTIONS[model_type]
+    repo_id = HF_WEIGHTS_REPOS.get(model_type, f"ryeyoo/sentimentizer-{model_type}")
+
+    # ── YAML frontmatter ──
+    yaml_block = (
+        "---\n"
+        "language: en\n"
+        "license: mit\n"
+        "tags:\n"
+        "  - sentiment-analysis\n"
+        "  - text-classification\n"
+        f"  - {model_type}\n"
+        "library_name: sentimentizer\n"
+        "task: text-classification\n"
+        "---\n"
+    )
+
+    # ── Title and description ──
+    title = f"# Sentimentizer {model_type.upper()} Sentiment Model"
+    desc_section = f"\n## Description\n\n{description}\n"
+
+    # ── Training data ──
+    training_section = (
+        "\n## Training Data\n\n"
+        "Trained on the [Yelp Open Dataset](https://www.yelp.com/dataset) reviews, "
+        "with GloVe Wiki-Gigaword-100 pre-trained embeddings. Reviews are tokenized "
+        "with a custom dictionary (20k vocab, min frequency 3) and padded/truncated "
+        "to 200 tokens.\n"
+    )
+
+    # ── Metrics section (from tuning result) ──
+    metrics_section = ""
+    if tuning_result is not None:
+        metrics_section = _format_metrics_section(tuning_result)
+
+    # ── Usage section ──
+    usage_section = _format_usage_section(model_type, repo_id)
+
+    # ── Files section ──
+    files_section = (
+        "\n## Files\n\n"
+        f"- `{model_type}_weights.pth` — Model state dictionary\n"
+        "- `yelp.dictionary` — Gensim dictionary for tokenization\n"
+    )
+
+    # ── Combine ──
+    return (
+        yaml_block
+        + title
+        + desc_section
+        + training_section
+        + metrics_section
+        + usage_section
+        + files_section
+    )
+
+
+def _format_metrics_section(tuning_result: dict[str, Any]) -> str:
+    """Format tuning metrics into a Markdown section for the model card."""
+    lines = ["\n## Metrics\n"]
+
+    # Table of key metrics
+    table_lines = [
+        "| Metric | Value |",
+        "|--------|------|",
+    ]
+
+    metric_keys = [
+        ("best_accuracy", "Accuracy"),
+        ("best_loss", "Loss"),
+        ("best_precision", "Precision"),
+        ("best_recall", "Recall"),
+        ("best_f1", "F1"),
+        ("best_cohen_kappa", "Cohen's Kappa"),
+        ("best_positive_accuracy", "Positive Accuracy"),
+        ("best_negative_accuracy", "Negative Accuracy"),
+    ]
+
+    for key, label in metric_keys:
+        val = tuning_result.get(key)
+        if val is not None:
+            if isinstance(val, float):
+                table_lines.append(f"| {label} | {val:.4f} |")
+            else:
+                table_lines.append(f"| {label} | {val} |")
+
+    lines.append("\n" + "\n".join(table_lines) + "\n")
+
+    # Validation status
+    validation_passed = tuning_result.get("validation_passed")
+    if validation_passed is not None:
+        status = "✅ Passed" if validation_passed else "❌ Failed"
+        lines.append(f"\n**Validation:** {status}")
+
+    # Tuning mode and iterations
+    mode = tuning_result.get("mode", "")
+    iterations = tuning_result.get("iterations_completed")
+    converged = tuning_result.get("converged")
+    elapsed = tuning_result.get("elapsed_seconds")
+
+    meta_parts: list[str] = []
+    if mode:
+        meta_parts.append(f"Mode: `{mode}`")
+    if iterations is not None:
+        meta_parts.append(f"Iterations: {iterations}")
+    if converged is not None:
+        meta_parts.append(f"Converged: {'Yes' if converged else 'No'}")
+    if elapsed is not None:
+        meta_parts.append(f"Elapsed: {elapsed:.1f}s")
+
+    if meta_parts:
+        lines.append("\n" + " | ".join(meta_parts) + "\n")
+
+    # Best config
+    best_config = tuning_result.get("best_config")
+    if best_config and isinstance(best_config, dict):
+        config_lines = ["\n<details><summary>Best Configuration</summary>\n", "```json"]
+        import json
+
+        config_lines.append(json.dumps(best_config, indent=2))
+        config_lines.append("```\n</details>\n")
+        lines.extend(config_lines)
+
+    return "".join(lines)
+
+
+def _upload_model_card(
+    api: HfApi,
+    repo_id: str,
+    model_type: str,
+    tuning_result: dict[str, Any] | None,
+) -> None:
+    """Generate and upload a model card (README.md) to the Hugging Face Hub.
+
+    Writes the model card content to a temporary file and uploads it
+    as ``README.md`` to the repository.
+
+    Args:
+        api: HfApi instance for uploading.
+        repo_id: Hugging Face repository ID.
+        model_type: Model type for the model card.
+        tuning_result: Optional tuning metrics to include.
+    """
+    try:
+        model_card_content = create_model_card(model_type, tuning_result=tuning_result)
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as tmp:
+            tmp.write(model_card_content)
+            tmp_path = tmp.name
+
+        api.upload_file(
+            path_or_fileobj=tmp_path,
+            path_in_repo="README.md",
+            repo_id=repo_id,
+            commit_message=f"Update {model_type} model card",
+        )
+        logger.info(f"Successfully pushed model card to {repo_id}/README.md")
+
+        # Clean up temp file
+        Path(tmp_path).unlink(missing_ok=True)
+    except Exception as e:
+        logger.warning(f"Failed to push model card: {e}")
+        # Clean up temp file on error too
+        try:
+            if "tmp_path" in dir():
+                Path(tmp_path).unlink(missing_ok=True)  # type: ignore[possibly-undefined]
+        except Exception:
+            pass
+
+
+def _format_usage_section(model_type: str, repo_id: str) -> str:
+    """Format usage instructions for the model card."""
+    return (
+        "\n## Usage\n\n"
+        "```python\n"
+        "from sentimentizer.hf import download_weights\n"
+        "from sentimentizer.config import DriverConfig, weights_path_for\n\n"
+        f"# Download weights + dictionary from Hugging Face Hub\n"
+        f'weights_path = weights_path_for("{model_type}")\n'
+        f"download_weights(\n"
+        f'    "{model_type}",\n'
+        f"    weights_path,\n"
+        f"    dict_path=DriverConfig.files.dictionary_file_path,\n"
+        f")\n\n"
+        f"# Load and run inference\n"
+        f"from sentimentizer.models.{model_type} import get_trained_model\n"
+        f"from sentimentizer.tokenizer import get_trained_tokenizer\n\n"
+        f'model = get_trained_model(device="cpu")\n'
+        f"tokenizer = get_trained_tokenizer()\n\n"
+        f"import numpy as np\n"
+        f'token_ids = tokenizer.tokenize_text("amazing food great service")\n'
+        f"score = model.predict(token_ids)\n"
+        f"print(f'Sentiment score: {{score.item():.4f}}')  # >0.5 = positive, <0.5 = negative\n"
+        "```\n"
+    )
+
+
 def push_model_to_hub(
     local_path: str | Path,
     model_type: str,
     repo_id: str | None = None,
     dict_path: str | Path | None = None,
+    tuning_result: dict[str, Any] | None = None,
 ) -> None:
-    """Upload model weights and optionally the dictionary to the Hugging Face Hub.
+    """Upload model weights, dictionary, and model card to the Hugging Face Hub.
 
     If *repo_id* is provided, it uploads to that repository.
     Otherwise, it looks up the per-model repository from ``HF_WEIGHTS_REPOS``.
+
+    When *tuning_result* is provided, a model card (README.md) is generated
+    with the tuning metrics and uploaded alongside the weights.
 
     Args:
         local_path: Path to the local .pth weight file.
         model_type: Model type ('rnn', 'encoder', or 'decoder') used for the filename.
         repo_id: Optional Hugging Face repository ID.
         dict_path: Optional path to the dictionary file to also upload.
+        tuning_result: Optional dict with tuning metrics to include in the model card.
     """
     if repo_id is None:
         repo_id = HF_WEIGHTS_REPOS.get(model_type)
@@ -65,6 +322,9 @@ def push_model_to_hub(
             else:
                 logger.error(f"Dictionary file not found: {dict_file}")
 
+        # Upload model card (README.md) with tuning metrics
+        _upload_model_card(api, repo_id, model_type, tuning_result)
+
     except Exception as e:
         # Check if error is because repo doesn't exist
         if "Repository Not Found" in str(e) or "404 Client Error" in str(e):
@@ -90,6 +350,9 @@ def push_model_to_hub(
                             commit_message=f"Initial dictionary upload for {model_type}",
                         )
                         logger.info(f"Successfully pushed dictionary to {repo_id}/{dict_file.name}")
+
+                # Upload model card after creating new repo
+                _upload_model_card(api, repo_id, model_type, tuning_result)
 
                 return
             except Exception as create_error:

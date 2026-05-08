@@ -640,6 +640,7 @@ def run_tune(args: argparse.Namespace) -> None:
         balance_classes=args.balance_classes,
         balance_seed=args.balance_seed,
         pos_weight=args.pos_weight,
+        push_to_hub=args.push_to_hub,
     )
 
     run = TuningRun(config)
