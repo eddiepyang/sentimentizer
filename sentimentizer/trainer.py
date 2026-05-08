@@ -28,6 +28,26 @@ from sentimentizer.config import (
 )
 from sentimentizer.loader import CorpusDataset
 
+try:
+    from ray.util.metrics import Gauge
+
+    LIVE_TRAIN_LOSS = Gauge(
+        "sentimentizer_live_train_loss", description="Live training loss", tag_keys=("model_type",)
+    )
+    LIVE_VAL_LOSS = Gauge(
+        "sentimentizer_live_val_loss", description="Live validation loss", tag_keys=("model_type",)
+    )
+    LIVE_VAL_ACCURACY = Gauge(
+        "sentimentizer_live_val_accuracy",
+        description="Live validation accuracy",
+        tag_keys=("model_type",),
+    )
+except ImportError:
+    LIVE_TRAIN_LOSS = None
+    LIVE_VAL_LOSS = None
+    LIVE_VAL_ACCURACY = None
+
+
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
 
@@ -149,6 +169,9 @@ class Trainer:
             i += len(target)
             self.losses.append(loss_val)
             if i % (self.cfg.batch_size * 100) == 0:
+                current_loss = float(np.mean(self.losses[-60:]))
+                if LIVE_TRAIN_LOSS is not None:
+                    LIVE_TRAIN_LOSS.set(current_loss, {"model_type": self.model_type})
                 logger.info(
                     f"[epoch {epoch}] {i / n:.2f} of rows completed in "
                     f"{j + 1} cycles, current loss at {np.mean(self.losses[-60:]):.6f}"
@@ -260,7 +283,11 @@ class Trainer:
             probabilities=probabilities,
         )
 
-        self.val_loss = np.mean(losses)
+        self.val_loss = float(np.mean(losses))
+        if LIVE_VAL_LOSS is not None:
+            LIVE_VAL_LOSS.set(self.val_loss, {"model_type": self.model_type})
+            LIVE_VAL_ACCURACY.set(float(metrics.accuracy), {"model_type": self.model_type})
+
         logger.info(  # type: ignore[call-arg]
             f"[epoch {epoch}] evaluation complete",
             val_loss=self.val_loss,
@@ -464,7 +491,7 @@ def _train_func(config: dict) -> None:
         model.train()
         epoch_losses = []
 
-        for batch in train_shard.iter_torch_batches(batch_size=batch_size):
+        for i, batch in enumerate(train_shard.iter_torch_batches(batch_size=batch_size)):
             loss_val = train_step(
                 model,
                 data=batch["data"].long().to(device),
@@ -473,6 +500,9 @@ def _train_func(config: dict) -> None:
                 loss_function=loss_function,
             )
             epoch_losses.append(loss_val)
+
+            if i % 100 == 0 and LIVE_TRAIN_LOSS is not None:
+                LIVE_TRAIN_LOSS.set(float(np.mean(epoch_losses[-60:])), {"model_type": model_type})
 
         if scheduler:
             scheduler.step()
