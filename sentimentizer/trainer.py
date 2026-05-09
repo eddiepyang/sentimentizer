@@ -362,9 +362,10 @@ class Trainer:
         # Replace NaN probabilities with 0.5 (can result from extreme logit values)
         nan_mask = np.isnan(probabilities)
         if nan_mask.any():
+            nan_count = int(nan_mask.sum())
             logger.warning(
                 "nan_in_probabilities",
-                message=f"Found {int(nan_mask.sum())} NaN values in probabilities, replacing with 0.5",
+                message=(f"Found {nan_count} NaN values in " "probabilities, replacing with 0.5"),
             )
             probabilities = np.where(nan_mask, 0.5, probabilities)
 
@@ -684,9 +685,10 @@ def _train_func(config: dict) -> None:
         # Replace NaN probabilities with 0.5 (can result from extreme logit values)
         nan_mask = np.isnan(probabilities)
         if nan_mask.any():
+            nan_count = int(nan_mask.sum())
             logger.warning(
                 "nan_in_probabilities",
-                message=f"Found {int(nan_mask.sum())} NaN values in probabilities, replacing with 0.5",
+                message=(f"Found {nan_count} NaN values in " "probabilities, replacing with 0.5"),
             )
             probabilities = np.where(nan_mask, 0.5, probabilities)
 

@@ -10,6 +10,7 @@ loading the ML stack.
 """
 
 import atexit
+import contextlib
 import os
 import shutil
 import signal
@@ -354,7 +355,6 @@ def run_tokenize(state: State, *, resume: bool) -> None:
         raise ValueError(f"invalid run_type: {state.run_type}")
 
 
-
 def _publish_distributed_metrics(result: Any, model_type: str) -> None:
     """Publish final distributed training metrics to the driver-level Prometheus gauges.
 
@@ -400,12 +400,8 @@ def _publish_distributed_metrics(result: Any, model_type: str) -> None:
         auc_roc = metrics.get("auc_roc")
         if auc_roc is not None:
             TRAINING_VAL_AUC_ROC.labels(**lbl).set(float(auc_roc))
-        TRAINING_VAL_POSITIVE_ACCURACY.labels(**lbl).set(
-            float(metrics.get("pos_acc", 0))
-        )
-        TRAINING_VAL_NEGATIVE_ACCURACY.labels(**lbl).set(
-            float(metrics.get("neg_acc", 0))
-        )
+        TRAINING_VAL_POSITIVE_ACCURACY.labels(**lbl).set(float(metrics.get("pos_acc", 0)))
+        TRAINING_VAL_NEGATIVE_ACCURACY.labels(**lbl).set(float(metrics.get("neg_acc", 0)))
         TRAINING_EPOCH.labels(**lbl).set(int(metrics.get("epoch", 0)))
 
         logger.info(
@@ -440,10 +436,8 @@ def _persist_metrics_to_file(metrics: dict, model_type: str) -> None:
     # Read existing data (may contain metrics from other model types)
     data: dict[str, dict] = {}
     if path.exists():
-        try:
+        with contextlib.suppress(json.JSONDecodeError, OSError):
             data = json.loads(path.read_text())
-        except (json.JSONDecodeError, OSError):
-            pass
 
     auc_roc = metrics.get("auc_roc")
     data[model_type] = {
@@ -462,6 +456,7 @@ def _persist_metrics_to_file(metrics: dict, model_type: str) -> None:
 
     path.write_text(json.dumps(data, indent=2))
     logger.info("training_metrics_persisted", path=str(path), model_type=model_type)
+
 
 def run_train(
     state: State,
