@@ -774,6 +774,8 @@ def run_tune(
     pos_weight: float,
 ) -> None:
     """Hyperparameter tuning (LLM-guided agent or standalone Ray Tune run)."""
+    _ensure_ray_initialized()
+
     from sentimentizer.agent.skill import TuningRun, TuningRunConfig
     from sentimentizer.device import resolve_device
 
