@@ -42,10 +42,52 @@ try:
         description="Live validation accuracy",
         tag_keys=("model_type",),
     )
+    LIVE_VAL_PRECISION = Gauge(
+        "sentimentizer_live_val_precision",
+        description="Live validation precision (positive class)",
+        tag_keys=("model_type",),
+    )
+    LIVE_VAL_RECALL = Gauge(
+        "sentimentizer_live_val_recall",
+        description="Live validation recall (positive class)",
+        tag_keys=("model_type",),
+    )
+    LIVE_VAL_F1 = Gauge(
+        "sentimentizer_live_val_f1",
+        description="Live validation F1 score",
+        tag_keys=("model_type",),
+    )
+    LIVE_VAL_COHEN_KAPPA = Gauge(
+        "sentimentizer_live_val_cohen_kappa",
+        description="Live validation Cohen's kappa",
+        tag_keys=("model_type",),
+    )
+    LIVE_VAL_AUC_ROC = Gauge(
+        "sentimentizer_live_val_auc_roc",
+        description="Live validation AUC-ROC",
+        tag_keys=("model_type",),
+    )
+    LIVE_VAL_POSITIVE_ACCURACY = Gauge(
+        "sentimentizer_live_val_positive_accuracy",
+        description="Live validation positive-class accuracy",
+        tag_keys=("model_type",),
+    )
+    LIVE_VAL_NEGATIVE_ACCURACY = Gauge(
+        "sentimentizer_live_val_negative_accuracy",
+        description="Live validation negative-class accuracy",
+        tag_keys=("model_type",),
+    )
 except ImportError:
     LIVE_TRAIN_LOSS = None
     LIVE_VAL_LOSS = None
     LIVE_VAL_ACCURACY = None
+    LIVE_VAL_PRECISION = None
+    LIVE_VAL_RECALL = None
+    LIVE_VAL_F1 = None
+    LIVE_VAL_COHEN_KAPPA = None
+    LIVE_VAL_AUC_ROC = None
+    LIVE_VAL_POSITIVE_ACCURACY = None
+    LIVE_VAL_NEGATIVE_ACCURACY = None
 
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
@@ -145,7 +187,7 @@ class Trainer:
     tracking the torch optimizer and model fitting"""
 
     loss_function: Callable
-    optimizer: optim.Adam
+    optimizer: optim.Optimizer
     scheduler: optim.lr_scheduler.LRScheduler
     cfg: TrainerConfig
     model_type: str = "rnn"
@@ -285,17 +327,59 @@ class Trainer:
 
         self.val_loss = float(np.mean(losses))
         if LIVE_VAL_LOSS is not None:
-            LIVE_VAL_LOSS.set(self.val_loss, {"model_type": self.model_type})
-            LIVE_VAL_ACCURACY.set(float(metrics.accuracy), {"model_type": self.model_type})
+            tags = {"model_type": self.model_type}
+            LIVE_VAL_LOSS.set(self.val_loss, tags)
+            LIVE_VAL_ACCURACY.set(float(metrics.accuracy), tags)
+            LIVE_VAL_PRECISION.set(float(metrics.precision), tags)
+            LIVE_VAL_RECALL.set(float(metrics.recall), tags)
+            LIVE_VAL_F1.set(float(metrics.f1), tags)
+            LIVE_VAL_COHEN_KAPPA.set(float(metrics.cohen_kappa), tags)
+            if metrics.auc_roc is not None:
+                LIVE_VAL_AUC_ROC.set(float(metrics.auc_roc), tags)
+            LIVE_VAL_POSITIVE_ACCURACY.set(float(metrics.positive_accuracy), tags)
+            LIVE_VAL_NEGATIVE_ACCURACY.set(float(metrics.negative_accuracy), tags)
+
+        # Also push to the standalone Prometheus exporter gauges
+        try:
+            from sentimentizer.exporter import (
+                TRAINING_EPOCH,
+                TRAINING_VAL_ACCURACY,
+                TRAINING_VAL_AUC_ROC,
+                TRAINING_VAL_COHEN_KAPPA,
+                TRAINING_VAL_F1,
+                TRAINING_VAL_LOSS,
+                TRAINING_VAL_NEGATIVE_ACCURACY,
+                TRAINING_VAL_POSITIVE_ACCURACY,
+                TRAINING_VAL_PRECISION,
+                TRAINING_VAL_RECALL,
+            )
+
+            labels = {"model_type": self.model_type}
+            TRAINING_VAL_LOSS.set(self.val_loss, labels)
+            TRAINING_VAL_ACCURACY.set(float(metrics.accuracy), labels)
+            TRAINING_VAL_PRECISION.set(float(metrics.precision), labels)
+            TRAINING_VAL_RECALL.set(float(metrics.recall), labels)
+            TRAINING_VAL_F1.set(float(metrics.f1), labels)
+            TRAINING_VAL_COHEN_KAPPA.set(float(metrics.cohen_kappa), labels)
+            if metrics.auc_roc is not None:
+                TRAINING_VAL_AUC_ROC.set(float(metrics.auc_roc), labels)
+            TRAINING_VAL_POSITIVE_ACCURACY.set(float(metrics.positive_accuracy), labels)
+            TRAINING_VAL_NEGATIVE_ACCURACY.set(float(metrics.negative_accuracy), labels)
+            TRAINING_EPOCH.set(epoch, labels)
+        except ImportError:
+            pass
 
         logger.info(  # type: ignore[call-arg]
             f"[epoch {epoch}] evaluation complete",
             val_loss=self.val_loss,
             accuracy=metrics.accuracy,
+            precision=metrics.precision,
+            recall=metrics.recall,
+            f1=metrics.f1,
+            cohen_kappa=metrics.cohen_kappa,
+            auc_roc=metrics.auc_roc,
             pos_acc=metrics.positive_accuracy,
             neg_acc=metrics.negative_accuracy,
-            f1=metrics.f1,
-            auc_roc=metrics.auc_roc,
         )
 
 
@@ -501,7 +585,12 @@ def _train_func(config: dict) -> None:
             )
             epoch_losses.append(loss_val)
 
-            if i % 100 == 0 and LIVE_TRAIN_LOSS is not None:
+            # Update gauges only from rank 0 to prevent worker collisions
+            if (
+                i % 100 == 0
+                and LIVE_TRAIN_LOSS is not None
+                and train.get_context().get_world_rank() == 0
+            ):
                 LIVE_TRAIN_LOSS.set(float(np.mean(epoch_losses[-60:])), {"model_type": model_type})
 
         if scheduler:
@@ -538,18 +627,63 @@ def _train_func(config: dict) -> None:
             probabilities=probabilities,
         )
 
-        if LIVE_VAL_LOSS is not None:
-            LIVE_VAL_LOSS.set(float(val_loss), {"model_type": model_type})
-            LIVE_VAL_ACCURACY.set(float(metrics.accuracy), {"model_type": model_type})
+        # Update gauges only from rank 0 to prevent worker collisions
+        if LIVE_VAL_LOSS is not None and train.get_context().get_world_rank() == 0:
+            tags = {"model_type": model_type}
+            LIVE_VAL_LOSS.set(float(val_loss), tags)
+            LIVE_VAL_ACCURACY.set(float(metrics.accuracy), tags)
+            LIVE_VAL_PRECISION.set(float(metrics.precision), tags)
+            LIVE_VAL_RECALL.set(float(metrics.recall), tags)
+            LIVE_VAL_F1.set(float(metrics.f1), tags)
+            LIVE_VAL_COHEN_KAPPA.set(float(metrics.cohen_kappa), tags)
+            if metrics.auc_roc is not None:
+                LIVE_VAL_AUC_ROC.set(float(metrics.auc_roc), tags)
+            LIVE_VAL_POSITIVE_ACCURACY.set(float(metrics.positive_accuracy), tags)
+            LIVE_VAL_NEGATIVE_ACCURACY.set(float(metrics.negative_accuracy), tags)
+
+        # Also push to standalone Prometheus exporter gauges from rank 0
+        try:
+            from sentimentizer.exporter import (  # noqa: E402
+                TRAINING_EPOCH,
+                TRAINING_VAL_ACCURACY,
+                TRAINING_VAL_AUC_ROC,
+                TRAINING_VAL_COHEN_KAPPA,
+                TRAINING_VAL_F1,
+                TRAINING_VAL_LOSS,
+                TRAINING_VAL_NEGATIVE_ACCURACY,
+                TRAINING_VAL_POSITIVE_ACCURACY,
+                TRAINING_VAL_PRECISION,
+                TRAINING_VAL_RECALL,
+            )
+
+            if train.get_context().get_world_rank() == 0:
+                labels = {"model_type": model_type}
+                TRAINING_VAL_LOSS.set(float(val_loss), labels)
+                TRAINING_VAL_ACCURACY.set(float(metrics.accuracy), labels)
+                TRAINING_VAL_PRECISION.set(float(metrics.precision), labels)
+                TRAINING_VAL_RECALL.set(float(metrics.recall), labels)
+                TRAINING_VAL_F1.set(float(metrics.f1), labels)
+                TRAINING_VAL_COHEN_KAPPA.set(float(metrics.cohen_kappa), labels)
+                if metrics.auc_roc is not None:
+                    TRAINING_VAL_AUC_ROC.set(float(metrics.auc_roc), labels)
+                TRAINING_VAL_POSITIVE_ACCURACY.set(float(metrics.positive_accuracy), labels)
+                TRAINING_VAL_NEGATIVE_ACCURACY.set(float(metrics.negative_accuracy), labels)
+                TRAINING_EPOCH.set(epoch, labels)
+        except ImportError:
+            pass
 
         logger.info(  # type: ignore[call-arg]
             f"[epoch {epoch}] completed",
             train_loss=train_loss,
             val_loss=val_loss,
             accuracy=metrics.accuracy,
+            precision=metrics.precision,
+            recall=metrics.recall,
+            f1=metrics.f1,
+            cohen_kappa=metrics.cohen_kappa,
+            auc_roc=metrics.auc_roc,
             pos_acc=metrics.positive_accuracy,
             neg_acc=metrics.negative_accuracy,
-            f1=metrics.f1,
         )
 
         # Report metrics and checkpoint to Ray Train
