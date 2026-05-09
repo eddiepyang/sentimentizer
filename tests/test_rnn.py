@@ -515,6 +515,7 @@ class TestMetricsGauges:
             "val_auc_roc": MagicMock(),
             "val_positive_accuracy": MagicMock(),
             "val_negative_accuracy": MagicMock(),
+            "epoch": MagicMock(),
         }
 
         # 4. Mock dependencies to isolate _train_func
@@ -575,6 +576,7 @@ class TestMetricsGauges:
             "val_auc_roc": MagicMock(),
             "val_positive_accuracy": MagicMock(),
             "val_negative_accuracy": MagicMock(),
+            "epoch": MagicMock(),
         }
 
         with (
