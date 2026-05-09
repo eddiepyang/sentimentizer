@@ -506,6 +506,7 @@ class TestMetricsGauges:
         # 3. Mock dependencies to isolate _train_func
         with (
             patch("ray.train.get_dataset_shard", return_value=mock_shard),
+            patch("ray.train.get_context") as mock_get_context,
             patch("ray.train.report"),
             patch("sentimentizer.trainer.LIVE_TRAIN_LOSS") as mock_train_loss,
             patch("sentimentizer.trainer.LIVE_VAL_LOSS") as mock_val_loss,
@@ -520,6 +521,9 @@ class TestMetricsGauges:
             mock_model.parameters.return_value = [p]
             mock_model.return_value = torch.randn(2, 1)
             mock_new_model.return_value = mock_model
+
+            # Simulate worker rank 0 so metrics are recorded
+            mock_get_context.return_value.get_world_rank.return_value = 0
 
             _train_func(config)
 
