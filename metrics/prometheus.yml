@@ -15,6 +15,7 @@ scrape_configs:
 
   - job_name: 'sentimentizer'
     # Scrape Sentimentizer application metrics (system, GPU, Ray health)
+    # and pre-initialized training gauges (always 0 until training runs).
     static_configs:
       - targets: ['host.docker.internal:8081']
 

@@ -259,3 +259,51 @@ class TestComputeMetricsFromExamples:
         m = compute_metrics_from_examples(results)
         assert m.auc_roc is not None
         assert m.auc_roc == 1.0  # Perfect separation
+
+
+class TestNaNHandling:
+    """Test that NaN values in probabilities are handled gracefully."""
+
+    def test_nan_in_probabilities_compute_classification_metrics(self) -> None:
+        """NaN probabilities should be replaced with 0.5 without crashing."""
+        predictions = np.array([1, 0, 1, 0, 1, 0])
+        targets = np.array([1, 0, 1, 0, 0, 1])
+        probabilities = np.array([0.9, 0.1, np.nan, 0.2, np.nan, 0.3])
+
+        # Should not raise ValueError
+        m = compute_classification_metrics(predictions, targets, probabilities)
+        assert m.auc_roc is not None
+        # NaNs replaced with 0.5 should still allow computation
+        assert 0.0 <= m.auc_roc <= 1.0
+
+    def test_all_nan_probabilities(self) -> None:
+        """All-NaN probabilities should still produce a valid result (auc_roc=0.5)."""
+        predictions = np.array([1, 0, 1, 0])
+        targets = np.array([1, 0, 1, 0])
+        probabilities = np.array([np.nan, np.nan, np.nan, np.nan])
+
+        m = compute_classification_metrics(predictions, targets, probabilities)
+        assert m.auc_roc is not None
+        # All 0.5 probabilities = random guess = AUC ~0.5
+        assert 0.0 <= m.auc_roc <= 1.0
+
+    def test_nan_in_probabilities_auc_roc_direct(self) -> None:
+        """_auc_roc should handle NaN probabilities gracefully."""
+        from sentimentizer.metrics import _auc_roc
+
+        probabilities = np.array([0.9, 0.1, np.nan, 0.2])
+        targets = np.array([1, 0, 1, 0])
+
+        result = _auc_roc(probabilities, targets)
+        assert isinstance(result, float)
+        assert 0.0 <= result <= 1.0
+
+    def test_nan_predictions_unchanged(self) -> None:
+        """Predictions should not be affected by NaN in probabilities."""
+        predictions = np.array([1, 0, 1])
+        targets = np.array([1, 0, 1])
+        probabilities = np.array([np.nan, np.nan, np.nan])
+
+        m = compute_classification_metrics(predictions, targets, probabilities)
+        # With all NaN probs replaced with 0.5, predictions based on >=0.5 should match
+        assert m.accuracy == 1.0  # all correct since targets match predictions

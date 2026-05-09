@@ -111,6 +111,11 @@ def _get_ray_gauges(model_type: str) -> dict[str, Any] | None:
             description="Live validation negative-class accuracy",
             tag_keys=("model_type",),
         ),
+        "epoch": Gauge(
+            "sentimentizer_live_epoch",
+            description="Live training epoch",
+            tag_keys=("model_type",),
+        ),
     }
     # Set default tag so callers can do gauge.set(value) without
     # repeating the tag on every call.
@@ -353,6 +358,17 @@ class Trainer:
 
         probabilities = torch.cat(all_probs).numpy()
         targets = torch.cat(all_targets).numpy()
+
+        # Replace NaN probabilities with 0.5 (can result from extreme logit values)
+        nan_mask = np.isnan(probabilities)
+        if nan_mask.any():
+            nan_count = int(nan_mask.sum())
+            logger.warning(
+                "nan_in_probabilities",
+                message=(f"Found {nan_count} NaN values in " "probabilities, replacing with 0.5"),
+            )
+            probabilities = np.where(nan_mask, 0.5, probabilities)
+
         predictions = (probabilities >= 0.5).astype(int)
 
         from sentimentizer.metrics import compute_classification_metrics
@@ -376,6 +392,7 @@ class Trainer:
                 gauges["val_auc_roc"].set(float(metrics.auc_roc))
             gauges["val_positive_accuracy"].set(float(metrics.positive_accuracy))
             gauges["val_negative_accuracy"].set(float(metrics.negative_accuracy))
+            gauges["epoch"].set(epoch)
 
         # Also push to the standalone Prometheus exporter gauges
         try:
@@ -664,6 +681,17 @@ def _train_func(config: dict) -> None:
 
         probabilities = torch.cat(all_probs).numpy()
         targets = torch.cat(all_targets).numpy()
+
+        # Replace NaN probabilities with 0.5 (can result from extreme logit values)
+        nan_mask = np.isnan(probabilities)
+        if nan_mask.any():
+            nan_count = int(nan_mask.sum())
+            logger.warning(
+                "nan_in_probabilities",
+                message=(f"Found {nan_count} NaN values in " "probabilities, replacing with 0.5"),
+            )
+            probabilities = np.where(nan_mask, 0.5, probabilities)
+
         predictions = (probabilities >= 0.5).astype(int)
 
         metrics = compute_classification_metrics(
@@ -686,6 +714,7 @@ def _train_func(config: dict) -> None:
                     gauges["val_auc_roc"].set(float(metrics.auc_roc))
                 gauges["val_positive_accuracy"].set(float(metrics.positive_accuracy))
                 gauges["val_negative_accuracy"].set(float(metrics.negative_accuracy))
+                gauges["epoch"].set(epoch)
 
         # Also push to standalone Prometheus exporter gauges from rank 0
         try:

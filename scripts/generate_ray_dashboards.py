@@ -84,6 +84,7 @@ def _patch_template_vars(templating: dict, fallback_metrics: list[str]) -> dict:
                 # e.g. label_values(ray_node_network_receive_speed{}, SessionName)
                 #   → label_values(ray_node_cpu_utilization{}, SessionName)
                 import re
+
                 candidate = re.sub(
                     r"label_values\([^,]+{},",
                     f"label_values({fb}{{}},",
@@ -125,7 +126,7 @@ def patch_default_dashboard(data: dict) -> dict:
             "exemplar": True,
             "expr": (
                 "sum(ray_node_cpu_count"
-                "{SessionName=~\"$SessionName\",ray_io_cluster=~\"$Cluster\"})"
+                '{SessionName=~"$SessionName",ray_io_cluster=~"$Cluster"})'
                 " by (RayNodeType)"
             ),
             "interval": "",
@@ -139,8 +140,7 @@ def patch_default_dashboard(data: dict) -> dict:
         fallback_max = {
             "exemplar": True,
             "expr": (
-                "sum(ray_node_cpu_count"
-                "{SessionName=~\"$SessionName\",ray_io_cluster=~\"$Cluster\"})"
+                "sum(ray_node_cpu_count" '{SessionName=~"$SessionName",ray_io_cluster=~"$Cluster"})'
             ),
             "interval": "",
             "legendFormat": "MAX (fallback)",

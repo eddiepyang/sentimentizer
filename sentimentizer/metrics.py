@@ -132,6 +132,13 @@ def compute_classification_metrics(
     auc_roc: float | None = None
     if probabilities is not None:
         probabilities = np.asarray(probabilities, dtype=np.float64).flatten()
+        nan_count = int(np.isnan(probabilities).sum())
+        if nan_count > 0:
+            logger.warning(
+                "nan_in_probabilities",
+                message=f"Found {nan_count} NaN values in probabilities, replacing with 0.5",
+            )
+            probabilities = np.nan_to_num(probabilities, nan=0.5)
         auc_roc = _auc_roc(probabilities, targets)
 
     return ClassificationMetrics(
@@ -184,6 +191,12 @@ def compute_metrics_from_model(
 
             logits = model(inputs)
             probs = torch.sigmoid(logits).squeeze(-1)
+
+            # Replace NaN probabilities with 0.5 (can occur from extreme logit values)
+            nan_mask = torch.isnan(probs)
+            if nan_mask.any():
+                probs = torch.where(nan_mask, torch.tensor(0.5, device=probs.device), probs)
+
             preds = (probs >= 0.5).long()
 
             # Binary targets: convert from float to int
@@ -301,7 +314,17 @@ def _auc_roc(probabilities: np.ndarray, targets: np.ndarray) -> float:
     """Compute Area Under the ROC Curve using the trapezoidal rule.
 
     Falls back to a simple implementation if scikit-learn is unavailable.
+    NaN values in probabilities are replaced with 0.5 (random-guess probability).
     """
+    # Replace NaN probabilities with 0.5 (random guess) as a safety net
+    nan_count = int(np.isnan(probabilities).sum())
+    if nan_count > 0:
+        logger.warning(
+            "nan_in_probabilities",
+            message=f"Found {nan_count} NaN values in probabilities, replacing with 0.5",
+        )
+        probabilities = np.nan_to_num(probabilities, nan=0.5)
+
     try:
         from sklearn.metrics import roc_auc_score
 
