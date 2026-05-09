@@ -6,21 +6,34 @@ import shutil
 import signal
 from pathlib import Path
 
-# Disable Ray's automatic uv runtime environment to prevent VIRTUAL_ENV warnings
-os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
-os.environ["RAY_DEFAULT_OBJECT_STORE_MEMORY_PROPORTION"] = "0.75"
+from dotenv import load_dotenv
 
-# Tell the Ray Dashboard where to find Grafana and Prometheus for the Metrics tab.
-# These must be set BEFORE ray.init() so the dashboard can embed Grafana iframes.
+# Load static environment variables (e.g. RAY_*) from .env file.
+# .env is optional — defaults below are applied when the var is not set
+# in the environment or .env file.
+load_dotenv()
+
+# Ray runtime: disable uv runtime env to prevent VIRTUAL_ENV warnings
+os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
+os.environ.setdefault("RAY_DEFAULT_OBJECT_STORE_MEMORY_PROPORTION", "0.75")
+
+# Ray Dashboard: where to find Grafana and Prometheus for the Metrics tab.
+# These must be set BEFORE ray.init() so the dashboard can embed iframes.
 os.environ.setdefault("RAY_GRAFANA_HOST", "http://localhost:3000")
 os.environ.setdefault("RAY_PROMETHEUS_HOST", "http://localhost:9090")
 
-import ray
-import torch
-from gensim import corpora
+# Ensure NVIDIA CUDA libraries bundled in the venv (nvidia/cu13/lib, etc.)
+# are on LD_LIBRARY_PATH so that the driver process can load torch's CUDA dependencies.
+from sentimentizer.env import ensure_nvidia_ld_library_path  # noqa: E402
 
-from sentimentizer import new_logger, time_decorator
-from sentimentizer.config import (
+nvidia_ld_library_path = ensure_nvidia_ld_library_path()
+
+import ray  # noqa: E402
+import torch  # noqa: E402
+from gensim import corpora  # noqa: E402
+
+from sentimentizer import new_logger, time_decorator  # noqa: E402
+from sentimentizer.config import (  # noqa: E402
     DEFAULT_LOG_LEVEL,
     DecoderConfig,
     DriverConfig,
@@ -31,21 +44,33 @@ from sentimentizer.config import (
     default_epochs,
     weights_path_for,
 )
-from sentimentizer.extractor import extract_data
-from sentimentizer.loader import (
+from sentimentizer.extractor import extract_data  # noqa: E402
+from sentimentizer.loader import (  # noqa: E402
     compute_pos_weight,
     load_train_val_corpus_datasets,
     load_train_val_ray_datasets,
 )
-from sentimentizer.tokenizer import Tokenizer
-from sentimentizer.trainer import latest_checkpoint, load_checkpoint, new_ray_trainer, new_trainer
+from sentimentizer.tokenizer import Tokenizer  # noqa: E402
+from sentimentizer.trainer import (  # noqa: E402
+    latest_checkpoint,
+    load_checkpoint,
+    new_ray_trainer,
+    new_trainer,
+)
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
 
 # ──────────────────────────────────────────────
-# CUDA cleanup: graceful GPU release on exit
+# Cleanup: GPU release and Ray session temp files
 # ──────────────────────────────────────────────
+
+# Ray stores session data in /tmp/ray/session_<timestamp>_<id>/.
+# Each session can consume 5+ GB. When Ray is not shut down cleanly
+# (e.g., Ctrl-C, crash, or test runner killing the process), these
+# directories accumulate and fill the disk. We clean up stale sessions
+# at startup and shut down Ray properly at exit.
+_RAY_SESSION_DIR = Path("/tmp/ray")
 
 
 def _cuda_cleanup() -> None:
@@ -63,18 +88,92 @@ def _cuda_cleanup() -> None:
             pass
 
 
+def _ray_cleanup() -> None:
+    """Shut down Ray and clean up stale session temp files.
+
+    Called by atexit and signal handlers to prevent /tmp/ray from
+    filling the disk with orphaned session directories (5+ GB each).
+    """
+    try:
+        if ray.is_initialized():
+            ray.shutdown()
+    except Exception:
+        pass
+
+    # Clean up stale Ray session directories left by previous runs
+    if _RAY_SESSION_DIR.exists():
+        current_session = _RAY_SESSION_DIR / "session_latest"
+        for session_dir in _RAY_SESSION_DIR.iterdir():
+            # Keep the session_latest symlink and the current session
+            if session_dir == current_session:
+                continue
+            if session_dir.is_dir() and session_dir.name.startswith("session_"):
+                try:
+                    age_hours = (
+                        shutil.os.path.getmtime(session_dir) - __import__("time").time()
+                    ) / 3600
+                    # Only remove sessions older than 1 hour — active sessions
+                    # should be recent, and we don't want to delete while running
+                    if age_hours < -1:  # modified more than 1 hour ago
+                        shutil.rmtree(session_dir, ignore_errors=True)
+                        logger.debug(f"cleaned stale Ray session: {session_dir}")
+                except OSError:
+                    pass
+
+
+def _cleanup_stale_ray_sessions() -> None:
+    """Remove stale Ray session directories from /tmp/ray at startup.
+
+    Called before ray.init() to free disk space from previous runs.
+    Only removes sessions older than 1 hour to avoid deleting active sessions.
+    """
+    if not _RAY_SESSION_DIR.exists():
+        return
+
+    import time
+
+    current_time = time.time()
+    removed = 0
+    freed_gb = 0.0
+
+    for session_dir in _RAY_SESSION_DIR.iterdir():
+        # Keep the session_latest symlink
+        if session_dir.name == "session_latest":
+            continue
+        if session_dir.is_dir() and session_dir.name.startswith("session_"):
+            try:
+                age_hours = (current_time - shutil.os.path.getmtime(session_dir)) / 3600
+                if age_hours > 1:  # older than 1 hour
+                    size = sum(f.stat().st_size for f in session_dir.rglob("*") if f.is_file())
+                    shutil.rmtree(session_dir, ignore_errors=True)
+                    freed_gb += size / (1024**3)
+                    removed += 1
+            except OSError:
+                pass
+
+    if removed > 0:
+        logger.info(  # type: ignore[call-arg]
+            "cleaned_stale_ray_sessions",
+            removed=removed,
+            freed_gb=round(freed_gb, 1),
+        )
+
+
 # Register cleanup for normal process exit (including unhandled exceptions)
 atexit.register(_cuda_cleanup)
+atexit.register(_ray_cleanup)
 
 
 def _sigint_handler(signum: int, frame: object) -> None:
-    """Handle Ctrl-C by cleaning up CUDA before re-raising KeyboardInterrupt.
+    """Handle Ctrl-C by cleaning up CUDA and Ray before re-raising KeyboardInterrupt.
 
     Without this, a Ctrl-C during CUDA training can leave the GPU context
-    in a bad state, causing error 804 on subsequent runs.
+    in a bad state, causing error 804 on subsequent runs, and Ray session
+    temp files can fill the disk.
     """
-    logger.info("Received SIGINT, cleaning up CUDA...")
+    logger.info("Received SIGINT, cleaning up...")
     _cuda_cleanup()
+    _ray_cleanup()
     raise KeyboardInterrupt
 
 
@@ -519,6 +618,7 @@ def _run_fit_distributed(args: argparse.Namespace) -> None:
     )
 
     try:
+        # TorchTrainer.fit() returns a single Result in Ray 2.55+.
         result = ray_trainer.fit()
     finally:
         # Ensure CUDA resources are released even on Ctrl-C or exception
@@ -780,12 +880,21 @@ def main() -> None:
         run_diagnose(args)
         return
 
+    # Clean up stale Ray session directories from previous runs to free disk space.
+    # Each session can consume 5+ GB and they accumulate when Ray doesn't shut down cleanly.
+    _cleanup_stale_ray_sessions()
+
     # Initialize Ray with a fixed metrics export port so Prometheus can scrape it.
     # The port must match metrics/prometheus.yml target (host.docker.internal:8080).
     # _metrics_export_port is a private API but is the only way to set this
     # programmatically in Ray 2.55 (public API uses `ray start --metrics-export-port`).
     if not ray.is_initialized():
-        ray.init(_metrics_export_port=8080)
+        runtime_env = {}
+        if nvidia_ld_library_path:
+            # Propagate the LD_LIBRARY_PATH to Ray workers
+            runtime_env["env_vars"] = {"LD_LIBRARY_PATH": nvidia_ld_library_path}
+
+        ray.init(_metrics_export_port=8080, runtime_env=runtime_env)
 
     if args.tune:
         # Tuning skill mode: tune hyperparameters and validate model

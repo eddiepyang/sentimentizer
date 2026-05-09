@@ -14,7 +14,7 @@ If the change affects Ray Train or distributed training specifically, also run:
 uv run pytest tests/ -v -k "Ray"
 ```
 
-## Dependency management
+## Alwa## Dependency management
 
 This project uses **uv** for dependency management. Key commands:
 
@@ -151,6 +151,21 @@ Always verify against the installed source in `.venv/lib/python3.11/site-package
   Use `train.get_dataset_shard("train")`, NOT `train.get_context().get_dataset_shard("train")`.
 - **`random_sample(fraction)` returns a single `Dataset`, not a tuple.**
   Do not unpack it like `keep, _ = ds.random_sample(0.5)`.
+- **Never create `ray.util.metrics.Gauge`/`Counter`/`Histogram` at module import time.**
+  In Ray 2.55+, custom metric objects created in the driver process are never
+  exported — they must be created inside a Ray worker context (task, actor, or
+  train function) to be registered with that worker's metrics agent and pushed
+  to Prometheus. Use lazy initialization instead (create on first use inside
+  the worker). See `_get_ray_gauges()` in `sentimentizer/trainer.py` for the
+  canonical pattern: a module-level cache dict + factory function that creates
+  gauges on demand and stores them per tag key.
+- **Ray session temp files accumulate in `/tmp/ray/` (5+ GB each).**
+  Each `ray.init()` creates a session directory that is only cleaned up by
+  `ray.shutdown()`. If the process crashes or is killed, the directory persists.
+  The driver (`workflows/driver.py`) cleans up stale sessions (>1 hour old)
+  at startup via `_cleanup_stale_ray_sessions()` and shuts down Ray at exit
+  via `_ray_cleanup()` (registered with `atexit`). Always call `ray.shutdown()`
+  in tests and scripts when done.
 
 ## Code quality principles
 

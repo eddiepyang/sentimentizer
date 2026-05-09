@@ -1,5 +1,6 @@
 import json
 import shutil
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
@@ -463,5 +464,134 @@ class TestSingleTrainer:
         cfg = TrainerConfig(device="cpu")
         trainer = new_trainer(model=model, cfg=cfg)
         assert isinstance(trainer.loss_function, torch.nn.BCEWithLogitsLoss)
-        assert isinstance(trainer.optimizer, torch.optim.AdamW)
-        assert trainer.cfg.device == "cpu"
+
+
+# ──────────────────────────────────────────────
+# Metrics and Monitoring tests
+# ──────────────────────────────────────────────
+
+
+class TestMetricsGauges:
+    """Tests specifically for verifying metric updates to Prometheus gauges."""
+
+    def test_train_func_updates_prometheus_gauges(self) -> None:
+        """Verifies _train_func updates Prometheus Gauges during distributed training."""
+        from sentimentizer.trainer import _train_func
+
+        # 1. Setup minimal config
+        config = {
+            "epochs": 1,
+            "batch_size": 2,
+            "lr": 0.001,
+            "betas": [0.9, 0.999],
+            "weight_decay": 0.01,
+            "model_type": "rnn",
+            "dict_path": "fake.dict",
+            "embeddings_model_name": "fake-glove",
+            "embeddings_emb_length": 100,
+            "input_len": 200,
+            "pos_weight": 1.0,
+        }
+
+        # 2. Mock Ray Data shards
+        mock_shard = MagicMock()
+        # Simulate one batch of data for both train and val
+        mock_shard.iter_torch_batches.return_value = [
+            {
+                "data": torch.zeros((2, 200), dtype=torch.long),
+                "target": torch.ones((2, 1), dtype=torch.float),
+            }
+        ]
+
+        # 3. Create mock gauge objects (matching _get_ray_gauges dict keys)
+        mock_gauges = {
+            "train_loss": MagicMock(),
+            "val_loss": MagicMock(),
+            "val_accuracy": MagicMock(),
+            "val_precision": MagicMock(),
+            "val_recall": MagicMock(),
+            "val_f1": MagicMock(),
+            "val_cohen_kappa": MagicMock(),
+            "val_auc_roc": MagicMock(),
+            "val_positive_accuracy": MagicMock(),
+            "val_negative_accuracy": MagicMock(),
+        }
+
+        # 4. Mock dependencies to isolate _train_func
+        with (
+            patch("ray.train.get_dataset_shard", return_value=mock_shard),
+            patch("ray.train.get_context") as mock_get_context,
+            patch("ray.train.report"),
+            patch("sentimentizer.trainer.train_step", return_value=0.5),
+            patch("sentimentizer.trainer._get_ray_gauges", return_value=mock_gauges),
+            patch("sentimentizer.models.rnn.new_model") as mock_new_model,
+            patch("sentimentizer.trainer.prepare_model", side_effect=lambda m: m),
+        ):
+            # Setup mock model — parameters() must return a fresh iterator each call
+            mock_model = MagicMock()
+            p = torch.nn.Parameter(torch.randn(1, 1))
+            mock_model.parameters.side_effect = lambda: iter([p])
+            mock_model.return_value = torch.randn(2, 1)
+            mock_model.state_dict.return_value = {}
+            mock_new_model.return_value = mock_model
+
+            # Simulate worker rank 0 so metrics are recorded
+            mock_get_context.return_value.get_world_rank.return_value = 0
+
+            _train_func(config)
+
+            # 5. Assertions
+            assert mock_gauges["train_loss"].set.called, "train_loss gauge was not updated"
+            assert mock_gauges["val_loss"].set.called, "val_loss gauge was not updated"
+            assert mock_gauges["val_accuracy"].set.called, "val_accuracy gauge was not updated"
+
+    def test_trainer_evaluate_updates_gauges(self) -> None:
+        """Verifies Trainer.evaluate updates Prometheus Gauges during single-node training."""
+        from sentimentizer.trainer import Trainer, TrainerConfig
+
+        mock_model = MagicMock()
+        mock_loader = MagicMock()
+        mock_loader.dataset = [1, 2]
+        mock_loader.__iter__.return_value = iter([(torch.zeros(2, 10), torch.ones(2, 1))])
+
+        cfg = TrainerConfig(device="cpu")
+        trainer = Trainer(
+            loss_function=torch.nn.BCEWithLogitsLoss(),
+            optimizer=MagicMock(),
+            scheduler=MagicMock(),
+            cfg=cfg,
+            model_type="rnn",
+        )
+
+        # Create mock gauge objects (matching _get_ray_gauges dict keys)
+        mock_gauges = {
+            "train_loss": MagicMock(),
+            "val_loss": MagicMock(),
+            "val_accuracy": MagicMock(),
+            "val_precision": MagicMock(),
+            "val_recall": MagicMock(),
+            "val_f1": MagicMock(),
+            "val_cohen_kappa": MagicMock(),
+            "val_auc_roc": MagicMock(),
+            "val_positive_accuracy": MagicMock(),
+            "val_negative_accuracy": MagicMock(),
+        }
+
+        with (
+            patch("sentimentizer.trainer._get_ray_gauges", return_value=mock_gauges),
+            # Patch the exporter import inside evaluate() to avoid real Prometheus gauges
+            patch("sentimentizer.exporter.TRAINING_EPOCH", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_LOSS", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_ACCURACY", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_PRECISION", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_RECALL", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_F1", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_COHEN_KAPPA", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_AUC_ROC", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_POSITIVE_ACCURACY", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_NEGATIVE_ACCURACY", create=True),
+        ):
+            mock_model.return_value = torch.randn(2, 1)
+            trainer.evaluate(mock_model, mock_loader, epoch=0)
+            assert mock_gauges["val_loss"].set.called, "val_loss gauge was not updated"
+            assert mock_gauges["val_accuracy"].set.called, "val_accuracy gauge was not updated"

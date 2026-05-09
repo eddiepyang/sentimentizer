@@ -16,6 +16,14 @@ TYPE ?= new
 # Checkpoint directory (empty = no checkpointing)
 CHECKPOINT_DIR ?=
 
+# Auto-detect NVIDIA CUDA libraries bundled in the venv so Ray workers
+# can load torch's CUDA dependencies (libcudart.so, libcublasLt.so, etc.)
+# Collects all nvidia/*/lib directories (cu13, cudnn, nccl, cusparselt, nvshmem)
+NVIDIA_LIB_PATHS := $(shell find .venv -path '*/nvidia/*/lib' -type d 2>/dev/null)
+ifneq ($(NVIDIA_LIB_PATHS),)
+    export LD_LIBRARY_PATH := $(subst : ,:,$(foreach p,$(NVIDIA_LIB_PATHS),$(p):))$(LD_LIBRARY_PATH)
+endif
+
 # ──────────────────────────────────────────────
 # Setup
 # ──────────────────────────────────────────────
