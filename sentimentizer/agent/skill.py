@@ -47,10 +47,10 @@ from sentimentizer.config import (
     DriverConfig,
     EmbeddingsConfig,
     TrainerConfig,
-    auto_detect_device,
     default_epochs,
     weights_path_for,
 )
+from sentimentizer.device import resolve_device
 from sentimentizer.tuner import TunerConfig, tune_model
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
@@ -217,7 +217,7 @@ class TuningRun:
     def _resolve_device(self) -> None:
         """Resolve 'auto' device to the best available."""
         if self.config.device == "auto":
-            self.config.device = auto_detect_device()
+            self.config.device = resolve_device("auto")
         logger.info("device_resolved", device=self.config.device)
 
     def _load_configs(self) -> tuple[AgentConfig, TunerConfig]:

@@ -3487,6 +3487,7 @@ name = "sentimentizer"
 version = "0.101.1"
 source = { editable = "." }
 dependencies = [
+    { name = "click" },
     { name = "gensim" },
     { name = "huggingface-hub" },
     { name = "langgraph" },
@@ -3534,6 +3535,7 @@ dev = [
 requires-dist = [
     { name = "black", marker = "extra == 'dev'" },
     { name = "bumpver", marker = "extra == 'dev'" },
+    { name = "click", specifier = ">=8.1.0" },
     { name = "gensim", specifier = ">=4.3.3" },
     { name = "huggingface-hub" },
     { name = "isort", marker = "extra == 'dev'" },

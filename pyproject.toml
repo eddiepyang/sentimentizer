@@ -39,6 +39,7 @@ dependencies = [
     "langgraph>=0.2",
     "rich>=13.0.0",
     "huggingface_hub",
+    "click>=8.1.0",
 ]
 
 [project.optional-dependencies]
@@ -51,6 +52,9 @@ dev = [
     "pytest-cov",
     "ruff",
 ]
+
+[project.scripts]
+sentimentizer = "workflows.driver:cli"
 
 [tool.hatch.build.targets.wheel]
 packages = ["sentimentizer"]

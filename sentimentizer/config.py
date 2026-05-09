@@ -3,9 +3,9 @@ from dataclasses import dataclass
 from logging import INFO
 
 import numpy as np
-import torch
 
 from sentimentizer import root
+from sentimentizer.device import resolve_device as auto_detect_device  # noqa: F401 — re-export
 
 data_path = os.path.join(root, "sentimentizer")
 external_data = root.parent / "data"  # data/ one level above project root
@@ -19,15 +19,6 @@ EMBEDDING_RANDOM_STD: float = 0.32
 
 # Logging constants
 EXTRACT_LOG_INTERVAL: int = 100000
-
-
-def auto_detect_device() -> str:
-    """Detect the best available compute device: cuda > mps > cpu."""
-    if torch.cuda.is_available():
-        return "cuda"
-    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        return "mps"
-    return "cpu"
 
 
 def default_epochs(model_type: str) -> int:
