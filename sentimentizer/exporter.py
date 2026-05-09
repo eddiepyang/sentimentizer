@@ -190,6 +190,76 @@ TUNE_TRIAL_COMPLETED_COUNT = Gauge(
 )
 
 # ──────────────────────────────────────────────
+# Training model performance metrics
+# ──────────────────────────────────────────────
+
+TRAINING_TRAIN_LOSS = Gauge(
+    "sentimentizer_training_train_loss",
+    "Training loss from the current training run",
+    ["model_type"],
+)
+
+TRAINING_VAL_LOSS = Gauge(
+    "sentimentizer_training_val_loss",
+    "Validation loss from the current training run",
+    ["model_type"],
+)
+
+TRAINING_VAL_ACCURACY = Gauge(
+    "sentimentizer_training_val_accuracy",
+    "Validation accuracy from the current training run",
+    ["model_type"],
+)
+
+TRAINING_VAL_PRECISION = Gauge(
+    "sentimentizer_training_val_precision",
+    "Validation precision (positive class) from the current training run",
+    ["model_type"],
+)
+
+TRAINING_VAL_RECALL = Gauge(
+    "sentimentizer_training_val_recall",
+    "Validation recall (positive class) from the current training run",
+    ["model_type"],
+)
+
+TRAINING_VAL_F1 = Gauge(
+    "sentimentizer_training_val_f1",
+    "Validation F1 score from the current training run",
+    ["model_type"],
+)
+
+TRAINING_VAL_COHEN_KAPPA = Gauge(
+    "sentimentizer_training_val_cohen_kappa",
+    "Validation Cohen's kappa from the current training run",
+    ["model_type"],
+)
+
+TRAINING_VAL_AUC_ROC = Gauge(
+    "sentimentizer_training_val_auc_roc",
+    "Validation AUC-ROC from the current training run",
+    ["model_type"],
+)
+
+TRAINING_VAL_POSITIVE_ACCURACY = Gauge(
+    "sentimentizer_training_val_positive_accuracy",
+    "Validation positive-class accuracy from the current training run",
+    ["model_type"],
+)
+
+TRAINING_VAL_NEGATIVE_ACCURACY = Gauge(
+    "sentimentizer_training_val_negative_accuracy",
+    "Validation negative-class accuracy from the current training run",
+    ["model_type"],
+)
+
+TRAINING_EPOCH = Gauge(
+    "sentimentizer_training_epoch",
+    "Current training epoch number",
+    ["model_type"],
+)
+
+# ──────────────────────────────────────────────
 # Ray health metrics
 # ──────────────────────────────────────────────
 

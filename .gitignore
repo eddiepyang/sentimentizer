@@ -34,6 +34,7 @@ build
 dist
 .venv
 .venv312
+.env
 agent_checkpoints.db
 checkpoints/
 
