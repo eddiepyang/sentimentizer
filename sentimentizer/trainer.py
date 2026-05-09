@@ -246,6 +246,12 @@ class Trainer:
                 gauges = _get_ray_gauges(self.model_type)
                 if gauges is not None:
                     gauges["train_loss"].set(current_loss)
+                try:
+                    from sentimentizer.exporter import TRAINING_TRAIN_LOSS
+
+                    TRAINING_TRAIN_LOSS.labels(model_type=self.model_type).set(current_loss)
+                except ImportError:
+                    pass
                 logger.info(
                     f"[epoch {epoch}] {i / n:.2f} of rows completed in "
                     f"{j + 1} cycles, current loss at {np.mean(self.losses[-60:]):.6f}"
@@ -622,6 +628,14 @@ def _train_func(config: dict) -> None:
                 gauges = _get_ray_gauges(model_type)
                 if gauges is not None:
                     gauges["train_loss"].set(float(np.mean(epoch_losses[-60:])))
+                try:
+                    from sentimentizer.exporter import TRAINING_TRAIN_LOSS
+
+                    TRAINING_TRAIN_LOSS.labels(model_type=model_type).set(
+                        float(np.mean(epoch_losses[-60:]))
+                    )
+                except ImportError:
+                    pass
 
         if scheduler:
             scheduler.step()
@@ -677,6 +691,7 @@ def _train_func(config: dict) -> None:
         try:
             from sentimentizer.exporter import (  # noqa: E402
                 TRAINING_EPOCH,
+                TRAINING_TRAIN_LOSS,
                 TRAINING_VAL_ACCURACY,
                 TRAINING_VAL_AUC_ROC,
                 TRAINING_VAL_COHEN_KAPPA,
@@ -690,6 +705,7 @@ def _train_func(config: dict) -> None:
 
             if train.get_context().get_world_rank() == 0:
                 lbl = {"model_type": model_type}
+                TRAINING_TRAIN_LOSS.labels(**lbl).set(float(train_loss))
                 TRAINING_VAL_LOSS.labels(**lbl).set(float(val_loss))
                 TRAINING_VAL_ACCURACY.labels(**lbl).set(float(metrics.accuracy))
                 TRAINING_VAL_PRECISION.labels(**lbl).set(float(metrics.precision))

@@ -5,6 +5,11 @@ global:
 scrape_configs:
   - job_name: 'ray'
     # Scrape Ray metrics from the host machine
+    # honor_labels ensures Ray's internal labels (SessionName, RayNodeType,
+    # ray_io_cluster, instance) are preserved rather than overridden by
+    # Prometheus scrape labels. Without this, dashboards that filter by
+    # SessionName or instance show empty results.
+    honor_labels: true
     static_configs:
       - targets: ['host.docker.internal:8080']
 
