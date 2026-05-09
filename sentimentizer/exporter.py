@@ -11,6 +11,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import logging
 import os
 import subprocess
@@ -278,6 +279,16 @@ RAY_METRIC_COUNT = Gauge(
     "Number of Ray metric series found",
 )
 
+RAY_CONTROLLER_STATE = Gauge(
+    "sentimentizer_ray_controller_state",
+    "Ray controller state",
+)
+
+RAY_CONTROLLER_OPERATION_TIME = Gauge(
+    "sentimentizer_ray_controller_operation_time_s",
+    "Ray controller operation time",
+)
+
 
 def _update_system_metrics() -> None:
     """Update system metric gauges from psutil."""
@@ -360,11 +371,29 @@ def _update_ray_metrics(ray_url: str) -> None:
                     start = line.index('instance="') + len('instance="')
                     end = line.index('"', start)
                     node_instances.add(line[start:end])
+                elif line.startswith(
+                    (
+                        "ray_serve_controller_state",
+                        "ray_controller_state",
+                    )
+                ):
+                    with contextlib.suppress(ValueError):
+                        RAY_CONTROLLER_STATE.set(float(line.split()[-1]))
+                elif line.startswith(
+                    (
+                        "ray_serve_controller_operation_time",
+                        "ray_controller_operation_time",
+                    )
+                ):
+                    with contextlib.suppress(ValueError):
+                        RAY_CONTROLLER_OPERATION_TIME.set(float(line.split()[-1]))
             RAY_NODE_COUNT.set(len(node_instances))
     except (urllib.error.URLError, OSError):
         RAY_AVAILABLE.set(0)
         RAY_NODE_COUNT.set(0)
         RAY_METRIC_COUNT.set(0)
+        RAY_CONTROLLER_STATE.set(0)
+        RAY_CONTROLLER_OPERATION_TIME.set(0)
 
 
 def _metrics_loop(interval: int, ray_url: str) -> None:
