@@ -6,14 +6,27 @@ import shutil
 import signal
 from pathlib import Path
 
-# Disable Ray's automatic uv runtime environment to prevent VIRTUAL_ENV warnings
-os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
-os.environ["RAY_DEFAULT_OBJECT_STORE_MEMORY_PROPORTION"] = "0.75"
+from dotenv import load_dotenv
 
-# Tell the Ray Dashboard where to find Grafana and Prometheus for the Metrics tab.
-# These must be set BEFORE ray.init() so the dashboard can embed Grafana iframes.
+# Load static environment variables (e.g. RAY_*) from .env file.
+# .env is optional — defaults below are applied when the var is not set
+# in the environment or .env file.
+load_dotenv()
+
+# Ray runtime: disable uv runtime env to prevent VIRTUAL_ENV warnings
+os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
+os.environ.setdefault("RAY_DEFAULT_OBJECT_STORE_MEMORY_PROPORTION", "0.75")
+
+# Ray Dashboard: where to find Grafana and Prometheus for the Metrics tab.
+# These must be set BEFORE ray.init() so the dashboard can embed iframes.
 os.environ.setdefault("RAY_GRAFANA_HOST", "http://localhost:3000")
 os.environ.setdefault("RAY_PROMETHEUS_HOST", "http://localhost:9090")
+
+# Ensure NVIDIA CUDA libraries bundled in the venv (nvidia/cu13/lib, etc.)
+# are on LD_LIBRARY_PATH so that the driver process can load torch's CUDA dependencies.
+from sentimentizer.env import ensure_nvidia_ld_library_path
+
+nvidia_ld_library_path = ensure_nvidia_ld_library_path()
 
 import ray
 import torch
@@ -785,7 +798,12 @@ def main() -> None:
     # _metrics_export_port is a private API but is the only way to set this
     # programmatically in Ray 2.55 (public API uses `ray start --metrics-export-port`).
     if not ray.is_initialized():
-        ray.init(_metrics_export_port=8080)
+        runtime_env = {}
+        if nvidia_ld_library_path:
+            # Propagate the LD_LIBRARY_PATH to Ray workers
+            runtime_env["env_vars"] = {"LD_LIBRARY_PATH": nvidia_ld_library_path}
+
+        ray.init(_metrics_export_port=8080, runtime_env=runtime_env)
 
     if args.tune:
         # Tuning skill mode: tune hyperparameters and validate model
