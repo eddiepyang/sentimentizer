@@ -420,6 +420,50 @@ def _init_training_gauges() -> None:
         TRAINING_EPOCH.labels(**lbl).set(0)
 
 
+def _update_training_metrics() -> None:
+    """Read persisted training metrics from JSON and update gauges.
+
+    The driver process writes final training metrics to
+    ``/tmp/sentimentizer_training_metrics.json`` before exiting.  This
+    function reads that file and updates the training gauges so that
+    training metrics remain visible in Prometheus/Grafana even after the
+    driver process has exited.
+    """
+    path = "/tmp/sentimentizer_training_metrics.json"
+    try:
+        import json
+
+        p = __import__("pathlib").Path(path)
+        if not p.exists():
+            return
+        data = json.loads(p.read_text())
+        if not isinstance(data, dict):
+            return
+        for model_type, metrics in data.items():
+            if not isinstance(metrics, dict):
+                continue
+            lbl = {"model_type": model_type}
+            TRAINING_TRAIN_LOSS.labels(**lbl).set(float(metrics.get("train_loss", 0)))
+            TRAINING_VAL_LOSS.labels(**lbl).set(float(metrics.get("val_loss", 0)))
+            TRAINING_VAL_ACCURACY.labels(**lbl).set(float(metrics.get("accuracy", 0)))
+            TRAINING_VAL_PRECISION.labels(**lbl).set(float(metrics.get("precision", 0)))
+            TRAINING_VAL_RECALL.labels(**lbl).set(float(metrics.get("recall", 0)))
+            TRAINING_VAL_F1.labels(**lbl).set(float(metrics.get("f1", 0)))
+            TRAINING_VAL_COHEN_KAPPA.labels(**lbl).set(float(metrics.get("cohen_kappa", 0)))
+            auc_roc = metrics.get("auc_roc")
+            if auc_roc is not None:
+                TRAINING_VAL_AUC_ROC.labels(**lbl).set(float(auc_roc))
+            TRAINING_VAL_POSITIVE_ACCURACY.labels(**lbl).set(
+                float(metrics.get("positive_accuracy", 0))
+            )
+            TRAINING_VAL_NEGATIVE_ACCURACY.labels(**lbl).set(
+                float(metrics.get("negative_accuracy", 0))
+            )
+            TRAINING_EPOCH.labels(**lbl).set(int(metrics.get("epoch", 0)))
+    except Exception as e:
+        logger.warning("Error updating training metrics from file: %s", e)
+
+
 def _metrics_loop(interval: int, ray_url: str) -> None:
     """Background thread that periodically updates metric gauges."""
     while True:
@@ -435,6 +479,10 @@ def _metrics_loop(interval: int, ray_url: str) -> None:
             _update_ray_metrics(ray_url)
         except Exception as e:
             logger.warning("Error updating Ray metrics: %s", e)
+        try:
+            _update_training_metrics()
+        except Exception as e:
+            logger.warning("Error updating training metrics: %s", e)
         time.sleep(interval)
 
 
@@ -475,6 +523,7 @@ def main() -> None:
     _update_gpu_metrics()
     _update_ray_metrics(args.ray_url)
     _init_training_gauges()
+    _update_training_metrics()
 
     # Start background collection thread
     collector = threading.Thread(

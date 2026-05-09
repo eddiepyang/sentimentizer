@@ -358,7 +358,7 @@ def run_tokenize(state: State, *, resume: bool) -> None:
 _metrics_server_started: bool = False
 
 
-def _ensure_metrics_server(port: int = 8081) -> None:
+def _ensure_metrics_server(port: int = 8083) -> None:
     """Start a ``prometheus_client`` HTTP server for training metrics if not running.
 
     This ensures the ``sentimentizer_training_*`` gauges (set in
@@ -366,8 +366,11 @@ def _ensure_metrics_server(port: int = 8081) -> None:
     that the Prometheus -> Grafana pipeline can scrape them.  The server is
     started idempotently -- calling this multiple times is safe.
 
-    Port 8081 matches the ``sentimentizer`` scrape job in
-    ``metrics/prometheus.yml``.
+    Port 8083 is the ``sentimentizer-training`` scrape job in
+    ``metrics/prometheus.yml``.  Port 8081 is used by the standalone
+    exporter (``sentimentizer/exporter.py``) which serves system/GPU
+    metrics and pre-initialized training gauges; the driver process uses
+    8083 so both can coexist without port conflicts.
     """
     global _metrics_server_started
     if _metrics_server_started:
@@ -447,6 +450,9 @@ def _publish_distributed_metrics(result: Any, model_type: str) -> None:
     ``result.metrics``.  This function sets those values on the driver's
     ``sentimentizer_training_*`` gauges so they are visible via the
     ``/metrics`` HTTP endpoint (started by ``_ensure_metrics_server``).
+
+    Metrics are also persisted to a JSON file so the standalone exporter
+    (port 8081) can serve them after the driver process exits.
     """
     try:
         from sentimentizer.exporter import (
@@ -496,6 +502,48 @@ def _publish_distributed_metrics(result: Any, model_type: str) -> None:
             "prometheus_client_not_available",
             message="Cannot publish distributed training metrics to Prometheus gauges",
         )
+
+    # Persist metrics to JSON so the standalone exporter can serve them
+    # after the driver process exits.
+    _persist_metrics_to_file(result.metrics, model_type)
+
+
+def _persist_metrics_to_file(metrics: dict, model_type: str) -> None:
+    """Write final training metrics to a JSON file for the standalone exporter.
+
+    The standalone exporter on port 8081 reads this file periodically and
+    updates its own Prometheus gauges.  This ensures training metrics persist
+    after the driver process exits.
+    """
+    import json
+
+    path = Path("/tmp/sentimentizer_training_metrics.json")
+
+    # Read existing data (may contain metrics from other model types)
+    data: dict[str, dict] = {}
+    if path.exists():
+        try:
+            data = json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    auc_roc = metrics.get("auc_roc")
+    data[model_type] = {
+        "train_loss": float(metrics.get("train_loss", 0)),
+        "val_loss": float(metrics.get("val_loss", 0)),
+        "accuracy": float(metrics.get("accuracy", 0)),
+        "precision": float(metrics.get("precision", 0)),
+        "recall": float(metrics.get("recall", 0)),
+        "f1": float(metrics.get("f1", 0)),
+        "cohen_kappa": float(metrics.get("cohen_kappa", 0)),
+        "auc_roc": float(auc_roc) if auc_roc is not None else None,
+        "positive_accuracy": float(metrics.get("pos_acc", 0)),
+        "negative_accuracy": float(metrics.get("neg_acc", 0)),
+        "epoch": int(metrics.get("epoch", 0)),
+    }
+
+    path.write_text(json.dumps(data, indent=2))
+    logger.info("training_metrics_persisted", path=str(path), model_type=model_type)
 
 def run_train(
     state: State,
