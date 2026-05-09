@@ -354,50 +354,6 @@ def run_tokenize(state: State, *, resume: bool) -> None:
         raise ValueError(f"invalid run_type: {state.run_type}")
 
 
-# Module-level flag to avoid starting the Prometheus HTTP server more than once.
-_metrics_server_started: bool = False
-
-
-def _ensure_metrics_server(port: int = 8083) -> None:
-    """Start a ``prometheus_client`` HTTP server for training metrics if not running.
-
-    This ensures the ``sentimentizer_training_*`` gauges (set in
-    ``trainer.py``) are reachable at ``http://localhost:<port>/metrics`` so
-    that the Prometheus -> Grafana pipeline can scrape them.  The server is
-    started idempotently -- calling this multiple times is safe.
-
-    Port 8083 is the ``sentimentizer-training`` scrape job in
-    ``metrics/prometheus.yml``.  Port 8081 is used by the standalone
-    exporter (``sentimentizer/exporter.py``) which serves system/GPU
-    metrics and pre-initialized training gauges; the driver process uses
-    8083 so both can coexist without port conflicts.
-    """
-    global _metrics_server_started
-    if _metrics_server_started:
-        return
-    try:
-        from prometheus_client import start_http_server
-
-        start_http_server(port)
-        _metrics_server_started = True
-        logger.info(
-            "metrics_server_started",
-            port=port,
-            note=f"Training metrics available at http://localhost:{port}/metrics",
-        )
-    except OSError as exc:
-        # Port already in use -- e.g. the standalone exporter or a previous
-        # training run.  That is fine; the gauges are shared across processes
-        # with the same port so metrics will still be published.
-        logger.warning("metrics_server_port_in_use", port=port, error=str(exc))
-        _metrics_server_started = True
-    except ImportError:
-        logger.warning(
-            "prometheus_client_not_available",
-            message="Cannot start metrics server for training gauges",
-        )
-
-
 
 def _publish_distributed_metrics(result: Any, model_type: str) -> None:
     """Publish final distributed training metrics to the driver-level Prometheus gauges.
@@ -408,12 +364,13 @@ def _publish_distributed_metrics(result: Any, model_type: str) -> None:
     the driver-level ``sentimentizer_training_*`` metrics never get updated.
 
     After ``ray_trainer.fit()`` returns, the driver has the final metrics in
-    ``result.metrics``.  This function sets those values on the driver's
-    ``sentimentizer_training_*`` gauges so they are visible via the
-    ``/metrics`` HTTP endpoint (started by ``_ensure_metrics_server``).
+    ``result.metrics``.  This function persists those values to a JSON file
+    that the standalone exporter (port 8081) reads periodically, so training
+    metrics remain visible in Grafana after the driver process exits.
 
-    Metrics are also persisted to a JSON file so the standalone exporter
-    (port 8081) can serve them after the driver process exits.
+    The gauge-setting code is kept as a best-effort backup: if the driver
+    process happens to be scraped by Prometheus before exiting, the gauges
+    will reflect the final metrics.
     """
     try:
         from sentimentizer.exporter import (
@@ -524,10 +481,6 @@ def run_train(
 ) -> None:
     """Fit the model (single-node or distributed)."""
     from sentimentizer.device import resolve_device
-
-    # Start the metrics server so training gauges are scrapeable by Prometheus.
-    # This must happen in the driver process, not in Ray workers.
-    _ensure_metrics_server()
 
     device = resolve_device(state.device)
 

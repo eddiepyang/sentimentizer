@@ -5,25 +5,27 @@ Sentimentizer exposes training and system metrics via Prometheus for visualizati
 ## Architecture
 
 ```
-┌─────────────────────────┐     ┌──────────────────────────┐     ┌──────────────┐
-│  Training Driver         │     │  Standalone Exporter      │     │  Ray Workers  │
-│  (port 8083)             │     │  (port 8081)              │     │  (port 8080)  │
-│                          │     │                            │     │               │
-│  sentimentizer_training_*│     │  sentimentizer_training_* │     │  ray_sentimen-│
-│  gauges (set during      │     │  gauges (loaded from JSON │     │  tizer_live_* │
-│  training + from JSON)   │     │  after training)   │     │  gauges       │
-│                          │     │  sentimentizer_system_*    │     │               │
-│  /tmp/sentimentizer_     │────▶│  sentimentizer_gpu_*      │     │               │
-│  training_metrics.json   │     │  sentimentizer_ray_*      │     │               │
-└──────────┬───────────────┘     └──────────┬───────────────┘     └──────┬────────┘
-           │                                │                             │
-           │    ┌──────────────────────┐    │                             │
-           └───▶│  Prometheus           │◀──┘                             │
-                │  (port 9090)         │◀────────────────────────────────┘
+┌──────────────────────┐     ┌──────────────────────┐
+│  Training Driver      │     │  Standalone Exporter  │
+│                       │     │  (port 8081)           │
+│  Writes metrics to    │────▶│  Reads JSON file every │
+│  /tmp/sentimentizer_  │     │  10s, serves gauges    │
+│  training_metrics.json│     │  + system/GPU/Ray stats │
+└───────────────────────┘     └──────────┬───────────┘
+                                         │
+┌──────────────────────┐                  │
+│  Ray Workers         │                  │
+│  (port 8080)         │                  │
+│                      │                  │
+│  ray_sentimentizer_  │                  │
+│  live_* gauges       │                  │
+└──────────┬───────────┘                  │
+           │                              │
+           │    ┌──────────────────────┐   │
+           └───▶│  Prometheus           │◀──┘
+                │  (port 9090)         │
                 │  Scrape targets:      │
                 │  - sentimentizer:8081 │
-                │  - sentimentizer-      │
-                │    training:8083      │
                 │  - ray:8080           │
                 │  - sentimentizer-      │
                 │    tune:8082           │
@@ -42,9 +44,8 @@ Sentimentizer exposes training and system metrics via Prometheus for visualizati
 
 | Job Name | Port | Purpose |
 |----------|------|---------|
-| `sentimentizer` | 8081 | Always-on exporter: system metrics, GPU stats, Ray health, and persistent training gauges |
-| `sentimentizer-training` | 8083 | Driver process: live training gauges during `make train` or `make train-distributed` |
-| `sentimentizer-tune` | 8082 | Tuning process: Ray Tune trial metrics |
+| `sentimentizer` | 8081 | Always-on exporter: system metrics, GPU stats, Ray health, and training gauges (loaded from JSON) |
+| `sentimentizer-tune` | 8082 | Tuning process: Ray Tune trial metrics (active during tuning only) |
 | `ray` | 8080 | Ray cluster metrics including `ray_sentimentizer_live_*` gauges from distributed workers |
 
 ## Metric Naming Convention
@@ -103,22 +104,23 @@ Always available from port 8081:
 ### During Distributed Training (`make train-distributed`)
 
 1. **Ray workers** (port 8080) emit `ray_sentimentizer_live_*` gauges every 100 training steps from rank 0
-2. **Driver process** (port 8083) sets `sentimentizer_training_*` gauges at the end of each epoch
-3. **Prometheus** scrapes both ports every 10 seconds
-4. **Grafana** queries `sentimentizer_training_* or ray_sentimentizer_live_*` to show whichever data is available
+2. **Driver process** sets `sentimentizer_training_*` gauges in-process and writes final metrics to `/tmp/sentimentizer_training_metrics.json`
+3. **Standalone exporter** (port 8081) reads the JSON file every 10 seconds and updates its gauges
+4. **Prometheus** scrapes ports 8080 and 8081 every 10 seconds
+5. **Grafana** queries `sentimentizer_training_* or ray_sentimentizer_live_*` to show whichever data is available
 
 ### After Training Completes
 
 1. **Driver process** writes final metrics to `/tmp/sentimentizer_training_metrics.json`
-2. **Driver process** exits (port 8083 goes offline)
-3. **Standalone exporter** (port 8081, always-on) reads the JSON file every 10 seconds and updates its own `sentimentizer_training_*` gauges
+2. **Driver process** exits
+3. **Standalone exporter** (port 8081, always-on) reads the JSON file every 10 seconds and updates its `sentimentizer_training_*` gauges
 4. **Prometheus** continues scraping port 8081, picking up the persisted metrics
 5. **Grafana** shows the final training results even after training is done
 
 ### During Single-Node Training (`make train`)
 
-1. **Trainer** (in the driver process) sets `sentimentizer_training_*` gauges at each validation epoch
-2. **Driver process** serves them on port 8083
+1. **Trainer** (in the driver process) sets `sentimentizer_training_*` gauges at each validation epoch and writes metrics to JSON
+2. **Standalone exporter** (port 8081) reads the JSON file and serves the gauges
 3. Same persistence flow as above when training completes
 
 ## NaN Handling in Metrics
@@ -139,7 +141,7 @@ cd metrics && docker compose up -d
 make start-exporter
 # or: uv run python sentimentizer/exporter.py
 
-# Start training (driver starts port 8083 automatically)
+# Start training (driver writes metrics to JSON file automatically)
 make train-distributed
 ```
 
@@ -164,14 +166,14 @@ sentimentizer_training_val_accuracy{model_type=~"$model_type"}
 
 ### Dashboard shows "No data"
 
-1. **Check Prometheus targets**: Visit `http://localhost:9090/targets` — all targets should be UP (except `sentimentizer-training` and `sentimentizer-tune` which are only active during training)
+1. **Check Prometheus targets**: Visit `http://localhost:9090/targets` — `sentimentizer` and `ray` should be UP
 2. **Check exporter is running**: `curl http://localhost:8081/metrics | grep sentimentizer_training` should show metrics for models that have completed training
 3. **Check training completed**: `cat /tmp/sentimentizer_training_metrics.json` should contain the final metrics
 4. **Check dashboard queries**: The dashboard uses `ray_` prefix for Ray metrics (`ray_sentimentizer_live_*`), not `sentimentizer_live_*`
 
 ### Metrics disappear after training ends
 
-This is expected — the driver process (port 8083) exits. The standalone exporter (port 8081) reads persisted metrics from `/tmp/sentimentizer_training_metrics.json` every 10 seconds. If the file doesn't exist, these gauges will not appear.
+The standalone exporter (port 8081) reads persisted metrics from `/tmp/sentimentizer_training_metrics.json` every 10 seconds. If the file doesn't exist or is empty, training gauges will not appear.
 
 ### "ValueError: Input contains NaN" crash
 
@@ -186,6 +188,5 @@ Ray metrics are only available while Ray is running. Check that `ray` is in the 
 - Port 8080: Ray metrics (auto-configured by `ray.init(_metrics_export_port=8080)`)
 - Port 8081: Standalone exporter (`sentimentizer/exporter.py`)
 - Port 8082: Tune metrics (started by `tune_model()`)
-- Port 8083: Driver training metrics (started by `_ensure_metrics_server()`)
 
 If a port is already in use, the code logs a warning and continues — `prometheus_client` gauges are process-global, so metrics still work within the same process.

@@ -19,13 +19,6 @@ scrape_configs:
     static_configs:
       - targets: ['host.docker.internal:8081']
 
-  - job_name: 'sentimentizer-training'
-    # Scrape live training metrics from the driver process.
-    # This port is started by _ensure_metrics_server() during training runs
-    # and provides real-time updates as training progresses.
-    static_configs:
-      - targets: ['host.docker.internal:8083']
-
   - job_name: 'sentimentizer-tune'
     # Scrape Sentimentizer Ray Tune trial metrics (accuracy, loss, F1, etc.)
     # This port is started automatically by tune_model() during tuning runs.
