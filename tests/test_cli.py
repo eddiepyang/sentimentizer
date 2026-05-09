@@ -200,9 +200,7 @@ def test_run_passes_resume_flags(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("workflows.driver.run_tokenize", mock_tokenize)
     monkeypatch.setattr("workflows.driver.run_train", mock_train)
 
-    result = CliRunner().invoke(
-        cli, ["run", "--stop", "10", "--resume-tokenize", "--resume-train"]
-    )
+    result = CliRunner().invoke(cli, ["run", "--stop", "10", "--resume-tokenize", "--resume-train"])
     assert result.exit_code == 0, result.output
     assert tokenize_kwargs["resume"] is True
     assert train_kwargs["resume"] is True
@@ -252,9 +250,7 @@ def test_diagn_pipeline_command(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_diagn_env_command(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
-    monkeypatch.setattr(
-        "workflows.driver.run_diagnose_env", lambda *a, **kw: calls.append("env")
-    )
+    monkeypatch.setattr("workflows.driver.run_diagnose_env", lambda *a, **kw: calls.append("env"))
     result = CliRunner().invoke(cli, ["diagnose", "env"])
     assert result.exit_code == 0, result.output
     assert calls == ["env"]

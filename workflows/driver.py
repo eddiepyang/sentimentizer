@@ -334,9 +334,7 @@ def run_tokenize(state: State, *, resume: bool) -> None:
         stop = TokenizerConfig.stop
         existing_rows = _parquet_row_count(DriverConfig.files.processed_reviews_file_path)
         if existing_rows >= stop:
-            logger.info(
-                f"skipping tokenize: {existing_rows} rows already exist (need {stop})"
-            )
+            logger.info(f"skipping tokenize: {existing_rows} rows already exist (need {stop})")
             return
 
         reviews_data = ray.data.read_parquet(DriverConfig.files.raw_reviews_file_path)
@@ -356,6 +354,109 @@ def run_tokenize(state: State, *, resume: bool) -> None:
         raise ValueError(f"invalid run_type: {state.run_type}")
 
 
+# Module-level flag to avoid starting the Prometheus HTTP server more than once.
+_metrics_server_started: bool = False
+
+
+def _ensure_metrics_server(port: int = 8081) -> None:
+    """Start a ``prometheus_client`` HTTP server for training metrics if not running.
+
+    This ensures the ``sentimentizer_training_*`` gauges (set in
+    ``trainer.py``) are reachable at ``http://localhost:<port>/metrics`` so
+    that the Prometheus -> Grafana pipeline can scrape them.  The server is
+    started idempotently -- calling this multiple times is safe.
+
+    Port 8081 matches the ``sentimentizer`` scrape job in
+    ``metrics/prometheus.yml``.
+    """
+    global _metrics_server_started
+    if _metrics_server_started:
+        return
+    try:
+        from prometheus_client import start_http_server
+
+        start_http_server(port)
+        _metrics_server_started = True
+        logger.info(
+            "metrics_server_started",
+            port=port,
+            note=f"Training metrics available at http://localhost:{port}/metrics",
+        )
+    except OSError as exc:
+        # Port already in use -- e.g. the standalone exporter or a previous
+        # training run.  That is fine; the gauges are shared across processes
+        # with the same port so metrics will still be published.
+        logger.warning("metrics_server_port_in_use", port=port, error=str(exc))
+        _metrics_server_started = True
+    except ImportError:
+        logger.warning(
+            "prometheus_client_not_available",
+            message="Cannot start metrics server for training gauges",
+        )
+
+
+def _publish_distributed_metrics(result: Any, model_type: str) -> None:
+    """Publish final distributed training metrics to the driver-level Prometheus gauges.
+
+    During distributed training, ``_train_func`` runs inside Ray workers --
+    separate processes that set their own ``prometheus_client`` gauge objects.
+    Those worker-process gauges are NOT the same as the driver's gauges, so
+    the driver-level ``sentimentizer_training_*`` metrics never get updated.
+
+    After ``ray_trainer.fit()`` returns, the driver has the final metrics in
+    ``result.metrics``.  This function sets those values on the driver's
+    ``sentimentizer_training_*`` gauges so they are visible via the
+    ``/metrics`` HTTP endpoint (started by ``_ensure_metrics_server``).
+    """
+    try:
+        from sentimentizer.exporter import (
+            TRAINING_EPOCH,
+            TRAINING_TRAIN_LOSS,
+            TRAINING_VAL_ACCURACY,
+            TRAINING_VAL_AUC_ROC,
+            TRAINING_VAL_COHEN_KAPPA,
+            TRAINING_VAL_F1,
+            TRAINING_VAL_LOSS,
+            TRAINING_VAL_NEGATIVE_ACCURACY,
+            TRAINING_VAL_POSITIVE_ACCURACY,
+            TRAINING_VAL_PRECISION,
+            TRAINING_VAL_RECALL,
+        )
+
+        metrics = result.metrics
+        lbl = {"model_type": model_type}
+
+        TRAINING_TRAIN_LOSS.labels(**lbl).set(float(metrics.get("train_loss", 0)))
+        TRAINING_VAL_LOSS.labels(**lbl).set(float(metrics.get("val_loss", 0)))
+        TRAINING_VAL_ACCURACY.labels(**lbl).set(float(metrics.get("accuracy", 0)))
+        TRAINING_VAL_PRECISION.labels(**lbl).set(float(metrics.get("precision", 0)))
+        TRAINING_VAL_RECALL.labels(**lbl).set(float(metrics.get("recall", 0)))
+        TRAINING_VAL_F1.labels(**lbl).set(float(metrics.get("f1", 0)))
+        TRAINING_VAL_COHEN_KAPPA.labels(**lbl).set(float(metrics.get("cohen_kappa", 0)))
+        auc_roc = metrics.get("auc_roc")
+        if auc_roc is not None:
+            TRAINING_VAL_AUC_ROC.labels(**lbl).set(float(auc_roc))
+        TRAINING_VAL_POSITIVE_ACCURACY.labels(**lbl).set(
+            float(metrics.get("pos_acc", 0))
+        )
+        TRAINING_VAL_NEGATIVE_ACCURACY.labels(**lbl).set(
+            float(metrics.get("neg_acc", 0))
+        )
+        TRAINING_EPOCH.labels(**lbl).set(int(metrics.get("epoch", 0)))
+
+        logger.info(
+            "distributed_metrics_published_to_prometheus",
+            model_type=model_type,
+            accuracy=metrics.get("accuracy"),
+            val_loss=metrics.get("val_loss"),
+            train_loss=metrics.get("train_loss"),
+        )
+    except ImportError:
+        logger.warning(
+            "prometheus_client_not_available",
+            message="Cannot publish distributed training metrics to Prometheus gauges",
+        )
+
 def run_train(
     state: State,
     *,
@@ -374,6 +475,10 @@ def run_train(
 ) -> None:
     """Fit the model (single-node or distributed)."""
     from sentimentizer.device import resolve_device
+
+    # Start the metrics server so training gauges are scrapeable by Prometheus.
+    # This must happen in the driver process, not in Ray workers.
+    _ensure_metrics_server()
 
     device = resolve_device(state.device)
 
@@ -402,9 +507,7 @@ def run_train(
             dict_path=DriverConfig.files.dictionary_file_path,
         )
         if result_path:
-            logger.info(
-                f"Pulled {state.model} weights from HF Hub. Forcing run type to 'update'."
-            )
+            logger.info(f"Pulled {state.model} weights from HF Hub. Forcing run type to 'update'.")
             state.run_type = "update"
         else:
             logger.error("Failed to pull weights from HF Hub. Proceeding with original run type.")
@@ -613,6 +716,10 @@ def _run_fit_distributed(
         result = ray_trainer.fit()
     finally:
         _cuda_cleanup()
+
+    # Publish final metrics from distributed training to the driver-level
+    # Prometheus gauges so they are visible on the /metrics endpoint.
+    _publish_distributed_metrics(result, state.model)
 
     logger.info(  # type: ignore[call-arg]
         "distributed training completed",
@@ -914,9 +1021,7 @@ def shared_train_options(func: click.Command) -> click.Command:
             type=float,
             help="Loss weight for positive class (0 = auto-calculate)",
         ),
-        click.option(
-            "--push-to-hub", is_flag=True, help="Push model weights to Hugging Face Hub"
-        ),
+        click.option("--push-to-hub", is_flag=True, help="Push model weights to Hugging Face Hub"),
         click.option(
             "--pull-from-hub", is_flag=True, help="Pull model weights from Hugging Face Hub"
         ),
