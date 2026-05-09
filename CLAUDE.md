@@ -14,20 +14,7 @@ If the change affects Ray Train or distributed training specifically, also run:
 uv run pytest tests/ -v -k "Ray"
 ```
 
-## Always use `uv run`
-
-When executing any Python tool or script (e.g., `pytest`, `ruff`, `black`, `python`), always prefix it with `uv run`:
-
-```bash
-uv run pytest tests/ -v
-uv run ruff check .
-uv run black .
-uv run python workflows/driver.py
-```
-
-This ensures commands run inside the project's virtual environment managed by **uv**.
-
-## Dependency management
+## Alwa## Dependency management
 
 This project uses **uv** for dependency management. Key commands:
 

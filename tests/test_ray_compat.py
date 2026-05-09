@@ -554,6 +554,5 @@ class TestTuneCallbackAPI:
         )
         # trial_result.metrics should also be guarded
         assert "trial_result.metrics or {}" in source, (
-            "trial_result.metrics can be None in Ray 2.55+. "
-            "Use: trial_result.metrics or {}"
+            "trial_result.metrics can be None in Ray 2.55+. " "Use: trial_result.metrics or {}"
         )
