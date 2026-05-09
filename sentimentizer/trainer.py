@@ -353,6 +353,16 @@ class Trainer:
 
         probabilities = torch.cat(all_probs).numpy()
         targets = torch.cat(all_targets).numpy()
+
+        # Replace NaN probabilities with 0.5 (can result from extreme logit values)
+        nan_mask = np.isnan(probabilities)
+        if nan_mask.any():
+            logger.warning(
+                "nan_in_probabilities",
+                message=f"Found {int(nan_mask.sum())} NaN values in probabilities, replacing with 0.5",
+            )
+            probabilities = np.where(nan_mask, 0.5, probabilities)
+
         predictions = (probabilities >= 0.5).astype(int)
 
         from sentimentizer.metrics import compute_classification_metrics
@@ -664,6 +674,16 @@ def _train_func(config: dict) -> None:
 
         probabilities = torch.cat(all_probs).numpy()
         targets = torch.cat(all_targets).numpy()
+
+        # Replace NaN probabilities with 0.5 (can result from extreme logit values)
+        nan_mask = np.isnan(probabilities)
+        if nan_mask.any():
+            logger.warning(
+                "nan_in_probabilities",
+                message=f"Found {int(nan_mask.sum())} NaN values in probabilities, replacing with 0.5",
+            )
+            probabilities = np.where(nan_mask, 0.5, probabilities)
+
         predictions = (probabilities >= 0.5).astype(int)
 
         metrics = compute_classification_metrics(
