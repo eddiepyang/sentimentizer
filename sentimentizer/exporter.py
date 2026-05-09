@@ -396,30 +396,6 @@ def _update_ray_metrics(ray_url: str) -> None:
         RAY_CONTROLLER_OPERATION_TIME.set(0)
 
 
-def _init_training_gauges() -> None:
-    """Initialize training gauge labels with default values.
-
-    Prometheus labeled gauges are invisible to queries until their label
-    values have been set at least once.  This function sets all three
-    model-type labels (rnn, encoder, decoder) to 0 on every training gauge
-    so that Grafana dashboards can discover and display them immediately,
-    even before training starts.
-    """
-    for model_type in ("rnn", "encoder", "decoder"):
-        lbl = {"model_type": model_type}
-        TRAINING_TRAIN_LOSS.labels(**lbl).set(0)
-        TRAINING_VAL_LOSS.labels(**lbl).set(0)
-        TRAINING_VAL_ACCURACY.labels(**lbl).set(0)
-        TRAINING_VAL_PRECISION.labels(**lbl).set(0)
-        TRAINING_VAL_RECALL.labels(**lbl).set(0)
-        TRAINING_VAL_F1.labels(**lbl).set(0)
-        TRAINING_VAL_COHEN_KAPPA.labels(**lbl).set(0)
-        TRAINING_VAL_AUC_ROC.labels(**lbl).set(0)
-        TRAINING_VAL_POSITIVE_ACCURACY.labels(**lbl).set(0)
-        TRAINING_VAL_NEGATIVE_ACCURACY.labels(**lbl).set(0)
-        TRAINING_EPOCH.labels(**lbl).set(0)
-
-
 def _update_training_metrics() -> None:
     """Read persisted training metrics from JSON and update gauges.
 
@@ -522,7 +498,6 @@ def main() -> None:
     _update_system_metrics()
     _update_gpu_metrics()
     _update_ray_metrics(args.ray_url)
-    _init_training_gauges()
     _update_training_metrics()
 
     # Start background collection thread

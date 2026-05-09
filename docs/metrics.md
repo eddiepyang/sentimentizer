@@ -10,8 +10,8 @@ Sentimentizer exposes training and system metrics via Prometheus for visualizati
 │  (port 8083)             │     │  (port 8081)              │     │  (port 8080)  │
 │                          │     │                            │     │               │
 │  sentimentizer_training_*│     │  sentimentizer_training_* │     │  ray_sentimen-│
-│  gauges (set during      │     │  gauges (initialized to 0, │     │  tizer_live_* │
-│  training + from JSON)   │     │  updated from JSON file)   │     │  gauges       │
+│  gauges (set during      │     │  gauges (loaded from JSON │     │  tizer_live_* │
+│  training + from JSON)   │     │  after training)   │     │  gauges       │
 │                          │     │  sentimentizer_system_*    │     │               │
 │  /tmp/sentimentizer_     │────▶│  sentimentizer_gpu_*      │     │               │
 │  training_metrics.json   │     │  sentimentizer_ray_*      │     │               │
@@ -50,7 +50,7 @@ Sentimentizer exposes training and system metrics via Prometheus for visualizati
 ## Metric Naming Convention
 
 ### `sentimentizer_training_*` (final metrics)
-Set by the driver process and standalone exporter. These persist after training completes.
+Only emitted for model types that have completed training. Gauges are NOT pre-initialized — if no training has run, these metrics will not appear in Prometheus at all.
 
 - `sentimentizer_training_train_loss{model_type}`
 - `sentimentizer_training_val_loss{model_type}`
@@ -165,13 +165,13 @@ sentimentizer_training_val_accuracy{model_type=~"$model_type"}
 ### Dashboard shows "No data"
 
 1. **Check Prometheus targets**: Visit `http://localhost:9090/targets` — all targets should be UP (except `sentimentizer-training` and `sentimentizer-tune` which are only active during training)
-2. **Check exporter is running**: `curl http://localhost:8081/metrics | grep sentimentizer_training` should show initialized gauges
+2. **Check exporter is running**: `curl http://localhost:8081/metrics | grep sentimentizer_training` should show metrics for models that have completed training
 3. **Check training completed**: `cat /tmp/sentimentizer_training_metrics.json` should contain the final metrics
 4. **Check dashboard queries**: The dashboard uses `ray_` prefix for Ray metrics (`ray_sentimentizer_live_*`), not `sentimentizer_live_*`
 
 ### Metrics disappear after training ends
 
-This is expected — the driver process (port 8083) exits. The standalone exporter (port 8081) reads persisted metrics from `/tmp/sentimentizer_training_metrics.json` every 10 seconds. If the file doesn't exist, gauges show 0.
+This is expected — the driver process (port 8083) exits. The standalone exporter (port 8081) reads persisted metrics from `/tmp/sentimentizer_training_metrics.json` every 10 seconds. If the file doesn't exist, these gauges will not appear.
 
 ### "ValueError: Input contains NaN" crash
 
