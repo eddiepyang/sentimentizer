@@ -6,6 +6,10 @@
     },
     {
       "pattern": ".*",
+      "instruction": "Always lint first before running tests. Run `make check` first, fix any lint or format issues, then run `make test`. Never skip linting."
+    },
+    {
+      "pattern": ".*",
       "instruction": "Always run `make check` and `make test` after making code changes, and fix any tests or checks that fail."
     }
   ]

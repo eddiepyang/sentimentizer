@@ -503,26 +503,30 @@ class TestMetricsGauges:
             }
         ]
 
-        # 3. Mock dependencies to isolate _train_func
+        # 3. Create mock gauge objects (matching _get_ray_gauges dict keys)
+        mock_gauges = {
+            "train_loss": MagicMock(),
+            "val_loss": MagicMock(),
+            "val_accuracy": MagicMock(),
+            "val_precision": MagicMock(),
+            "val_recall": MagicMock(),
+            "val_f1": MagicMock(),
+            "val_cohen_kappa": MagicMock(),
+            "val_auc_roc": MagicMock(),
+            "val_positive_accuracy": MagicMock(),
+            "val_negative_accuracy": MagicMock(),
+        }
+
+        # 4. Mock dependencies to isolate _train_func
         with (
             patch("ray.train.get_dataset_shard", return_value=mock_shard),
             patch("ray.train.get_context") as mock_get_context,
             patch("ray.train.report"),
             patch("sentimentizer.trainer.train_step", return_value=0.5),
-            patch("sentimentizer.trainer.LIVE_TRAIN_LOSS") as mock_train_loss,
-            patch("sentimentizer.trainer.LIVE_VAL_LOSS") as mock_val_loss,
-            patch("sentimentizer.trainer.LIVE_VAL_ACCURACY") as mock_val_acc,
-            patch("sentimentizer.trainer.LIVE_VAL_PRECISION", create=True),
-            patch("sentimentizer.trainer.LIVE_VAL_RECALL", create=True),
-            patch("sentimentizer.trainer.LIVE_VAL_F1", create=True),
-            patch("sentimentizer.trainer.LIVE_VAL_COHEN_KAPPA", create=True),
-            patch("sentimentizer.trainer.LIVE_VAL_AUC_ROC", create=True),
-            patch("sentimentizer.trainer.LIVE_VAL_POSITIVE_ACCURACY", create=True),
-            patch("sentimentizer.trainer.LIVE_VAL_NEGATIVE_ACCURACY", create=True),
+            patch("sentimentizer.trainer._get_ray_gauges", return_value=mock_gauges),
             patch("sentimentizer.models.rnn.new_model") as mock_new_model,
             patch("sentimentizer.trainer.prepare_model", side_effect=lambda m: m),
         ):
-
             # Setup mock model — parameters() must return a fresh iterator each call
             mock_model = MagicMock()
             p = torch.nn.Parameter(torch.randn(1, 1))
@@ -536,11 +540,10 @@ class TestMetricsGauges:
 
             _train_func(config)
 
-            # 4. Assertions
-            assert mock_train_loss.set.called, "LIVE_TRAIN_LOSS was not updated"
-            assert mock_val_loss.set.called, "LIVE_VAL_LOSS was not updated"
-            assert mock_val_acc.set.called, "LIVE_VAL_ACCURACY was not updated"
-            assert mock_val_loss.set.call_args[0][1] == {"model_type": "rnn"}
+            # 5. Assertions
+            assert mock_gauges["train_loss"].set.called, "train_loss gauge was not updated"
+            assert mock_gauges["val_loss"].set.called, "val_loss gauge was not updated"
+            assert mock_gauges["val_accuracy"].set.called, "val_accuracy gauge was not updated"
 
     def test_trainer_evaluate_updates_gauges(self) -> None:
         """Verifies Trainer.evaluate updates Prometheus Gauges during single-node training."""
@@ -560,18 +563,35 @@ class TestMetricsGauges:
             model_type="rnn",
         )
 
+        # Create mock gauge objects (matching _get_ray_gauges dict keys)
+        mock_gauges = {
+            "train_loss": MagicMock(),
+            "val_loss": MagicMock(),
+            "val_accuracy": MagicMock(),
+            "val_precision": MagicMock(),
+            "val_recall": MagicMock(),
+            "val_f1": MagicMock(),
+            "val_cohen_kappa": MagicMock(),
+            "val_auc_roc": MagicMock(),
+            "val_positive_accuracy": MagicMock(),
+            "val_negative_accuracy": MagicMock(),
+        }
+
         with (
-            patch("sentimentizer.trainer.LIVE_VAL_LOSS") as mock_val_loss,
-            patch("sentimentizer.trainer.LIVE_VAL_ACCURACY") as mock_val_acc,
-            patch("sentimentizer.trainer.LIVE_VAL_PRECISION", create=True),
-            patch("sentimentizer.trainer.LIVE_VAL_RECALL", create=True),
-            patch("sentimentizer.trainer.LIVE_VAL_F1", create=True),
-            patch("sentimentizer.trainer.LIVE_VAL_COHEN_KAPPA", create=True),
-            patch("sentimentizer.trainer.LIVE_VAL_AUC_ROC", create=True),
-            patch("sentimentizer.trainer.LIVE_VAL_POSITIVE_ACCURACY", create=True),
-            patch("sentimentizer.trainer.LIVE_VAL_NEGATIVE_ACCURACY", create=True),
+            patch("sentimentizer.trainer._get_ray_gauges", return_value=mock_gauges),
+            # Patch the exporter import inside evaluate() to avoid real Prometheus gauges
+            patch("sentimentizer.exporter.TRAINING_EPOCH", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_LOSS", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_ACCURACY", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_PRECISION", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_RECALL", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_F1", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_COHEN_KAPPA", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_AUC_ROC", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_POSITIVE_ACCURACY", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_NEGATIVE_ACCURACY", create=True),
         ):
             mock_model.return_value = torch.randn(2, 1)
             trainer.evaluate(mock_model, mock_loader, epoch=0)
-            assert mock_val_loss.set.called
-            assert mock_val_acc.set.called
+            assert mock_gauges["val_loss"].set.called, "val_loss gauge was not updated"
+            assert mock_gauges["val_accuracy"].set.called, "val_accuracy gauge was not updated"

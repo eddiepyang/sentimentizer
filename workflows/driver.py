@@ -62,8 +62,15 @@ logger = new_logger(DEFAULT_LOG_LEVEL)
 
 
 # ──────────────────────────────────────────────
-# CUDA cleanup: graceful GPU release on exit
+# Cleanup: GPU release and Ray session temp files
 # ──────────────────────────────────────────────
+
+# Ray stores session data in /tmp/ray/session_<timestamp>_<id>/.
+# Each session can consume 5+ GB. When Ray is not shut down cleanly
+# (e.g., Ctrl-C, crash, or test runner killing the process), these
+# directories accumulate and fill the disk. We clean up stale sessions
+# at startup and shut down Ray properly at exit.
+_RAY_SESSION_DIR = Path("/tmp/ray")
 
 
 def _cuda_cleanup() -> None:
@@ -81,18 +88,92 @@ def _cuda_cleanup() -> None:
             pass
 
 
+def _ray_cleanup() -> None:
+    """Shut down Ray and clean up stale session temp files.
+
+    Called by atexit and signal handlers to prevent /tmp/ray from
+    filling the disk with orphaned session directories (5+ GB each).
+    """
+    try:
+        if ray.is_initialized():
+            ray.shutdown()
+    except Exception:
+        pass
+
+    # Clean up stale Ray session directories left by previous runs
+    if _RAY_SESSION_DIR.exists():
+        current_session = _RAY_SESSION_DIR / "session_latest"
+        for session_dir in _RAY_SESSION_DIR.iterdir():
+            # Keep the session_latest symlink and the current session
+            if session_dir == current_session:
+                continue
+            if session_dir.is_dir() and session_dir.name.startswith("session_"):
+                try:
+                    age_hours = (
+                        shutil.os.path.getmtime(session_dir) - __import__("time").time()
+                    ) / 3600
+                    # Only remove sessions older than 1 hour — active sessions
+                    # should be recent, and we don't want to delete while running
+                    if age_hours < -1:  # modified more than 1 hour ago
+                        shutil.rmtree(session_dir, ignore_errors=True)
+                        logger.debug(f"cleaned stale Ray session: {session_dir}")
+                except OSError:
+                    pass
+
+
+def _cleanup_stale_ray_sessions() -> None:
+    """Remove stale Ray session directories from /tmp/ray at startup.
+
+    Called before ray.init() to free disk space from previous runs.
+    Only removes sessions older than 1 hour to avoid deleting active sessions.
+    """
+    if not _RAY_SESSION_DIR.exists():
+        return
+
+    import time
+
+    current_time = time.time()
+    removed = 0
+    freed_gb = 0.0
+
+    for session_dir in _RAY_SESSION_DIR.iterdir():
+        # Keep the session_latest symlink
+        if session_dir.name == "session_latest":
+            continue
+        if session_dir.is_dir() and session_dir.name.startswith("session_"):
+            try:
+                age_hours = (current_time - shutil.os.path.getmtime(session_dir)) / 3600
+                if age_hours > 1:  # older than 1 hour
+                    size = sum(f.stat().st_size for f in session_dir.rglob("*") if f.is_file())
+                    shutil.rmtree(session_dir, ignore_errors=True)
+                    freed_gb += size / (1024**3)
+                    removed += 1
+            except OSError:
+                pass
+
+    if removed > 0:
+        logger.info(  # type: ignore[call-arg]
+            "cleaned_stale_ray_sessions",
+            removed=removed,
+            freed_gb=round(freed_gb, 1),
+        )
+
+
 # Register cleanup for normal process exit (including unhandled exceptions)
 atexit.register(_cuda_cleanup)
+atexit.register(_ray_cleanup)
 
 
 def _sigint_handler(signum: int, frame: object) -> None:
-    """Handle Ctrl-C by cleaning up CUDA before re-raising KeyboardInterrupt.
+    """Handle Ctrl-C by cleaning up CUDA and Ray before re-raising KeyboardInterrupt.
 
     Without this, a Ctrl-C during CUDA training can leave the GPU context
-    in a bad state, causing error 804 on subsequent runs.
+    in a bad state, causing error 804 on subsequent runs, and Ray session
+    temp files can fill the disk.
     """
-    logger.info("Received SIGINT, cleaning up CUDA...")
+    logger.info("Received SIGINT, cleaning up...")
     _cuda_cleanup()
+    _ray_cleanup()
     raise KeyboardInterrupt
 
 
@@ -537,39 +618,16 @@ def _run_fit_distributed(args: argparse.Namespace) -> None:
     )
 
     try:
-        # TorchTrainer.fit() returns a ResultGrid in Ray 2.55+.
-        # Use index-based iteration (ResultGrid.__iter__ removed in 2.55+)
-        # and manually find the best result by val_loss, guarding against
-        # errored results and None metrics.
-        result_grid = ray_trainer.fit()
+        # TorchTrainer.fit() returns a single Result in Ray 2.55+.
+        result = ray_trainer.fit()
     finally:
         # Ensure CUDA resources are released even on Ctrl-C or exception
         _cuda_cleanup()
 
-    # Find best result manually — the ResultGrid helper method can fail when
-    # Result.metrics is None (Ray 2.55+ makes metrics Optional) or when
-    # some results have errors.  TorchTrainer runs a single trial, but we
-    # iterate defensively in case of edge cases.
-    best_result = None
-    best_val_loss = float("inf")
-    for i in range(len(result_grid)):
-        result = result_grid[i]
-        if result.error is not None:
-            logger.warning(f"skipping errored result {i}: {result.error}")
-            continue
-        metrics = result.metrics or {}
-        val_loss = metrics.get("val_loss", float("inf"))
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            best_result = result
-
-    if best_result is None:
-        raise RuntimeError("all training results errored — no valid checkpoint available")
-
     logger.info(  # type: ignore[call-arg]
         "distributed training completed",
-        best_checkpoint=best_result.checkpoint,
-        metrics=best_result.metrics or {},
+        best_checkpoint=result.checkpoint,
+        metrics=result.metrics,
     )
 
     if args.save:
@@ -580,7 +638,7 @@ def _run_fit_distributed(args: argparse.Namespace) -> None:
         import ray.cloudpickle as pickle
 
         weights_path = weights_path_for(args.model)
-        with best_result.checkpoint.as_directory() as checkpoint_dir:
+        with result.checkpoint.as_directory() as checkpoint_dir:
             with open(os.path.join(checkpoint_dir, "data.pkl"), "rb") as fp:
                 checkpoint_data = pickle.load(fp)
             torch.save(
@@ -821,6 +879,10 @@ def main() -> None:
     if args.diagnose:
         run_diagnose(args)
         return
+
+    # Clean up stale Ray session directories from previous runs to free disk space.
+    # Each session can consume 5+ GB and they accumulate when Ray doesn't shut down cleanly.
+    _cleanup_stale_ray_sessions()
 
     # Initialize Ray with a fixed metrics export port so Prometheus can scrape it.
     # The port must match metrics/prometheus.yml target (host.docker.internal:8080).

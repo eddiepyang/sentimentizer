@@ -28,66 +28,97 @@ from sentimentizer.config import (
 )
 from sentimentizer.loader import CorpusDataset
 
-try:
-    from ray.util.metrics import Gauge
+# ---------------------------------------------------------------------------
+# Ray custom metrics (lazy initialization)
+#
+# In Ray 2.55+, ray.util.metrics.Gauge objects must be created inside a
+# Ray worker context (task or actor) to be exported via the Ray metrics
+# endpoint.  Creating them at module-import time in the driver process
+# silently fails — the gauges are never pushed to the metrics agent.
+#
+# We therefore lazily create gauge instances on first use and cache them
+# per model_type so that each worker gets its own gauge that is properly
+# registered with that worker's metrics agent.
+# ---------------------------------------------------------------------------
 
-    LIVE_TRAIN_LOSS = Gauge(
-        "sentimentizer_live_train_loss", description="Live training loss", tag_keys=("model_type",)
-    )
-    LIVE_VAL_LOSS = Gauge(
-        "sentimentizer_live_val_loss", description="Live validation loss", tag_keys=("model_type",)
-    )
-    LIVE_VAL_ACCURACY = Gauge(
-        "sentimentizer_live_val_accuracy",
-        description="Live validation accuracy",
-        tag_keys=("model_type",),
-    )
-    LIVE_VAL_PRECISION = Gauge(
-        "sentimentizer_live_val_precision",
-        description="Live validation precision (positive class)",
-        tag_keys=("model_type",),
-    )
-    LIVE_VAL_RECALL = Gauge(
-        "sentimentizer_live_val_recall",
-        description="Live validation recall (positive class)",
-        tag_keys=("model_type",),
-    )
-    LIVE_VAL_F1 = Gauge(
-        "sentimentizer_live_val_f1",
-        description="Live validation F1 score",
-        tag_keys=("model_type",),
-    )
-    LIVE_VAL_COHEN_KAPPA = Gauge(
-        "sentimentizer_live_val_cohen_kappa",
-        description="Live validation Cohen's kappa",
-        tag_keys=("model_type",),
-    )
-    LIVE_VAL_AUC_ROC = Gauge(
-        "sentimentizer_live_val_auc_roc",
-        description="Live validation AUC-ROC",
-        tag_keys=("model_type",),
-    )
-    LIVE_VAL_POSITIVE_ACCURACY = Gauge(
-        "sentimentizer_live_val_positive_accuracy",
-        description="Live validation positive-class accuracy",
-        tag_keys=("model_type",),
-    )
-    LIVE_VAL_NEGATIVE_ACCURACY = Gauge(
-        "sentimentizer_live_val_negative_accuracy",
-        description="Live validation negative-class accuracy",
-        tag_keys=("model_type",),
-    )
-except ImportError:
-    LIVE_TRAIN_LOSS = None
-    LIVE_VAL_LOSS = None
-    LIVE_VAL_ACCURACY = None
-    LIVE_VAL_PRECISION = None
-    LIVE_VAL_RECALL = None
-    LIVE_VAL_F1 = None
-    LIVE_VAL_COHEN_KAPPA = None
-    LIVE_VAL_AUC_ROC = None
-    LIVE_VAL_POSITIVE_ACCURACY = None
-    LIVE_VAL_NEGATIVE_ACCURACY = None
+_RAY_GAUGES: dict[str, dict[str, Any]] = {}
+"""Cache of Ray Gauge dicts keyed by model_type."""
+
+
+def _get_ray_gauges(model_type: str) -> dict[str, Any] | None:
+    """Return (and lazily create) Ray Gauge instances for *model_type*.
+
+    Gauges are created once per model_type and cached.  On the first call
+    this imports ``ray.util.metrics.Gauge`` and builds all the gauge
+    objects.  If Ray is not available, returns ``None``.
+    """
+    if model_type in _RAY_GAUGES:
+        return _RAY_GAUGES[model_type]
+
+    try:
+        from ray.util.metrics import Gauge
+    except ImportError:
+        return None
+
+    gauges: dict[str, Any] = {
+        "train_loss": Gauge(
+            "sentimentizer_live_train_loss",
+            description="Live training loss",
+            tag_keys=("model_type",),
+        ),
+        "val_loss": Gauge(
+            "sentimentizer_live_val_loss",
+            description="Live validation loss",
+            tag_keys=("model_type",),
+        ),
+        "val_accuracy": Gauge(
+            "sentimentizer_live_val_accuracy",
+            description="Live validation accuracy",
+            tag_keys=("model_type",),
+        ),
+        "val_precision": Gauge(
+            "sentimentizer_live_val_precision",
+            description="Live validation precision (positive class)",
+            tag_keys=("model_type",),
+        ),
+        "val_recall": Gauge(
+            "sentimentizer_live_val_recall",
+            description="Live validation recall (positive class)",
+            tag_keys=("model_type",),
+        ),
+        "val_f1": Gauge(
+            "sentimentizer_live_val_f1",
+            description="Live validation F1 score",
+            tag_keys=("model_type",),
+        ),
+        "val_cohen_kappa": Gauge(
+            "sentimentizer_live_val_cohen_kappa",
+            description="Live validation Cohen's kappa",
+            tag_keys=("model_type",),
+        ),
+        "val_auc_roc": Gauge(
+            "sentimentizer_live_val_auc_roc",
+            description="Live validation AUC-ROC",
+            tag_keys=("model_type",),
+        ),
+        "val_positive_accuracy": Gauge(
+            "sentimentizer_live_val_positive_accuracy",
+            description="Live validation positive-class accuracy",
+            tag_keys=("model_type",),
+        ),
+        "val_negative_accuracy": Gauge(
+            "sentimentizer_live_val_negative_accuracy",
+            description="Live validation negative-class accuracy",
+            tag_keys=("model_type",),
+        ),
+    }
+    # Set default tag so callers can do gauge.set(value) without
+    # repeating the tag on every call.
+    for g in gauges.values():
+        g.set_default_tags({"model_type": model_type})
+
+    _RAY_GAUGES[model_type] = gauges
+    return gauges
 
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
@@ -212,8 +243,9 @@ class Trainer:
             self.losses.append(loss_val)
             if i % (self.cfg.batch_size * 100) == 0:
                 current_loss = float(np.mean(self.losses[-60:]))
-                if LIVE_TRAIN_LOSS is not None:
-                    LIVE_TRAIN_LOSS.set(current_loss, {"model_type": self.model_type})
+                gauges = _get_ray_gauges(self.model_type)
+                if gauges is not None:
+                    gauges["train_loss"].set(current_loss)
                 logger.info(
                     f"[epoch {epoch}] {i / n:.2f} of rows completed in "
                     f"{j + 1} cycles, current loss at {np.mean(self.losses[-60:]):.6f}"
@@ -326,18 +358,18 @@ class Trainer:
         )
 
         self.val_loss = float(np.mean(losses))
-        if LIVE_VAL_LOSS is not None:
-            tags = {"model_type": self.model_type}
-            LIVE_VAL_LOSS.set(self.val_loss, tags)
-            LIVE_VAL_ACCURACY.set(float(metrics.accuracy), tags)
-            LIVE_VAL_PRECISION.set(float(metrics.precision), tags)
-            LIVE_VAL_RECALL.set(float(metrics.recall), tags)
-            LIVE_VAL_F1.set(float(metrics.f1), tags)
-            LIVE_VAL_COHEN_KAPPA.set(float(metrics.cohen_kappa), tags)
+        gauges = _get_ray_gauges(self.model_type)
+        if gauges is not None:
+            gauges["val_loss"].set(self.val_loss)
+            gauges["val_accuracy"].set(float(metrics.accuracy))
+            gauges["val_precision"].set(float(metrics.precision))
+            gauges["val_recall"].set(float(metrics.recall))
+            gauges["val_f1"].set(float(metrics.f1))
+            gauges["val_cohen_kappa"].set(float(metrics.cohen_kappa))
             if metrics.auc_roc is not None:
-                LIVE_VAL_AUC_ROC.set(float(metrics.auc_roc), tags)
-            LIVE_VAL_POSITIVE_ACCURACY.set(float(metrics.positive_accuracy), tags)
-            LIVE_VAL_NEGATIVE_ACCURACY.set(float(metrics.negative_accuracy), tags)
+                gauges["val_auc_roc"].set(float(metrics.auc_roc))
+            gauges["val_positive_accuracy"].set(float(metrics.positive_accuracy))
+            gauges["val_negative_accuracy"].set(float(metrics.negative_accuracy))
 
         # Also push to the standalone Prometheus exporter gauges
         try:
@@ -585,13 +617,11 @@ def _train_func(config: dict) -> None:
             )
             epoch_losses.append(loss_val)
 
-            # Update gauges only from rank 0 to prevent worker collisions
-            if (
-                i % 100 == 0
-                and LIVE_TRAIN_LOSS is not None
-                and train.get_context().get_world_rank() == 0
-            ):
-                LIVE_TRAIN_LOSS.set(float(np.mean(epoch_losses[-60:])), {"model_type": model_type})
+            # Update Ray custom metrics gauge from rank 0 to prevent worker collisions
+            if i % 100 == 0 and train.get_context().get_world_rank() == 0:
+                gauges = _get_ray_gauges(model_type)
+                if gauges is not None:
+                    gauges["train_loss"].set(float(np.mean(epoch_losses[-60:])))
 
         if scheduler:
             scheduler.step()
@@ -628,19 +658,20 @@ def _train_func(config: dict) -> None:
             probabilities=probabilities,
         )
 
-        # Update gauges only from rank 0 to prevent worker collisions
-        if LIVE_VAL_LOSS is not None and train.get_context().get_world_rank() == 0:
-            tags = {"model_type": model_type}
-            LIVE_VAL_LOSS.set(float(val_loss), tags)
-            LIVE_VAL_ACCURACY.set(float(metrics.accuracy), tags)
-            LIVE_VAL_PRECISION.set(float(metrics.precision), tags)
-            LIVE_VAL_RECALL.set(float(metrics.recall), tags)
-            LIVE_VAL_F1.set(float(metrics.f1), tags)
-            LIVE_VAL_COHEN_KAPPA.set(float(metrics.cohen_kappa), tags)
-            if metrics.auc_roc is not None:
-                LIVE_VAL_AUC_ROC.set(float(metrics.auc_roc), tags)
-            LIVE_VAL_POSITIVE_ACCURACY.set(float(metrics.positive_accuracy), tags)
-            LIVE_VAL_NEGATIVE_ACCURACY.set(float(metrics.negative_accuracy), tags)
+        # Update Ray custom metrics gauges from rank 0 to prevent worker collisions
+        if train.get_context().get_world_rank() == 0:
+            gauges = _get_ray_gauges(model_type)
+            if gauges is not None:
+                gauges["val_loss"].set(float(val_loss))
+                gauges["val_accuracy"].set(float(metrics.accuracy))
+                gauges["val_precision"].set(float(metrics.precision))
+                gauges["val_recall"].set(float(metrics.recall))
+                gauges["val_f1"].set(float(metrics.f1))
+                gauges["val_cohen_kappa"].set(float(metrics.cohen_kappa))
+                if metrics.auc_roc is not None:
+                    gauges["val_auc_roc"].set(float(metrics.auc_roc))
+                gauges["val_positive_accuracy"].set(float(metrics.positive_accuracy))
+                gauges["val_negative_accuracy"].set(float(metrics.negative_accuracy))
 
         # Also push to standalone Prometheus exporter gauges from rank 0
         try:
