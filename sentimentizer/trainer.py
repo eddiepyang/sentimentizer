@@ -538,6 +538,10 @@ def _train_func(config: dict) -> None:
             probabilities=probabilities,
         )
 
+        if LIVE_VAL_LOSS is not None:
+            LIVE_VAL_LOSS.set(float(val_loss), {"model_type": model_type})
+            LIVE_VAL_ACCURACY.set(float(metrics.accuracy), {"model_type": model_type})
+
         logger.info(  # type: ignore[call-arg]
             f"[epoch {epoch}] completed",
             train_loss=train_loss,

@@ -159,7 +159,9 @@ class TunePrometheusCallback(tune.callback.Callback):
         ``trial_id`` attribute — it is no longer a plain string.
         """
         # Ray 2.55+ passes a Trial object with .trial_id; fall back for older versions
-        trial_id: str = getattr(trial, "trial_id", None) or (trial if isinstance(trial, str) else str(trial))
+        trial_id: str = (
+            getattr(trial, "trial_id", None) or (trial if isinstance(trial, str) else str(trial))
+        )
         self._update_trial_gauges(trial_id, result)
 
     def on_trial_complete(self, iteration: int, trials: list, trial: Any, **kwargs: Any) -> None:

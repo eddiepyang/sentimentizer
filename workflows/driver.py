@@ -24,16 +24,16 @@ os.environ.setdefault("RAY_PROMETHEUS_HOST", "http://localhost:9090")
 
 # Ensure NVIDIA CUDA libraries bundled in the venv (nvidia/cu13/lib, etc.)
 # are on LD_LIBRARY_PATH so that the driver process can load torch's CUDA dependencies.
-from sentimentizer.env import ensure_nvidia_ld_library_path
+from sentimentizer.env import ensure_nvidia_ld_library_path  # noqa: E402
 
 nvidia_ld_library_path = ensure_nvidia_ld_library_path()
 
-import ray
-import torch
-from gensim import corpora
+import ray  # noqa: E402
+import torch  # noqa: E402
+from gensim import corpora  # noqa: E402
 
-from sentimentizer import new_logger, time_decorator
-from sentimentizer.config import (
+from sentimentizer import new_logger, time_decorator  # noqa: E402
+from sentimentizer.config import (  # noqa: E402
     DEFAULT_LOG_LEVEL,
     DecoderConfig,
     DriverConfig,
@@ -44,14 +44,19 @@ from sentimentizer.config import (
     default_epochs,
     weights_path_for,
 )
-from sentimentizer.extractor import extract_data
-from sentimentizer.loader import (
+from sentimentizer.extractor import extract_data  # noqa: E402
+from sentimentizer.loader import (  # noqa: E402
     compute_pos_weight,
     load_train_val_corpus_datasets,
     load_train_val_ray_datasets,
 )
-from sentimentizer.tokenizer import Tokenizer
-from sentimentizer.trainer import latest_checkpoint, load_checkpoint, new_ray_trainer, new_trainer
+from sentimentizer.tokenizer import Tokenizer  # noqa: E402
+from sentimentizer.trainer import (  # noqa: E402
+    latest_checkpoint,
+    load_checkpoint,
+    new_ray_trainer,
+    new_trainer,
+)
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
