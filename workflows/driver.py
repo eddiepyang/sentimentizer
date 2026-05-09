@@ -394,6 +394,46 @@ def _ensure_metrics_server(port: int = 8081) -> None:
             message="Cannot start metrics server for training gauges",
         )
 
+    # Initialize all training gauge labels with default values so they appear
+    # in Prometheus scrape output immediately, even before training starts.
+    # Without this, labeled gauges that have never been set are invisible to
+    # Prometheus and Grafana queries return empty results.
+    try:
+        from sentimentizer.exporter import (
+            TRAINING_EPOCH,
+            TRAINING_TRAIN_LOSS,
+            TRAINING_VAL_ACCURACY,
+            TRAINING_VAL_AUC_ROC,
+            TRAINING_VAL_COHEN_KAPPA,
+            TRAINING_VAL_F1,
+            TRAINING_VAL_LOSS,
+            TRAINING_VAL_NEGATIVE_ACCURACY,
+            TRAINING_VAL_POSITIVE_ACCURACY,
+            TRAINING_VAL_PRECISION,
+            TRAINING_VAL_RECALL,
+        )
+
+        for model_type in ("rnn", "encoder", "decoder"):
+            lbl = {"model_type": model_type}
+            TRAINING_TRAIN_LOSS.labels(**lbl).set(0)
+            TRAINING_VAL_LOSS.labels(**lbl).set(0)
+            TRAINING_VAL_ACCURACY.labels(**lbl).set(0)
+            TRAINING_VAL_PRECISION.labels(**lbl).set(0)
+            TRAINING_VAL_RECALL.labels(**lbl).set(0)
+            TRAINING_VAL_F1.labels(**lbl).set(0)
+            TRAINING_VAL_COHEN_KAPPA.labels(**lbl).set(0)
+            TRAINING_VAL_AUC_ROC.labels(**lbl).set(0)
+            TRAINING_VAL_POSITIVE_ACCURACY.labels(**lbl).set(0)
+            TRAINING_VAL_NEGATIVE_ACCURACY.labels(**lbl).set(0)
+            TRAINING_EPOCH.labels(**lbl).set(0)
+
+        logger.info("training_metrics_initialized", message="Training gauge labels initialized for rnn, encoder, decoder")
+    except ImportError:
+        logger.warning(
+            "prometheus_client_not_available",
+            message="Cannot initialize training gauge labels",
+        )
+
 
 def _publish_distributed_metrics(result: Any, model_type: str) -> None:
     """Publish final distributed training metrics to the driver-level Prometheus gauges.
