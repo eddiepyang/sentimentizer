@@ -111,6 +111,11 @@ def _get_ray_gauges(model_type: str) -> dict[str, Any] | None:
             description="Live validation negative-class accuracy",
             tag_keys=("model_type",),
         ),
+        "epoch": Gauge(
+            "sentimentizer_live_epoch",
+            description="Live training epoch",
+            tag_keys=("model_type",),
+        ),
     }
     # Set default tag so callers can do gauge.set(value) without
     # repeating the tag on every call.
@@ -386,6 +391,7 @@ class Trainer:
                 gauges["val_auc_roc"].set(float(metrics.auc_roc))
             gauges["val_positive_accuracy"].set(float(metrics.positive_accuracy))
             gauges["val_negative_accuracy"].set(float(metrics.negative_accuracy))
+            gauges["epoch"].set(epoch)
 
         # Also push to the standalone Prometheus exporter gauges
         try:
@@ -706,6 +712,7 @@ def _train_func(config: dict) -> None:
                     gauges["val_auc_roc"].set(float(metrics.auc_roc))
                 gauges["val_positive_accuracy"].set(float(metrics.positive_accuracy))
                 gauges["val_negative_accuracy"].set(float(metrics.negative_accuracy))
+                gauges["epoch"].set(epoch)
 
         # Also push to standalone Prometheus exporter gauges from rank 0
         try:
