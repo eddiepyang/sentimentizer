@@ -354,18 +354,18 @@ class Trainer:
                 TRAINING_VAL_RECALL,
             )
 
-            labels = {"model_type": self.model_type}
-            TRAINING_VAL_LOSS.set(self.val_loss, labels)
-            TRAINING_VAL_ACCURACY.set(float(metrics.accuracy), labels)
-            TRAINING_VAL_PRECISION.set(float(metrics.precision), labels)
-            TRAINING_VAL_RECALL.set(float(metrics.recall), labels)
-            TRAINING_VAL_F1.set(float(metrics.f1), labels)
-            TRAINING_VAL_COHEN_KAPPA.set(float(metrics.cohen_kappa), labels)
+            lbl = {"model_type": self.model_type}
+            TRAINING_VAL_LOSS.labels(**lbl).set(self.val_loss)
+            TRAINING_VAL_ACCURACY.labels(**lbl).set(float(metrics.accuracy))
+            TRAINING_VAL_PRECISION.labels(**lbl).set(float(metrics.precision))
+            TRAINING_VAL_RECALL.labels(**lbl).set(float(metrics.recall))
+            TRAINING_VAL_F1.labels(**lbl).set(float(metrics.f1))
+            TRAINING_VAL_COHEN_KAPPA.labels(**lbl).set(float(metrics.cohen_kappa))
             if metrics.auc_roc is not None:
-                TRAINING_VAL_AUC_ROC.set(float(metrics.auc_roc), labels)
-            TRAINING_VAL_POSITIVE_ACCURACY.set(float(metrics.positive_accuracy), labels)
-            TRAINING_VAL_NEGATIVE_ACCURACY.set(float(metrics.negative_accuracy), labels)
-            TRAINING_EPOCH.set(epoch, labels)
+                TRAINING_VAL_AUC_ROC.labels(**lbl).set(float(metrics.auc_roc))
+            TRAINING_VAL_POSITIVE_ACCURACY.labels(**lbl).set(float(metrics.positive_accuracy))
+            TRAINING_VAL_NEGATIVE_ACCURACY.labels(**lbl).set(float(metrics.negative_accuracy))
+            TRAINING_EPOCH.labels(**lbl).set(epoch)
         except ImportError:
             pass
 
@@ -597,6 +597,7 @@ def _train_func(config: dict) -> None:
             scheduler.step()
 
         # Validation
+        logger.info(f"[epoch {epoch}] evaluating predictions...")
         val_losses = []
         all_probs = []
         all_targets = []
@@ -612,8 +613,8 @@ def _train_func(config: dict) -> None:
                 all_probs.append(torch.sigmoid(logits).cpu())
                 all_targets.append(target.cpu())
 
-        val_loss = np.mean(val_losses) if val_losses else 0.0
-        train_loss = np.mean(epoch_losses) if epoch_losses else 0.0
+        val_loss = float(np.mean(val_losses)) if val_losses else 0.0
+        train_loss = float(np.mean(epoch_losses)) if epoch_losses else 0.0
 
         from sentimentizer.metrics import compute_classification_metrics
 
@@ -657,18 +658,18 @@ def _train_func(config: dict) -> None:
             )
 
             if train.get_context().get_world_rank() == 0:
-                labels = {"model_type": model_type}
-                TRAINING_VAL_LOSS.set(float(val_loss), labels)
-                TRAINING_VAL_ACCURACY.set(float(metrics.accuracy), labels)
-                TRAINING_VAL_PRECISION.set(float(metrics.precision), labels)
-                TRAINING_VAL_RECALL.set(float(metrics.recall), labels)
-                TRAINING_VAL_F1.set(float(metrics.f1), labels)
-                TRAINING_VAL_COHEN_KAPPA.set(float(metrics.cohen_kappa), labels)
+                lbl = {"model_type": model_type}
+                TRAINING_VAL_LOSS.labels(**lbl).set(float(val_loss))
+                TRAINING_VAL_ACCURACY.labels(**lbl).set(float(metrics.accuracy))
+                TRAINING_VAL_PRECISION.labels(**lbl).set(float(metrics.precision))
+                TRAINING_VAL_RECALL.labels(**lbl).set(float(metrics.recall))
+                TRAINING_VAL_F1.labels(**lbl).set(float(metrics.f1))
+                TRAINING_VAL_COHEN_KAPPA.labels(**lbl).set(float(metrics.cohen_kappa))
                 if metrics.auc_roc is not None:
-                    TRAINING_VAL_AUC_ROC.set(float(metrics.auc_roc), labels)
-                TRAINING_VAL_POSITIVE_ACCURACY.set(float(metrics.positive_accuracy), labels)
-                TRAINING_VAL_NEGATIVE_ACCURACY.set(float(metrics.negative_accuracy), labels)
-                TRAINING_EPOCH.set(epoch, labels)
+                    TRAINING_VAL_AUC_ROC.labels(**lbl).set(float(metrics.auc_roc))
+                TRAINING_VAL_POSITIVE_ACCURACY.labels(**lbl).set(float(metrics.positive_accuracy))
+                TRAINING_VAL_NEGATIVE_ACCURACY.labels(**lbl).set(float(metrics.negative_accuracy))
+                TRAINING_EPOCH.labels(**lbl).set(epoch)
         except ImportError:
             pass
 

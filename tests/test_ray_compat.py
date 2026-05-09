@@ -434,6 +434,57 @@ class TestTuneGetBestResult:
         assert "mode=tuner_config.mode" in source
 
 
+class TestDistributedResultGrid:
+    """Guard against using get_best_result() on TorchTrainer's ResultGrid.
+
+    TorchTrainer.fit() returns a ResultGrid from a single training run.
+    In Ray 2.55+, ResultGrid.get_best_result() can fail when Result.metrics
+    is None (Optional in 2.55+) or when results have errors.  The
+    _run_fit_distributed function must use index-based iteration with
+    manual best-result selection instead.
+    """
+
+    def test_driver_uses_index_based_iteration_not_get_best_result(self) -> None:
+        """_run_fit_distributed must NOT use result_grid.get_best_result().
+
+        Instead it must iterate with index-based access and manually find
+        the best result, guarding against None metrics and errored results.
+        """
+        import inspect
+
+        from workflows.driver import _run_fit_distributed
+
+        source = inspect.getsource(_run_fit_distributed)
+        assert "get_best_result" not in source, (
+            "_run_fit_distributed must not use result_grid.get_best_result(). "
+            "Use index-based iteration with manual best-result selection instead, "
+            "guarding against None metrics and errored results."
+        )
+        assert "for i in range(len(result_grid))" in source, (
+            "_run_fit_distributed must iterate over ResultGrid using index-based "
+            "access: for i in range(len(result_grid))"
+        )
+        assert "result.metrics or {}" in source, (
+            "_run_fit_distributed must guard result.metrics against None "
+            "(Ray 2.55+ makes metrics Optional). Use: result.metrics or {}"
+        )
+        assert (
+            "result.error" in source
+        ), "_run_fit_distributed must skip errored results by checking result.error"
+
+    def test_driver_guard_best_result_metrics_against_none(self) -> None:
+        """_run_fit_distributed must guard best_result.metrics against None."""
+        import inspect
+
+        from workflows.driver import _run_fit_distributed
+
+        source = inspect.getsource(_run_fit_distributed)
+        # The logger call that uses best_result.metrics must use `or {}`
+        assert "best_result.metrics or {}" in source, (
+            "best_result.metrics can be None in Ray 2.55+. " "Use: best_result.metrics or {}"
+        )
+
+
 # ─── ResultGrid and Result API Guards ────────────────────────────────
 
 

@@ -538,18 +538,38 @@ def _run_fit_distributed(args: argparse.Namespace) -> None:
 
     try:
         # TorchTrainer.fit() returns a ResultGrid in Ray 2.55+.
-        # Use get_best_result() to get the single best Result.
+        # Use index-based iteration (ResultGrid.__iter__ removed in 2.55+)
+        # and manually find the best result by val_loss, guarding against
+        # errored results and None metrics.
         result_grid = ray_trainer.fit()
     finally:
         # Ensure CUDA resources are released even on Ctrl-C or exception
         _cuda_cleanup()
 
-    best_result = result_grid.get_best_result(metric="val_loss", mode="min")
+    # Find best result manually — the ResultGrid helper method can fail when
+    # Result.metrics is None (Ray 2.55+ makes metrics Optional) or when
+    # some results have errors.  TorchTrainer runs a single trial, but we
+    # iterate defensively in case of edge cases.
+    best_result = None
+    best_val_loss = float("inf")
+    for i in range(len(result_grid)):
+        result = result_grid[i]
+        if result.error is not None:
+            logger.warning(f"skipping errored result {i}: {result.error}")
+            continue
+        metrics = result.metrics or {}
+        val_loss = metrics.get("val_loss", float("inf"))
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_result = result
+
+    if best_result is None:
+        raise RuntimeError("all training results errored — no valid checkpoint available")
 
     logger.info(  # type: ignore[call-arg]
         "distributed training completed",
         best_checkpoint=best_result.checkpoint,
-        metrics=best_result.metrics,
+        metrics=best_result.metrics or {},
     )
 
     if args.save:

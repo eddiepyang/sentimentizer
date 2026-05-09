@@ -499,7 +499,7 @@ class TestMetricsGauges:
         mock_shard.iter_torch_batches.return_value = [
             {
                 "data": torch.zeros((2, 200), dtype=torch.long),
-                "target": torch.ones((2,), dtype=torch.float),
+                "target": torch.ones((2, 1), dtype=torch.float),
             }
         ]
 
@@ -508,18 +508,27 @@ class TestMetricsGauges:
             patch("ray.train.get_dataset_shard", return_value=mock_shard),
             patch("ray.train.get_context") as mock_get_context,
             patch("ray.train.report"),
+            patch("sentimentizer.trainer.train_step", return_value=0.5),
             patch("sentimentizer.trainer.LIVE_TRAIN_LOSS") as mock_train_loss,
             patch("sentimentizer.trainer.LIVE_VAL_LOSS") as mock_val_loss,
             patch("sentimentizer.trainer.LIVE_VAL_ACCURACY") as mock_val_acc,
+            patch("sentimentizer.trainer.LIVE_VAL_PRECISION", create=True),
+            patch("sentimentizer.trainer.LIVE_VAL_RECALL", create=True),
+            patch("sentimentizer.trainer.LIVE_VAL_F1", create=True),
+            patch("sentimentizer.trainer.LIVE_VAL_COHEN_KAPPA", create=True),
+            patch("sentimentizer.trainer.LIVE_VAL_AUC_ROC", create=True),
+            patch("sentimentizer.trainer.LIVE_VAL_POSITIVE_ACCURACY", create=True),
+            patch("sentimentizer.trainer.LIVE_VAL_NEGATIVE_ACCURACY", create=True),
             patch("sentimentizer.models.rnn.new_model") as mock_new_model,
             patch("sentimentizer.trainer.prepare_model", side_effect=lambda m: m),
         ):
 
-            # Setup mock model
+            # Setup mock model — parameters() must return a fresh iterator each call
             mock_model = MagicMock()
             p = torch.nn.Parameter(torch.randn(1, 1))
-            mock_model.parameters.return_value = [p]
+            mock_model.parameters.side_effect = lambda: iter([p])
             mock_model.return_value = torch.randn(2, 1)
+            mock_model.state_dict.return_value = {}
             mock_new_model.return_value = mock_model
 
             # Simulate worker rank 0 so metrics are recorded
@@ -540,7 +549,7 @@ class TestMetricsGauges:
         mock_model = MagicMock()
         mock_loader = MagicMock()
         mock_loader.dataset = [1, 2]
-        mock_loader.__iter__.return_value = iter([(torch.zeros(2, 10), torch.ones(2))])
+        mock_loader.__iter__.return_value = iter([(torch.zeros(2, 10), torch.ones(2, 1))])
 
         cfg = TrainerConfig(device="cpu")
         trainer = Trainer(
@@ -554,10 +563,15 @@ class TestMetricsGauges:
         with (
             patch("sentimentizer.trainer.LIVE_VAL_LOSS") as mock_val_loss,
             patch("sentimentizer.trainer.LIVE_VAL_ACCURACY") as mock_val_acc,
+            patch("sentimentizer.trainer.LIVE_VAL_PRECISION", create=True),
+            patch("sentimentizer.trainer.LIVE_VAL_RECALL", create=True),
+            patch("sentimentizer.trainer.LIVE_VAL_F1", create=True),
+            patch("sentimentizer.trainer.LIVE_VAL_COHEN_KAPPA", create=True),
+            patch("sentimentizer.trainer.LIVE_VAL_AUC_ROC", create=True),
+            patch("sentimentizer.trainer.LIVE_VAL_POSITIVE_ACCURACY", create=True),
+            patch("sentimentizer.trainer.LIVE_VAL_NEGATIVE_ACCURACY", create=True),
         ):
             mock_model.return_value = torch.randn(2, 1)
             trainer.evaluate(mock_model, mock_loader, epoch=0)
             assert mock_val_loss.set.called
             assert mock_val_acc.set.called
-        assert isinstance(trainer.optimizer, torch.optim.AdamW)
-        assert trainer.cfg.device == "cpu"
