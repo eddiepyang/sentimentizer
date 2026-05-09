@@ -532,15 +532,19 @@ def _run_fit_distributed(args: argparse.Namespace) -> None:
     )
 
     try:
-        result = ray_trainer.fit()
+        # TorchTrainer.fit() returns a ResultGrid in Ray 2.55+.
+        # Use get_best_result() to get the single best Result.
+        result_grid = ray_trainer.fit()
     finally:
         # Ensure CUDA resources are released even on Ctrl-C or exception
         _cuda_cleanup()
 
+    best_result = result_grid.get_best_result(metric="val_loss", mode="min")
+
     logger.info(  # type: ignore[call-arg]
         "distributed training completed",
-        best_checkpoint=result.checkpoint,
-        metrics=result.metrics,
+        best_checkpoint=best_result.checkpoint,
+        metrics=best_result.metrics,
     )
 
     if args.save:
@@ -551,7 +555,7 @@ def _run_fit_distributed(args: argparse.Namespace) -> None:
         import ray.cloudpickle as pickle
 
         weights_path = weights_path_for(args.model)
-        with result.checkpoint.as_directory() as checkpoint_dir:
+        with best_result.checkpoint.as_directory() as checkpoint_dir:
             with open(os.path.join(checkpoint_dir, "data.pkl"), "rb") as fp:
                 checkpoint_data = pickle.load(fp)
             torch.save(

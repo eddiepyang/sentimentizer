@@ -153,8 +153,13 @@ class TunePrometheusCallback(tune.callback.Callback):
         result: dict,
         **kwargs: Any,
     ) -> None:
-        """Called after each trial reports intermediate results."""
-        trial_id = trial if isinstance(trial, str) else str(trial)
+        """Called after each trial reports intermediate results.
+
+        In Ray 2.55+, the ``trial`` parameter is a ``Trial`` object with a
+        ``trial_id`` attribute — it is no longer a plain string.
+        """
+        # Ray 2.55+ passes a Trial object with .trial_id; fall back for older versions
+        trial_id: str = getattr(trial, "trial_id", None) or (trial if isinstance(trial, str) else str(trial))
         self._update_trial_gauges(trial_id, result)
 
     def on_trial_complete(self, iteration: int, trials: list, trial: Any, **kwargs: Any) -> None:
@@ -649,7 +654,8 @@ def tune_model(
         mode=tuner_config.mode,
     )
     best_config = best_result.config
-    best_metrics = best_result.metrics
+    # Result.metrics is Optional[Dict] in Ray 2.55+ — guard against None
+    best_metrics = best_result.metrics or {}
 
     internal_keys = {
         "model_type",
@@ -663,11 +669,14 @@ def tune_model(
     }
     clean_config = {k: v for k, v in best_config.items() if k not in internal_keys}
 
+    # ResultGrid is NOT directly iterable in Ray 2.55+.
+    # Use index-based iteration with len() instead of ``for x in result:``.
     all_results = []
-    for trial_result in result:
+    for i in range(len(result)):
+        trial_result = result[i]
         trial_config = {k: v for k, v in trial_result.config.items() if k not in internal_keys}
         all_results.append(
-            {"config": trial_config, "metrics": trial_result.metrics},
+            {"config": trial_config, "metrics": trial_result.metrics or {}},
         )
 
     output = {
