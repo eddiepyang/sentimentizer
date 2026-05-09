@@ -1,5 +1,6 @@
 import json
 import shutil
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
@@ -463,5 +464,92 @@ class TestSingleTrainer:
         cfg = TrainerConfig(device="cpu")
         trainer = new_trainer(model=model, cfg=cfg)
         assert isinstance(trainer.loss_function, torch.nn.BCEWithLogitsLoss)
+
+
+# ──────────────────────────────────────────────
+# Metrics and Monitoring tests
+# ──────────────────────────────────────────────
+
+
+class TestMetricsGauges:
+    """Tests specifically for verifying metric updates to Prometheus gauges."""
+
+    def test_train_func_updates_prometheus_gauges(self):
+        """Verifies that _train_func calls .set() on the Prometheus Gauges during distributed training."""
+        from sentimentizer.trainer import _train_func
+
+        # 1. Setup minimal config
+        config = {
+            "epochs": 1,
+            "batch_size": 2,
+            "lr": 0.001,
+            "betas": [0.9, 0.999],
+            "weight_decay": 0.01,
+            "model_type": "rnn",
+            "dict_path": "fake.dict",
+            "embeddings_model_name": "fake-glove",
+            "embeddings_emb_length": 100,
+            "input_len": 200,
+            "pos_weight": 1.0,
+        }
+
+        # 2. Mock Ray Data shards
+        mock_shard = MagicMock()
+        # Simulate one batch of data for both train and val
+        mock_shard.iter_torch_batches.return_value = [
+            {
+                "data": torch.zeros((2, 200), dtype=torch.long),
+                "target": torch.ones((2,), dtype=torch.float)
+            }
+        ]
+
+        # 3. Mock dependencies to isolate _train_func
+        with patch("ray.train.get_dataset_shard", return_value=mock_shard), \
+             patch("ray.train.report"), \
+             patch("sentimentizer.trainer.LIVE_TRAIN_LOSS") as mock_train_loss, \
+             patch("sentimentizer.trainer.LIVE_VAL_LOSS") as mock_val_loss, \
+             patch("sentimentizer.trainer.LIVE_VAL_ACCURACY") as mock_val_acc, \
+             patch("sentimentizer.models.rnn.new_model") as mock_new_model, \
+             patch("sentimentizer.trainer.prepare_model", side_effect=lambda m: m):
+
+            # Setup mock model
+            mock_model = MagicMock()
+            p = torch.nn.Parameter(torch.randn(1, 1))
+            mock_model.parameters.return_value = [p]
+            mock_model.return_value = torch.randn(2, 1)
+            mock_new_model.return_value = mock_model
+
+            _train_func(config)
+
+            # 4. Assertions
+            assert mock_train_loss.set.called, "LIVE_TRAIN_LOSS was not updated"
+            assert mock_val_loss.set.called, "LIVE_VAL_LOSS was not updated"
+            assert mock_val_acc.set.called, "LIVE_VAL_ACCURACY was not updated"
+            assert mock_val_loss.set.call_args[0][1] == {"model_type": "rnn"}
+
+    def test_trainer_evaluate_updates_gauges(self):
+        """Verifies that Trainer.evaluate updates the Prometheus Gauges during single-node training."""
+        from sentimentizer.trainer import Trainer, TrainerConfig
+        
+        mock_model = MagicMock()
+        mock_loader = MagicMock()
+        mock_loader.dataset = [1, 2]
+        mock_loader.__iter__.return_value = iter([(torch.zeros(2, 10), torch.ones(2))])
+        
+        cfg = TrainerConfig(device="cpu")
+        trainer = Trainer(
+            loss_function=torch.nn.BCEWithLogitsLoss(),
+            optimizer=MagicMock(),
+            scheduler=MagicMock(),
+            cfg=cfg,
+            model_type="rnn"
+        )
+        
+        with patch("sentimentizer.trainer.LIVE_VAL_LOSS") as mock_val_loss, \
+             patch("sentimentizer.trainer.LIVE_VAL_ACCURACY") as mock_val_acc:
+            mock_model.return_value = torch.randn(2, 1)
+            trainer.evaluate(mock_model, mock_loader, epoch=0)
+            assert mock_val_loss.set.called
+            assert mock_val_acc.set.called
         assert isinstance(trainer.optimizer, torch.optim.AdamW)
         assert trainer.cfg.device == "cpu"
