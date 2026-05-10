@@ -13,6 +13,7 @@ The env var defaults and cleanup handlers are required for correct behavior.
 from __future__ import annotations
 
 import atexit
+import contextlib
 import logging
 import os
 import shutil
@@ -150,6 +151,27 @@ def is_ray_available() -> bool:
         return False
 
 
+def _kill_stale_ray_processes() -> None:
+    """Kill orphaned raylet/GCS processes left by a previous Ctrl-C.
+
+    After a hard kill (SIGKILL or uncaught SIGINT) Ray processes can remain
+    alive, holding port 6379 or the GCS lock and causing the next ray.init()
+    to time out with "raylet failed to startup".  We send SIGTERM first,
+    wait briefly, then SIGKILL stragglers.
+    """
+    import subprocess
+    import time
+
+    TARGETS = ["raylet", "gcs_server", "ray::IDLE"]
+    for name in TARGETS:
+        with contextlib.suppress(FileNotFoundError):
+            subprocess.run(["pkill", "-TERM", "-f", name], capture_output=True)
+    time.sleep(1)
+    for name in TARGETS:
+        with contextlib.suppress(FileNotFoundError):
+            subprocess.run(["pkill", "-KILL", "-f", name], capture_output=True)
+
+
 def _ensure_ray_initialized() -> bool:
     """Initialize Ray with metrics port and runtime_env if not already running.
 
@@ -161,6 +183,9 @@ def _ensure_ray_initialized() -> bool:
 
     Returns True if Ray was successfully initialized (or was already running),
     and False if the `ray` package is not installed.
+
+    On startup timeout (stale GCS lock from a previous Ctrl-C), kills stale
+    Ray processes, clears /tmp/ray/, and retries once automatically.
     """
     try:
         import ray
@@ -177,7 +202,26 @@ def _ensure_ray_initialized() -> bool:
     if ld_path:
         runtime_env["env_vars"] = {"LD_LIBRARY_PATH": ld_path}
     _cleanup_stale_ray_sessions()
-    ray.init(_metrics_export_port=8080, runtime_env=runtime_env)
+
+    try:
+        ray.init(_metrics_export_port=8080, runtime_env=runtime_env)
+    except Exception as exc:
+        # "timed out during startup" / "raylet failed to startup" are symptoms
+        # of stale processes from a previous hard kill.  Kill them and retry.
+        msg = str(exc).lower()
+        if "timed out" in msg or "raylet" in msg or "gcs" in msg or "startup" in msg:
+            logger.warning(  # type: ignore[call-arg]
+                "ray_init_timeout_retrying",
+                message=(
+                    "ray.init() timed out — killing stale Ray processes and retrying. "
+                    f"Original error: {exc}"
+                ),
+            )
+            _kill_stale_ray_processes()
+            _cleanup_stale_ray_sessions()
+            ray.init(_metrics_export_port=8080, runtime_env=runtime_env)
+        else:
+            raise
     return True
 
 

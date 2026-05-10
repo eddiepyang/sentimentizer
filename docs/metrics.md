@@ -2,6 +2,22 @@
 
 Sentimentizer exposes training and system metrics via Prometheus for visualization in Grafana. This document describes the architecture, configuration, and troubleshooting of the metrics pipeline.
 
+## Known Gaps
+
+The following gaps were identified between this document and the current codebase. All have been resolved:
+
+1. ~~**Gauge pre-initialization claim was incorrect**~~ — Fixed: updated to reflect that the standalone exporter creates training Gauge objects at module-import time (they appear with value `0` immediately).
+
+2. ~~**Missing `ray_sentimentizer_live_epoch` metric**~~ — Fixed: added to the Ray live metrics list.
+
+3. ~~**Missing Ray controller health metrics**~~ — Fixed: added `sentimentizer_ray_controller_state` and `sentimentizer_ray_controller_operation_time_s` to the system metrics section.
+
+4. ~~**Tune metrics entirely undocumented**~~ — Fixed: added a full `sentimentizer_tune_*` section documenting all 15 tuning metrics (10 per-trial + 5 aggregate).
+
+5. ~~**Missing `sentimentizer_system_info` metric**~~ — Fixed: added to the system metrics section as an Info-type metric.
+
+6. ~~**Minor NaN handling imprecision**~~ — Fixed: updated to mention that `_auc_roc()` falls back to a manual trapezoidal implementation when sklearn is unavailable.
+
 ## Architecture
 
 ```
@@ -50,8 +66,8 @@ Sentimentizer exposes training and system metrics via Prometheus for visualizati
 
 ## Metric Naming Convention
 
-### `sentimentizer_training_*` (final metrics)
-Only emitted for model types that have completed training. Gauges are NOT pre-initialized — if no training has run, these metrics will not appear in Prometheus at all.
+### `sentimentizer_training_*` (training metrics)
+Gauges are pre-initialized at module-import time in the standalone exporter (`exporter.py`) and appear in Prometheus with value `0` as soon as the exporter starts. Values are updated at each validation epoch and persisted to the JSON file when training completes.
 
 - `sentimentizer_training_train_loss{model_type}`
 - `sentimentizer_training_val_loss{model_type}`
@@ -80,10 +96,34 @@ Set by Ray workers during distributed training. These are prefixed with `ray_` b
 - `ray_sentimentizer_live_val_auc_roc{model_type}`
 - `ray_sentimentizer_live_val_positive_accuracy{model_type}`
 - `ray_sentimentizer_live_val_negative_accuracy{model_type}`
+- `ray_sentimentizer_live_epoch{model_type}`
+
+### `sentimentizer_tune_*` (tuning metrics)
+Emitted on port 8082 during Ray Tune hyperparameter tuning runs. These metrics are only available while `tune_model()` is actively running.
+
+#### Per-trial metrics (labeled by `trial_id` and `model_type`):
+- `sentimentizer_tune_val_accuracy{trial_id, model_type}`
+- `sentimentizer_tune_val_loss{trial_id, model_type}`
+- `sentimentizer_tune_train_loss{trial_id, model_type}`
+- `sentimentizer_tune_val_f1{trial_id, model_type}`
+- `sentimentizer_tune_val_cohen_kappa{trial_id, model_type}`
+- `sentimentizer_tune_val_precision{trial_id, model_type}`
+- `sentimentizer_tune_val_recall{trial_id, model_type}`
+- `sentimentizer_tune_val_positive_accuracy{trial_id, model_type}`
+- `sentimentizer_tune_val_negative_accuracy{trial_id, model_type}`
+- `sentimentizer_tune_epoch{trial_id, model_type}`
+
+#### Aggregate metrics (labeled by `model_type` only):
+- `sentimentizer_tune_best_val_accuracy{model_type}`
+- `sentimentizer_tune_best_val_loss{model_type}`
+- `sentimentizer_tune_best_val_f1{model_type}`
+- `sentimentizer_tune_trial_count{model_type}`
+- `sentimentizer_tune_trial_completed_count{model_type}`
 
 ### System metrics (`sentimentizer_system_*`)
 Always available from port 8081:
 
+- `sentimentizer_system_info{platform, python, cpu_count}` — Info-type metric with static system metadata
 - `sentimentizer_system_cpu_percent`
 - `sentimentizer_system_memory_percent`
 - `sentimentizer_system_memory_available_bytes`
@@ -98,6 +138,8 @@ Always available from port 8081:
 - `sentimentizer_ray_available`
 - `sentimentizer_ray_node_count`
 - `sentimentizer_ray_metric_count`
+- `sentimentizer_ray_controller_state`
+- `sentimentizer_ray_controller_operation_time_s`
 
 ## How Training Metrics Flow
 
@@ -127,7 +169,7 @@ Always available from port 8081:
 
 During training, `torch.sigmoid()` on extreme logit values can produce NaN, which causes `sklearn.metrics.roc_auc_score()` to raise `ValueError: Input contains NaN`. The codebase handles this at multiple levels:
 
-1. **`sentimentizer/metrics.py`**: `compute_classification_metrics()` and `_auc_roc()` replace NaN probabilities with 0.5 (random-guess probability) before calling sklearn
+1. **`sentimentizer/metrics.py`**: `compute_classification_metrics()` and `_auc_roc()` replace NaN probabilities with 0.5 (random-guess probability) before computing AUC-ROC (uses `sklearn.metrics.roc_auc_score` when available, falls back to a manual trapezoidal implementation otherwise)
 2. **`sentimentizer/metrics.py`**: `compute_metrics_from_model()` replaces NaN at the tensor level using `torch.where()` before converting to numpy
 3. **`sentimentizer/trainer.py`**: Both `Trainer.evaluate()` and `_train_func()` (Ray) replace NaN in probabilities with 0.5 after `torch.sigmoid()`
 
