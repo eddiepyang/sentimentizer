@@ -79,6 +79,7 @@ def _write_epoch_metrics_to_file(
             "positive_accuracy": 0.0,
             "negative_accuracy": 0.0,
             "epoch": 0,
+            "lr": 0.0,
         },
         "encoder": {
             "train_loss": 0.0,
@@ -92,6 +93,7 @@ def _write_epoch_metrics_to_file(
             "positive_accuracy": 0.0,
             "negative_accuracy": 0.0,
             "epoch": 0,
+            "lr": 0.0,
         },
         "decoder": {
             "train_loss": 0.0,
@@ -105,6 +107,7 @@ def _write_epoch_metrics_to_file(
             "positive_accuracy": 0.0,
             "negative_accuracy": 0.0,
             "epoch": 0,
+            "lr": 0.0,
         },
     }
     data[model_type] = {
