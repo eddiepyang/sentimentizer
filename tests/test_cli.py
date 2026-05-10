@@ -359,6 +359,119 @@ def test_resolve_device_no_warning_when_no_nvidia_libs(
     assert not any("CPU-only" in rec.message for rec in caplog.records)
 
 
+def test_run_tokenize_new_skips_data_when_rows_exist(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: str
+) -> None:
+    """run_type='new' should create dictionary but skip data when parquet has enough rows."""
+    import pandas as pd
+
+    from sentimentizer.config import DriverConfig
+    from workflows.driver import State
+
+    processed_path = str(tmp_path / "review_data.parquet")
+    raw_path = str(tmp_path / "raw_reviews.parquet")
+
+    monkeypatch.setattr(DriverConfig.files, "processed_reviews_file_path", processed_path)
+    monkeypatch.setattr(DriverConfig.files, "raw_reviews_file_path", raw_path)
+
+    monkeypatch.setattr("workflows.stages.tokenize._parquet_row_count", lambda p: 20000)
+    monkeypatch.setattr("workflows.lifecycle._ensure_ray_initialized", lambda: None)
+    monkeypatch.setattr("workflows.lifecycle.is_ray_available", lambda: False)
+
+    calls: list[str] = []
+
+    class FakeTokenizer:
+        @classmethod
+        def from_data(cls, data):
+            calls.append("from_data")
+            return cls()
+
+        def transform_dataframe(self, data):
+            calls.append("transform_dataframe")
+
+    monkeypatch.setattr("sentimentizer.tokenizer.Tokenizer", FakeTokenizer)
+
+    fake_raw_df = pd.DataFrame({"tokens": ["hello world"] * 50, "stars": [5] * 50})
+    monkeypatch.setattr(pd, "read_parquet", lambda p: fake_raw_df)
+
+    from workflows.stages.tokenize import run_tokenize
+
+    state = State(model="rnn", device="cpu", run_type="new")
+    run_tokenize(state)
+
+    assert "from_data" in calls, "Dictionary should have been created"
+    assert "transform_dataframe" not in calls, "Data should not have been transformed"
+
+
+def test_run_tokenize_new_creates_data_when_rows_insufficient(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: str
+) -> None:
+    """run_type='new' should create both dictionary and data when rows are insufficient."""
+    import pandas as pd
+
+    from sentimentizer.config import DriverConfig
+    from workflows.driver import State
+
+    processed_path = str(tmp_path / "review_data.parquet")
+    raw_path = str(tmp_path / "raw_reviews.parquet")
+
+    monkeypatch.setattr(DriverConfig.files, "processed_reviews_file_path", processed_path)
+    monkeypatch.setattr(DriverConfig.files, "raw_reviews_file_path", raw_path)
+
+    monkeypatch.setattr("workflows.stages.tokenize._parquet_row_count", lambda p: 0)
+    monkeypatch.setattr("workflows.lifecycle._ensure_ray_initialized", lambda: None)
+    monkeypatch.setattr("workflows.lifecycle.is_ray_available", lambda: False)
+
+    calls: list[str] = []
+
+    class FakeTokenizer:
+        @classmethod
+        def from_data(cls, data):
+            calls.append("from_data")
+            return cls()
+
+        def transform_dataframe(self, data):
+            calls.append("transform_dataframe")
+            return pd.DataFrame()
+
+    monkeypatch.setattr("sentimentizer.tokenizer.Tokenizer", FakeTokenizer)
+
+    fake_raw_df = pd.DataFrame({"tokens": ["hello world"] * 50, "stars": [5] * 50})
+    monkeypatch.setattr(pd, "read_parquet", lambda p: fake_raw_df)
+
+    from workflows.stages.tokenize import run_tokenize
+
+    state = State(model="rnn", device="cpu", run_type="new")
+    run_tokenize(state)
+
+    assert "from_data" in calls, "Dictionary should have been created"
+    assert "transform_dataframe" in calls, "Data should have been transformed"
+
+
+def test_run_tokenize_update_skips_when_rows_exist(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: str
+) -> None:
+    """run_type='update' should skip entirely when parquet already has enough rows."""
+    from sentimentizer.config import DriverConfig
+    from workflows.driver import State
+
+    processed_path = str(tmp_path / "review_data.parquet")
+
+    monkeypatch.setattr(DriverConfig.files, "processed_reviews_file_path", processed_path)
+
+    monkeypatch.setattr("workflows.stages.tokenize._parquet_row_count", lambda p: 20000)
+    monkeypatch.setattr("workflows.lifecycle._ensure_ray_initialized", lambda: None)
+    monkeypatch.setattr("workflows.lifecycle.is_ray_available", lambda: False)
+
+    from workflows.stages.tokenize import run_tokenize
+
+    state = State(model="rnn", device="cpu", run_type="update")
+    # If skip doesn't work, the function tries pd.read_parquet/gensim which
+    # aren't patched in this test — so a passing test means the early return
+    # kicked in
+    run_tokenize(state)
+
+
 def test_config_reexport() -> None:
     """Verify that auto_detect_device is re-exported from sentimentizer.config."""
     from sentimentizer.config import auto_detect_device
