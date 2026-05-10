@@ -3484,7 +3484,7 @@ wheels = [
 
 [[package]]
 name = "sentimentizer"
-version = "0.102.0"
+version = "0.110.0"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
