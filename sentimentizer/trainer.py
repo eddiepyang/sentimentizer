@@ -36,6 +36,53 @@ from sentimentizer.loader import CorpusDataset
 from sentimentizer.metrics import ClassificationMetrics
 
 # ---------------------------------------------------------------------------
+# Shared metrics persistence helpers
+# ---------------------------------------------------------------------------
+
+def _write_epoch_metrics_to_file(
+    *,
+    model_type: str,
+    epoch: int,
+    train_loss: float,
+    val_loss: float,
+    metrics: ClassificationMetrics,
+) -> None:
+    """Write current epoch metrics to the JSON file the standalone exporter reads.
+
+    The standalone exporter (port 8081) polls ``/tmp/sentimentizer_training_metrics.json``
+    every 10 seconds.  Updating this file after each validation epoch lets the table
+    panel on the dashboard show live data while single-node training is running,
+    instead of remaining at zeros until training finishes.
+    """
+    import contextlib
+    import json
+    from pathlib import Path
+
+    path = Path("/tmp/sentimentizer_training_metrics.json")
+
+    auc_roc = metrics.auc_roc
+    # Keep only the current model_type so the dashboard table shows exactly
+    # one row that updates from zeros to real values during training.
+    data = {
+        model_type: {
+            "train_loss": float(train_loss),
+            "val_loss": float(val_loss),
+            "accuracy": float(metrics.accuracy),
+            "precision": float(metrics.precision),
+            "recall": float(metrics.recall),
+            "f1": float(metrics.f1),
+            "cohen_kappa": float(metrics.cohen_kappa),
+            "auc_roc": float(auc_roc) if auc_roc is not None else None,
+            "positive_accuracy": float(metrics.positive_accuracy),
+            "negative_accuracy": float(metrics.negative_accuracy),
+            "epoch": int(epoch),
+        }
+    }
+
+    with contextlib.suppress(OSError):
+        path.write_text(json.dumps(data, indent=2))
+
+# ---------------------------------------------------------------------------
 # Ray custom metrics (lazy initialization)
 #
 # In Ray 2.55+, ray.util.metrics.Gauge objects must be created inside a
@@ -269,10 +316,12 @@ class Trainer:
                     pass
                 logger.info(
                     f"[epoch {epoch}] {i / n:.2f} of rows completed in "
-                    f"{j + 1} cycles, current loss at {np.mean(self.losses[-60:]):.6f}"
+                    f"{j + 1} cycles, current loss at {np.mean(self.losses[-60:]):.6f},"
+                    f" model_type={self.model_type}"
                 )
                 logger.info(
-                    f"[epoch {epoch}] current learning rate at {self.optimizer.param_groups[0]['lr']:.6f}"  # noqa: E501
+                    f"[epoch {epoch}] current learning rate at {self.optimizer.param_groups[0]['lr']:.6f},"  # noqa: E501
+                    f" model_type={self.model_type}"
                 )
 
     def fit(
@@ -437,8 +486,19 @@ class Trainer:
         except ImportError:
             pass
 
+        # Write current metrics to the JSON file so the standalone exporter
+        # serves up-to-date data in the dashboard table panel.
+        _write_epoch_metrics_to_file(
+            model_type=self.model_type,
+            epoch=epoch,
+            train_loss=self.latest_train_loss,
+            val_loss=self.val_loss,
+            metrics=metrics,
+        )
+
         logger.info(  # type: ignore[call-arg]
             f"[epoch {epoch}] evaluation complete",
+            model_type=self.model_type,
             val_loss=self.val_loss,
             accuracy=metrics.accuracy,
             precision=metrics.precision,
@@ -759,11 +819,22 @@ def _train_func(config: dict) -> None:
                 TRAINING_VAL_POSITIVE_ACCURACY.labels(**lbl).set(float(metrics.positive_accuracy))
                 TRAINING_VAL_NEGATIVE_ACCURACY.labels(**lbl).set(float(metrics.negative_accuracy))
                 TRAINING_EPOCH.labels(**lbl).set(epoch)
+
+                # Write current epoch metrics to the JSON file so the standalone
+                # exporter serves up-to-date data in the dashboard table panel.
+                _write_epoch_metrics_to_file(
+                    model_type=model_type,
+                    epoch=epoch,
+                    train_loss=float(train_loss),
+                    val_loss=float(val_loss),
+                    metrics=metrics,
+                )
         except ImportError:
             pass
 
         logger.info(  # type: ignore[call-arg]
             f"[epoch {epoch}] completed",
+            model_type=model_type,
             train_loss=train_loss,
             val_loss=val_loss,
             accuracy=metrics.accuracy,

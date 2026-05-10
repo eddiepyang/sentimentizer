@@ -7,7 +7,6 @@ of torch, ray, gensim, or sentimentizer.config here.
 
 from __future__ import annotations
 
-import contextlib
 import json
 from pathlib import Path
 from typing import Any
@@ -50,18 +49,10 @@ def _reset_stale_metrics(model_type: str) -> None:
     }
 
     # --- 1. Persisted JSON file ---
-    # Write a zeroed entry instead of deleting: the standalone exporter only
-    # updates gauge labels for model types present in the file.  If we delete
-    # the entry, the exporter's in-process gauges keep serving the last value.
+    # Replace the entire file with a single zeroed entry for the current
+    # model_type so the dashboard table panel shows exactly one row.
     try:
-        data: dict = {}
-        if _METRICS_PERSISTENCE_PATH.exists():
-            with contextlib.suppress(json.JSONDecodeError, OSError):
-                data = json.loads(_METRICS_PERSISTENCE_PATH.read_text())
-        if not isinstance(data, dict):
-            data = {}
-        data[model_type] = zeroed_metrics
-        _METRICS_PERSISTENCE_PATH.write_text(json.dumps(data, indent=2))
+        _METRICS_PERSISTENCE_PATH.write_text(json.dumps({model_type: zeroed_metrics}, indent=2))
         logger.info(
             "stale_metrics_cleared",
             path=str(_METRICS_PERSISTENCE_PATH),
@@ -294,10 +285,6 @@ def _run_fit_single(
     finally:
         _cuda_cleanup()
 
-    # Persist final single-node metrics so the standalone exporter
-    # shows them after the driver exits.
-    _persist_single_node_metrics(trainer, state.model)
-
     if save:
         weights_path = weights_path_for(state.model)
         torch.save(model.state_dict(), weights_path)
@@ -503,56 +490,29 @@ def _persist_metrics_to_file(metrics: dict, model_type: str) -> None:
     """
     path = Path("/tmp/sentimentizer_training_metrics.json")
 
-    # Read existing data (may contain metrics from other model types)
-    data: dict[str, dict] = {}
-    if path.exists():
-        with contextlib.suppress(json.JSONDecodeError, OSError):
-            data = json.loads(path.read_text())
-
     auc_roc = metrics.get("auc_roc")
-    data[model_type] = {
-        "train_loss": float(metrics.get("train_loss", 0)),
-        "val_loss": float(metrics.get("val_loss", 0)),
-        "accuracy": float(metrics.get("accuracy", 0)),
-        "precision": float(metrics.get("precision", 0)),
-        "recall": float(metrics.get("recall", 0)),
-        "f1": float(metrics.get("f1", 0)),
-        "cohen_kappa": float(metrics.get("cohen_kappa", 0)),
-        "auc_roc": float(auc_roc) if auc_roc is not None else None,
-        "positive_accuracy": float(metrics.get("pos_acc", metrics.get("positive_accuracy", 0))),
-        "negative_accuracy": float(metrics.get("neg_acc", metrics.get("negative_accuracy", 0))),
-        "epoch": int(metrics.get("epoch", 0)),
+    # Keep only the current model_type so the dashboard table shows exactly
+    # one row (the final training result).
+    data = {
+        model_type: {
+            "train_loss": float(metrics.get("train_loss", 0)),
+            "val_loss": float(metrics.get("val_loss", 0)),
+            "accuracy": float(metrics.get("accuracy", 0)),
+            "precision": float(metrics.get("precision", 0)),
+            "recall": float(metrics.get("recall", 0)),
+            "f1": float(metrics.get("f1", 0)),
+            "cohen_kappa": float(metrics.get("cohen_kappa", 0)),
+            "auc_roc": float(auc_roc) if auc_roc is not None else None,
+            "positive_accuracy": float(
+                metrics.get("pos_acc", metrics.get("positive_accuracy", 0))
+            ),
+            "negative_accuracy": float(
+                metrics.get("neg_acc", metrics.get("negative_accuracy", 0))
+            ),
+            "epoch": int(metrics.get("epoch", 0)),
+        }
     }
 
     path.write_text(json.dumps(data, indent=2))
     logger.info("training_metrics_persisted", path=str(path), model_type=model_type)
 
-
-def _persist_single_node_metrics(trainer: Any, model_type: str) -> None:
-    """Persist single-node Trainer metrics to JSON for the standalone exporter.
-
-    After single-node ``Trainer.fit()`` completes, only the driver process
-    knows the final metrics.  This function constructs a dict compatible with
-    ``_persist_metrics_to_file`` from the Trainer's stored metrics.
-    """
-    if trainer.latest_metrics is None:
-        return
-
-    metrics = {
-        "train_loss": float(trainer.latest_train_loss),
-        "val_loss": float(trainer.val_loss),
-        "accuracy": float(trainer.latest_metrics.accuracy),
-        "precision": float(trainer.latest_metrics.precision),
-        "recall": float(trainer.latest_metrics.recall),
-        "f1": float(trainer.latest_metrics.f1),
-        "cohen_kappa": float(trainer.latest_metrics.cohen_kappa),
-        "auc_roc": (
-            float(trainer.latest_metrics.auc_roc)
-            if trainer.latest_metrics.auc_roc is not None
-            else None
-        ),
-        "positive_accuracy": float(trainer.latest_metrics.positive_accuracy),
-        "negative_accuracy": float(trainer.latest_metrics.negative_accuracy),
-        "epoch": int(trainer.latest_epoch),
-    }
-    _persist_metrics_to_file(metrics, model_type)

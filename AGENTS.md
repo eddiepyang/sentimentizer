@@ -78,6 +78,16 @@ uv run black --check .
 uv run black .
 ```
 
+### Regenerating dashboards
+
+After modifying `scripts/generate_ray_dashboards.py` (or any code that affects dashboard JSON output), regenerate and reload Grafana:
+
+```bash
+make start-metrics    # Regenerates JSON + restarts Grafana + starts exporter
+```
+
+Grafana only reads provisioned dashboard files on **startup**, so a restart is required after any dashboard changes.
+
 ### Adding a new model type
 
 1. Add config dataclass in `sentimentizer/config.py`

@@ -193,13 +193,22 @@ During training, `torch.sigmoid()` on extreme logit values can produce NaN, whic
 ## Starting the Metrics Stack
 
 ```bash
-# Start Prometheus + Grafana + exporter (all in one)
+# Start Prometheus + Grafana + exporter (regenerates dashboards and restarts Grafana)
 make start-metrics
 
 # Or run components individually:
 cd metrics && docker compose up -d          # Prometheus + Grafana
 make start-exporter                           # Standalone exporter
+make setup-dashboards                         # Regenerate dashboard JSON files only
 ```
+
+**`make start-metrics` does three things**:
+1. Runs `make setup-dashboards` — regenerates all dashboard JSON files from `scripts/generate_ray_dashboards.py`
+2. Starts Prometheus + Grafana via Docker Compose
+3. **Restarts Grafana** so it picks up the freshly generated dashboard files
+4. Starts the standalone metrics exporter on port 8081
+
+Grafana only reads provisioned dashboard files on startup, so the restart is required after any dashboard code changes.
 
 ### Exporter address (`--addr`)
 

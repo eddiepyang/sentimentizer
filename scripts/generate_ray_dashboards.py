@@ -738,12 +738,8 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
                     _table_target("sentimentizer_training_val_precision", "Precision", "F"),
                     _table_target("sentimentizer_training_val_recall", "Recall", "G"),
                     _table_target("sentimentizer_training_val_cohen_kappa", "Kappa", "H"),
-                    _table_target(
-                        "sentimentizer_training_val_positive_accuracy", "Pos Acc", "I"
-                    ),
-                    _table_target(
-                        "sentimentizer_training_val_negative_accuracy", "Neg Acc", "J"
-                    ),
+                    _table_target("sentimentizer_training_val_positive_accuracy", "Pos Acc", "I"),
+                    _table_target("sentimentizer_training_val_negative_accuracy", "Neg Acc", "J"),
                     _table_target("sentimentizer_training_val_auc_roc", "AUC-ROC", "K"),
                 ],
                 "transformations": [
