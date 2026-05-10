@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sentimentizer"
-version = "0.101.1"
+version = "0.102.0"
 description = "smole language models"
 readme = "README.md"
 authors = [{ name = "Edward Yang", email = "edwardpyang@gmail.com" }]
@@ -28,21 +28,23 @@ dependencies = [
     "structlog",
     "psutil",
     "prometheus_client>=0.14.0",
-    "ray[data]>=2.55.0,<2.56.0",
-    "ray[serve]>=2.55.0,<2.56.0",
-    "ray[train]>=2.55.0,<2.56.0",
-    "ray[tune]>=2.55.0,<2.56.0",
-    "optuna>=3.5",
     "python-dotenv>=1.0.0",
     "pyyaml>=6.0",
-    "pydantic-ai-slim[openai]>=0.0.36",
-    "langgraph>=0.2",
+    "pydantic-ai-slim[openai]>=1.93.0",
+    "langgraph>=1.1.10",
     "rich>=13.0.0",
     "huggingface_hub",
     "click>=8.1.0",
 ]
 
 [project.optional-dependencies]
+ray = [
+    "ray[data]>=2.55.0,<2.56.0",
+    "ray[serve]>=2.55.0,<2.56.0",
+    "ray[train]>=2.55.0,<2.56.0",
+    "ray[tune]>=2.55.0,<2.56.0",
+    "optuna>=3.5",
+]
 dev = [
     "black",
     "bumpver",
@@ -54,10 +56,10 @@ dev = [
 ]
 
 [project.scripts]
-sentimentizer = "workflows.driver:cli"
+sentimentizer = "workflows.cli:cli"
 
 [tool.hatch.build.targets.wheel]
-packages = ["sentimentizer"]
+packages = ["sentimentizer", "workflows"]
 
 [dependency-groups]
 dev = [

@@ -12,6 +12,9 @@ import tempfile
 from pathlib import Path
 
 import pytest
+
+# ruff: noqa: E402
+ray = pytest.importorskip("ray")
 import ray.cloudpickle as pickle
 import torch
 import torch.nn as nn

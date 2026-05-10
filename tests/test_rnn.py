@@ -4,7 +4,9 @@ from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
-import ray
+
+# ruff: noqa: E402
+ray = pytest.importorskip("ray")
 import torch
 
 from sentimentizer.config import (
@@ -13,7 +15,7 @@ from sentimentizer.config import (
     RNNConfig,
     TrainerConfig,
 )
-from sentimentizer.extractor import extract_data
+from sentimentizer.extractor import extract_data_ray
 from sentimentizer.loader import CorpusDataset, load_train_val_ray_datasets
 from sentimentizer.models.decoder import Decoder
 from sentimentizer.models.encoder import Encoder
@@ -87,7 +89,7 @@ class TestExtractData:
 
     def test_success(self, rel_path, relative_root):
         ray.init(ignore_reinit_error=True)
-        ds = extract_data(compressed_file_name=self.fname, file_path=rel_path, stop=self.stop)
+        ds = extract_data_ray(compressed_file_name=self.fname, file_path=rel_path, stop=self.stop)
         assert isinstance(ds, ray.data.Dataset)
 
         path = f"{relative_root}/tests/test_data/file.parquet"

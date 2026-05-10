@@ -177,9 +177,13 @@ def test_diagnose_bare_shows_help() -> None:
 
 def test_run_chains_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
-    monkeypatch.setattr("workflows.driver.run_extract", lambda *a, **kw: calls.append("extract"))
-    monkeypatch.setattr("workflows.driver.run_tokenize", lambda *a, **kw: calls.append("tokenize"))
-    monkeypatch.setattr("workflows.driver.run_train", lambda *a, **kw: calls.append("train"))
+    monkeypatch.setattr(
+        "workflows.stages.extract.run_extract", lambda *a, **kw: calls.append("extract")
+    )
+    monkeypatch.setattr(
+        "workflows.stages.tokenize.run_tokenize", lambda *a, **kw: calls.append("tokenize")
+    )
+    monkeypatch.setattr("workflows.stages.train.run_train", lambda *a, **kw: calls.append("train"))
     result = CliRunner().invoke(cli, ["run", "--stop", "10"])
     assert result.exit_code == 0, result.output
     assert calls == ["extract", "tokenize", "train"]
@@ -196,9 +200,9 @@ def test_run_passes_resume_flags(monkeypatch: pytest.MonkeyPatch) -> None:
     def mock_train(state: State, **kwargs: object) -> None:
         train_kwargs.update(kwargs)
 
-    monkeypatch.setattr("workflows.driver.run_extract", lambda *a, **kw: None)
-    monkeypatch.setattr("workflows.driver.run_tokenize", mock_tokenize)
-    monkeypatch.setattr("workflows.driver.run_train", mock_train)
+    monkeypatch.setattr("workflows.stages.extract.run_extract", lambda *a, **kw: None)
+    monkeypatch.setattr("workflows.stages.tokenize.run_tokenize", mock_tokenize)
+    monkeypatch.setattr("workflows.stages.train.run_train", mock_train)
 
     result = CliRunner().invoke(cli, ["run", "--stop", "10", "--resume-tokenize", "--resume-train"])
     assert result.exit_code == 0, result.output
@@ -208,7 +212,9 @@ def test_run_passes_resume_flags(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_extract_command(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
-    monkeypatch.setattr("workflows.driver.run_extract", lambda *a, **kw: calls.append("extract"))
+    monkeypatch.setattr(
+        "workflows.stages.extract.run_extract", lambda *a, **kw: calls.append("extract")
+    )
     result = CliRunner().invoke(cli, ["extract", "--stop", "5000"])
     assert result.exit_code == 0, result.output
     assert calls == ["extract"]
@@ -216,7 +222,9 @@ def test_extract_command(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_tokenize_command(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
-    monkeypatch.setattr("workflows.driver.run_tokenize", lambda *a, **kw: calls.append("tokenize"))
+    monkeypatch.setattr(
+        "workflows.stages.tokenize.run_tokenize", lambda *a, **kw: calls.append("tokenize")
+    )
     result = CliRunner().invoke(cli, ["tokenize"])
     assert result.exit_code == 0, result.output
     assert calls == ["tokenize"]
@@ -224,7 +232,7 @@ def test_tokenize_command(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_train_command(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
-    monkeypatch.setattr("workflows.driver.run_train", lambda *a, **kw: calls.append("train"))
+    monkeypatch.setattr("workflows.stages.train.run_train", lambda *a, **kw: calls.append("train"))
     result = CliRunner().invoke(cli, ["train", "--save"])
     assert result.exit_code == 0, result.output
     assert calls == ["train"]
@@ -232,7 +240,7 @@ def test_train_command(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_tune_command(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
-    monkeypatch.setattr("workflows.driver.run_tune", lambda *a, **kw: calls.append("tune"))
+    monkeypatch.setattr("workflows.stages.tune.run_tune", lambda *a, **kw: calls.append("tune"))
     result = CliRunner().invoke(cli, ["tune", "--mode", "standalone"])
     assert result.exit_code == 0, result.output
     assert calls == ["tune"]
@@ -241,7 +249,7 @@ def test_tune_command(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_diagn_pipeline_command(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
     monkeypatch.setattr(
-        "workflows.driver.run_diagnose_pipeline", lambda *a, **kw: calls.append("pipeline")
+        "workflows.stages.diagnose.run_diagnose_pipeline", lambda *a, **kw: calls.append("pipeline")
     )
     result = CliRunner().invoke(cli, ["diagnose", "pipeline"])
     assert result.exit_code == 0, result.output
@@ -250,7 +258,9 @@ def test_diagn_pipeline_command(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_diagn_env_command(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
-    monkeypatch.setattr("workflows.driver.run_diagnose_env", lambda *a, **kw: calls.append("env"))
+    monkeypatch.setattr(
+        "workflows.stages.diagnose.run_diagnose_env", lambda *a, **kw: calls.append("env")
+    )
     result = CliRunner().invoke(cli, ["diagnose", "env"])
     assert result.exit_code == 0, result.output
     assert calls == ["env"]
@@ -258,7 +268,7 @@ def test_diagn_env_command(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_hf_push_command(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
-    monkeypatch.setattr("workflows.driver.run_hf_push", lambda *a, **kw: calls.append("push"))
+    monkeypatch.setattr("workflows.stages.hf.run_hf_push", lambda *a, **kw: calls.append("push"))
     result = CliRunner().invoke(cli, ["hf", "push"])
     assert result.exit_code == 0, result.output
     assert calls == ["push"]
@@ -266,7 +276,7 @@ def test_hf_push_command(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_hf_pull_command(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
-    monkeypatch.setattr("workflows.driver.run_hf_pull", lambda *a, **kw: calls.append("pull"))
+    monkeypatch.setattr("workflows.stages.hf.run_hf_pull", lambda *a, **kw: calls.append("pull"))
     result = CliRunner().invoke(cli, ["hf", "pull"])
     assert result.exit_code == 0, result.output
     assert calls == ["pull"]
