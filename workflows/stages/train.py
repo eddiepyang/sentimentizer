@@ -49,10 +49,16 @@ def _reset_stale_metrics(model_type: str) -> None:
     }
 
     # --- 1. Persisted JSON file ---
-    # Replace the entire file with a single zeroed entry for the current
-    # model_type so the dashboard table panel shows exactly one row.
+    # Replace the file with zeroed entries for all model types, then set
+    # the current model_type to zeros.  This ensures the exporter pushes
+    # zeros for every model type, overwriting stale Prometheus data.
     try:
-        _METRICS_PERSISTENCE_PATH.write_text(json.dumps({model_type: zeroed_metrics}, indent=2))
+        data = {
+            "rnn": zeroed_metrics.copy(),
+            "encoder": zeroed_metrics.copy(),
+            "decoder": zeroed_metrics.copy(),
+        }
+        _METRICS_PERSISTENCE_PATH.write_text(json.dumps(data, indent=2))
         logger.info(
             "stale_metrics_cleared",
             path=str(_METRICS_PERSISTENCE_PATH),
@@ -491,28 +497,62 @@ def _persist_metrics_to_file(metrics: dict, model_type: str) -> None:
     path = Path("/tmp/sentimentizer_training_metrics.json")
 
     auc_roc = metrics.get("auc_roc")
-    # Keep only the current model_type so the dashboard table shows exactly
-    # one row (the final training result).
+    # Write all known model types to the JSON, zeroing non-current ones.
+    # This ensures the exporter overwrites stale Prometheus gauge values.
     data = {
-        model_type: {
-            "train_loss": float(metrics.get("train_loss", 0)),
-            "val_loss": float(metrics.get("val_loss", 0)),
-            "accuracy": float(metrics.get("accuracy", 0)),
-            "precision": float(metrics.get("precision", 0)),
-            "recall": float(metrics.get("recall", 0)),
-            "f1": float(metrics.get("f1", 0)),
-            "cohen_kappa": float(metrics.get("cohen_kappa", 0)),
-            "auc_roc": float(auc_roc) if auc_roc is not None else None,
-            "positive_accuracy": float(
-                metrics.get("pos_acc", metrics.get("positive_accuracy", 0))
-            ),
-            "negative_accuracy": float(
-                metrics.get("neg_acc", metrics.get("negative_accuracy", 0))
-            ),
-            "epoch": int(metrics.get("epoch", 0)),
-        }
+        "rnn": {
+            "train_loss": 0.0,
+            "val_loss": 0.0,
+            "accuracy": 0.0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "cohen_kappa": 0.0,
+            "auc_roc": None,
+            "positive_accuracy": 0.0,
+            "negative_accuracy": 0.0,
+            "epoch": 0,
+        },
+        "encoder": {
+            "train_loss": 0.0,
+            "val_loss": 0.0,
+            "accuracy": 0.0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "cohen_kappa": 0.0,
+            "auc_roc": None,
+            "positive_accuracy": 0.0,
+            "negative_accuracy": 0.0,
+            "epoch": 0,
+        },
+        "decoder": {
+            "train_loss": 0.0,
+            "val_loss": 0.0,
+            "accuracy": 0.0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "cohen_kappa": 0.0,
+            "auc_roc": None,
+            "positive_accuracy": 0.0,
+            "negative_accuracy": 0.0,
+            "epoch": 0,
+        },
+    }
+    data[model_type] = {
+        "train_loss": float(metrics.get("train_loss", 0)),
+        "val_loss": float(metrics.get("val_loss", 0)),
+        "accuracy": float(metrics.get("accuracy", 0)),
+        "precision": float(metrics.get("precision", 0)),
+        "recall": float(metrics.get("recall", 0)),
+        "f1": float(metrics.get("f1", 0)),
+        "cohen_kappa": float(metrics.get("cohen_kappa", 0)),
+        "auc_roc": float(auc_roc) if auc_roc is not None else None,
+        "positive_accuracy": float(metrics.get("pos_acc", metrics.get("positive_accuracy", 0))),
+        "negative_accuracy": float(metrics.get("neg_acc", metrics.get("negative_accuracy", 0))),
+        "epoch": int(metrics.get("epoch", 0)),
     }
 
     path.write_text(json.dumps(data, indent=2))
     logger.info("training_metrics_persisted", path=str(path), model_type=model_type)
-

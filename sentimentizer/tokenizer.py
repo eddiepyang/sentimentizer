@@ -96,7 +96,10 @@ def new_dictionary(data: pd.DataFrame, cfg: TokenizerConfig) -> corpora.Dictiona
 
     for doc_tokens in data[cfg.text_col]:
         if not isinstance(doc_tokens, list):
-            doc_tokens = regex_tokenize(str(doc_tokens))
+            try:
+                doc_tokens = list(doc_tokens)
+            except TypeError:
+                doc_tokens = regex_tokenize(str(doc_tokens))
         num_docs += 1
         word_freq.update(doc_tokens)
         doc_freq.update(set(doc_tokens))
@@ -280,10 +283,12 @@ def _count_vocab_batch(batch: dict, text_col: str) -> tuple[Counter, Counter, in
 
     for doc_tokens in batch[text_col]:
         if not isinstance(doc_tokens, list):
-            doc_tokens = regex_tokenize(str(doc_tokens))
+            try:
+                doc_tokens = list(doc_tokens)
+            except TypeError:
+                doc_tokens = regex_tokenize(str(doc_tokens))
         num_docs += 1
         word_freq.update(doc_tokens)
-        # doc_freq counts each word once per document
         doc_freq.update(set(doc_tokens))
 
     return word_freq, doc_freq, num_docs

@@ -282,8 +282,9 @@ stop-metrics:
 stop-ray:
 	uv run ray stop --force
 
-## Remove generated data files, checkpoints, and Python caches
-clean: stop-ray
+## Remove generated data files, checkpoints, Python caches, and ALL metrics state
+clean: stop-metrics stop-ray
+	@echo "==> Cleaning generated data files..."
 	rm -rf sentimentizer/data/review_data.parquet
 	rm -rf sentimentizer/data/review_data_raw.parquet
 	rm -rf sentimentizer/data/weights.pth
@@ -299,6 +300,10 @@ clean: stop-ray
 	rm -rf ~/ray_results/*
 	@echo "==> Cleaning persisted training metrics..."
 	rm -f /tmp/sentimentizer_training_metrics.json
+	@echo "==> Cleaning Prometheus TSDB data..."
+	@docker volume rm metrics_prometheus-data 2>/dev/null || true
+	@docker volume prune -f 2>/dev/null || true
+	@echo "Clean complete. Run 'make start-metrics' to start fresh."
 
 ## Clean only Ray-related files and logs
 clean-ray: stop-ray

@@ -39,6 +39,7 @@ from sentimentizer.metrics import ClassificationMetrics
 # Shared metrics persistence helpers
 # ---------------------------------------------------------------------------
 
+
 def _write_epoch_metrics_to_file(
     *,
     model_type: str,
@@ -61,26 +62,67 @@ def _write_epoch_metrics_to_file(
     path = Path("/tmp/sentimentizer_training_metrics.json")
 
     auc_roc = metrics.auc_roc
-    # Keep only the current model_type so the dashboard table shows exactly
-    # one row that updates from zeros to real values during training.
+    # Write all known model types to the JSON, zeroing non-current ones.
+    # The exporter pushes every entry to Prometheus; this ensures stale data
+    # from a previous model type is overwritten with zeros.
     data = {
-        model_type: {
-            "train_loss": float(train_loss),
-            "val_loss": float(val_loss),
-            "accuracy": float(metrics.accuracy),
-            "precision": float(metrics.precision),
-            "recall": float(metrics.recall),
-            "f1": float(metrics.f1),
-            "cohen_kappa": float(metrics.cohen_kappa),
-            "auc_roc": float(auc_roc) if auc_roc is not None else None,
-            "positive_accuracy": float(metrics.positive_accuracy),
-            "negative_accuracy": float(metrics.negative_accuracy),
-            "epoch": int(epoch),
-        }
+        "rnn": {
+            "train_loss": 0.0,
+            "val_loss": 0.0,
+            "accuracy": 0.0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "cohen_kappa": 0.0,
+            "auc_roc": None,
+            "positive_accuracy": 0.0,
+            "negative_accuracy": 0.0,
+            "epoch": 0,
+        },
+        "encoder": {
+            "train_loss": 0.0,
+            "val_loss": 0.0,
+            "accuracy": 0.0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "cohen_kappa": 0.0,
+            "auc_roc": None,
+            "positive_accuracy": 0.0,
+            "negative_accuracy": 0.0,
+            "epoch": 0,
+        },
+        "decoder": {
+            "train_loss": 0.0,
+            "val_loss": 0.0,
+            "accuracy": 0.0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "cohen_kappa": 0.0,
+            "auc_roc": None,
+            "positive_accuracy": 0.0,
+            "negative_accuracy": 0.0,
+            "epoch": 0,
+        },
+    }
+    data[model_type] = {
+        "train_loss": float(train_loss),
+        "val_loss": float(val_loss),
+        "accuracy": float(metrics.accuracy),
+        "precision": float(metrics.precision),
+        "recall": float(metrics.recall),
+        "f1": float(metrics.f1),
+        "cohen_kappa": float(metrics.cohen_kappa),
+        "auc_roc": float(auc_roc) if auc_roc is not None else None,
+        "positive_accuracy": float(metrics.positive_accuracy),
+        "negative_accuracy": float(metrics.negative_accuracy),
+        "epoch": int(epoch),
     }
 
     with contextlib.suppress(OSError):
         path.write_text(json.dumps(data, indent=2))
+
 
 # ---------------------------------------------------------------------------
 # Ray custom metrics (lazy initialization)
