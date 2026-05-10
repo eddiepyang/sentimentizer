@@ -455,9 +455,9 @@ def _rewrite_datasource_uid(data: dict, old_uid: str, new_uid: str) -> None:
 
 
 def generate_ml_metrics_dashboard() -> tuple[str, None]:
-    """Generate the Sentimentizer Training dashboard.
+    """Generate the Model Training dashboard.
 
-    Dashboard UID: ``sentimentizerTraining`` (docs/metrics.md line 150).
+    Dashboard UID: ``sentimentizerModelTraining`` (docs/metrics.md).
 
     Panel queries use PromQL ``or`` to fall back between the two metric sources
     described in docs/metrics.md lines 158-163:
@@ -506,8 +506,8 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
                 }
             ]
         },
-        "title": "Sentimentizer Training",
-        "uid": "sentimentizerTraining",
+        "title": "Model Training",
+        "uid": "sentimentizerModelTraining",
         "version": 1,
         "schemaVersion": 36,
         "style": "dark",
@@ -827,9 +827,9 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
 
 
 def generate_tune_metrics_dashboard() -> tuple[str, None]:
-    """Generate the Sentimentizer Tuning dashboard.
+    """Generate the Model Tuning dashboard.
 
-    Dashboard UID: ``sentimentizerTuning``.
+    Dashboard UID: ``sentimentizerModelTuning``.
 
     Covers aggregate trial stats (best metrics, trial counts) and per-trial
     time-series for all metrics emitted during Ray Tune runs.
@@ -1109,8 +1109,8 @@ def generate_tune_metrics_dashboard() -> tuple[str, None]:
         "time": {"from": "now-1h", "to": "now"},
         "timepicker": {},
         "timezone": "",
-        "title": "Sentimentizer Tuning",
-        "uid": "sentimentizerTuning",
+        "title": "Model Tuning",
+        "uid": "sentimentizerModelTuning",
         "version": 1,
     }
     return json.dumps(data, indent=4), None

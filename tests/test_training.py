@@ -12,6 +12,7 @@ Tests cover:
 import json
 import os
 import tempfile
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -546,6 +547,121 @@ class TestDistributedConfig:
 
 
 # ─── Metrics Integration ────────────────────────────────────────
+
+
+class TestResetStaleMetrics:
+    """Test _reset_stale_metrics zeroes stale model_type metrics."""
+
+    def test_zeroes_target_model_type_in_json(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """_reset_stale_metrics zeroes the specified model_type entry, leaving others intact."""
+        from workflows.stages.train import _reset_stale_metrics
+
+        metrics_file = tmp_path / "metrics.json"
+        data = {
+            "rnn": {"train_loss": 0.3, "epoch": 1},
+            "encoder": {"train_loss": 0.5, "epoch": 3},
+        }
+        metrics_file.write_text(json.dumps(data))
+        monkeypatch.setattr("workflows.stages.train._METRICS_PERSISTENCE_PATH", metrics_file)
+
+        _reset_stale_metrics("encoder")
+
+        result = json.loads(metrics_file.read_text())
+        assert "encoder" in result
+        assert result["encoder"]["train_loss"] == 0.0
+        assert result["encoder"]["epoch"] == 0
+        assert result["rnn"]["train_loss"] == 0.3
+
+    def test_adds_model_type_entry_when_missing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """_reset_stale_metrics creates a zeroed entry if model_type is not in the file."""
+        from workflows.stages.train import _reset_stale_metrics
+
+        metrics_file = tmp_path / "metrics.json"
+        data = {"rnn": {"train_loss": 0.3, "epoch": 1}}
+        metrics_file.write_text(json.dumps(data))
+        monkeypatch.setattr("workflows.stages.train._METRICS_PERSISTENCE_PATH", metrics_file)
+
+        _reset_stale_metrics("decoder")
+
+        result = json.loads(metrics_file.read_text())
+        assert "rnn" in result
+        assert "decoder" in result
+        assert result["decoder"]["train_loss"] == 0.0
+        assert result["decoder"]["epoch"] == 0
+
+    def test_creates_file_when_missing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """_reset_stale_metrics creates the JSON file if it doesn't exist."""
+        from workflows.stages.train import _reset_stale_metrics
+
+        new_file = tmp_path / "new_metrics.json"
+        monkeypatch.setattr("workflows.stages.train._METRICS_PERSISTENCE_PATH", new_file)
+
+        _reset_stale_metrics("encoder")
+
+        result = json.loads(new_file.read_text())
+        assert "encoder" in result
+        assert result["encoder"]["epoch"] == 0
+
+    def test_handles_corrupt_json(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """_reset_stale_metrics handles corrupt JSON gracefully."""
+        from workflows.stages.train import _reset_stale_metrics
+
+        metrics_file = tmp_path / "metrics.json"
+        metrics_file.write_text("{invalid json")
+        monkeypatch.setattr("workflows.stages.train._METRICS_PERSISTENCE_PATH", metrics_file)
+
+        _reset_stale_metrics("encoder")
+
+        assert metrics_file.exists()
+        result = json.loads(metrics_file.read_text())
+        assert "encoder" in result
+
+    def test_resets_prometheus_gauges(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """_reset_stale_metrics resets prometheus_client gauges for model_type to 0."""
+        from workflows.stages.train import _reset_stale_metrics
+
+        metrics_file = tmp_path / "metrics.json"
+        metrics_file.write_text("{}")
+        monkeypatch.setattr("workflows.stages.train._METRICS_PERSISTENCE_PATH", metrics_file)
+
+        from prometheus_client import REGISTRY
+
+        from sentimentizer.exporter import TRAINING_VAL_ACCURACY
+
+        TRAINING_VAL_ACCURACY.labels(model_type="encoder").set(0.99)
+
+        _reset_stale_metrics("encoder")
+
+        value = REGISTRY.get_sample_value(
+            "sentimentizer_training_val_accuracy",
+            {"model_type": "encoder"},
+        )
+        assert value == 0.0
+
+    def test_clears_ray_gauges_cache(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """_reset_stale_metrics removes the _RAY_GAUGES cache entry."""
+        from workflows.stages.train import _reset_stale_metrics
+
+        metrics_file = tmp_path / "metrics.json"
+        metrics_file.write_text("{}")
+        monkeypatch.setattr("workflows.stages.train._METRICS_PERSISTENCE_PATH", metrics_file)
+
+        from sentimentizer.trainer import _RAY_GAUGES
+
+        _RAY_GAUGES["test_model"] = {"dummy": True}
+        assert "test_model" in _RAY_GAUGES
+
+        _reset_stale_metrics("test_model")
+
+        assert "test_model" not in _RAY_GAUGES
 
 
 class TestMetricsIntegration:

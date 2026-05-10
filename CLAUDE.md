@@ -73,6 +73,7 @@ Both ruff and black are run in CI — PRs must pass lint and format checks befor
 - Config classes live in `sentimentizer/config.py` — use dataclasses
 - Keep `ray.init(ignore_reinit_error=True)` in tests to avoid re-init errors
 - The project requires Python 3.11+ (pinned in `.python-version`)
+- **Stale metrics cleanup**: `_reset_stale_metrics(model_type)` in `workflows/stages/train.py` is called at the start of every training run. It writes a zeroed-out entry for the current model type in `/tmp/sentimentizer_training_metrics.json` (not deletes — the standalone exporter only updates labels found in the file, so deleting would leave stale gauge values), resets the `sentimentizer_training_*` Prometheus gauges for that model type to 0, and invalidates the `_RAY_GAUGES` cache entry. This prevents stale metrics from a previous model type (e.g., RNN) from appearing on the dashboard when training a different model type (e.g., encoder).
 
 ## Ray 2.55 API conventions
 

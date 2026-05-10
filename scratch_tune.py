@@ -122,8 +122,8 @@ def generate_tune_metrics_dashboard():
         "time": {"from": "now-1h", "to": "now"},
         "timepicker": {},
         "timezone": "",
-        "title": "Sentimentizer Tuning",
-        "uid": "sentimentizerTuning",
+        "title": "Model Tuning",
+        "uid": "sentimentizerModelTuning",
         "version": 1,
     }
     return json.dumps(data, indent=4), None

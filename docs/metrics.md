@@ -51,8 +51,9 @@ The following gaps were identified between this document and the current codebas
                 ┌──────────────────────┐
                 │  Grafana              │
                 │  (port 3000)          │
-                │  Dashboard:           │
-                │  sentimentizerTraining│
+                 │  Dashboard:            │
+                 │  sentimentizerModel-  │
+                 │  Training              │
                 └──────────────────────┘
 ```
 
@@ -141,6 +142,22 @@ Always available from port 8081:
 - `sentimentizer_ray_controller_state`
 - `sentimentizer_ray_controller_operation_time_s`
 
+## Stale Metrics Reset
+
+When training starts for a model type (e.g., `encoder`), any residual metrics from a previous model type's training run (e.g., `rnn`) would persist in two places:
+
+1. **Persisted JSON file** (`/tmp/sentimentizer_training_metrics.json`) — accumulates entries across runs (one key per `model_type`). The standalone exporter reads this file every 10 seconds and updates its gauges for **all** model types found in the file. Without cleanup, stale values from a previous model type's run continue to appear on the dashboard.
+2. **`prometheus_client` gauges** — retain their last-set values in the driver process until overwritten. A Prometheus scrape mid-training would show stale data.
+3. **`_RAY_GAUGES` cache** — lazily-created Ray Gauge dicts keyed by `model_type`. If a previous Ray session created gauges for a model type, those cached entries reference gauges from a now-defunct Ray worker context.
+
+**Fix:** `_reset_stale_metrics(model_type)` in `workflows/stages/train.py` is called at the start of `run_train()` (both single-node and distributed paths). It:
+
+1. Writes a **zeroed-out entry** for the current `model_type` in the JSON file (sets all metrics to 0, epoch to 0). This is essential because the standalone exporter only updates gauge labels for model types present in the file — deleting the entry would leave the exporter serving stale values from its in-process gauges.
+2. Resets all 11 `sentimentizer_training_*` Prometheus gauges for that `model_type` to `0`.
+3. Invalidates the `_RAY_GAUGES` cache entry for that `model_type`, forcing lazy re-creation in the current worker context.
+
+Other model types' entries in the JSON file are left untouched — they'll naturally be updated when those model types are trained next.
+
 ## How Training Metrics Flow
 
 ### During Distributed Training (`make train-distributed`)
@@ -220,13 +237,13 @@ The following dashboards are provisioned in Grafana:
 
 | Dashboard | UID | Metrics Shown |
 |-----------|-----|---------------|
-| **Sentimentizer Training** | `sentimentizerTraining` | Training loss, validation accuracy / precision / recall / F1, per-class accuracy, Cohen's Kappa, AUC-ROC, epoch |
-| **Sentimentizer Tuning** | `sentimentizerTuning` | Ray Tune trial metrics: aggregate stats (best accuracy/loss/F1, trial counts) and per-trial time-series for all validation metrics |
+| **Model Training** | `sentimentizerModelTraining` | Training loss, validation accuracy / precision / recall / F1, per-class accuracy, Cohen's Kappa, AUC-ROC, epoch |
+| **Model Tuning** | `sentimentizerModelTuning` | Ray Tune trial metrics: aggregate stats (best accuracy/loss/F1, trial counts) and per-trial time-series for all validation metrics |
 | **Sentimentizer System** | `sentimentizerSystem` | CPU / memory / disk usage, GPU utilization / memory / temperature, Ray cluster health (availability, node count, controller state) |
 
 All custom dashboards use the provisioned Prometheus datasource (`uid: prometheus`).
 
-The Training dashboard uses PromQL `or` expressions to fall back between data sources:
+The Model Training dashboard uses PromQL `or` expressions to fall back between data sources:
 ```promql
 # Shows training metrics if available, falls back to live Ray metrics
 sentimentizer_training_val_accuracy{model_type=~"$model_type"}
@@ -272,6 +289,18 @@ This is usually one of three problems:
    pgrep -f "[s]entimentizer/exporter.py"
    ```  
    The `[s]` is a regex character class matching the letter `s`, but the literal `[s]` in `pgrep`'s own argv doesn't match the pattern, so `pgrep` filters itself out.
+
+### Stale metrics from previous training run appear on dashboard
+
+If you train the RNN model and then train the encoder model, the dashboard may briefly show RNN metrics alongside encoder metrics. This happens because `/tmp/sentimentizer_training_metrics.json` accumulates entries across runs and `prometheus_client` gauges retain their last-set values.
+
+**This is now handled automatically.** `_reset_stale_metrics(model_type)` is called at the start of every training run and zeroes out the entry for the current `model_type` in the JSON file, resets the Prometheus gauges to 0, and invalidates the Ray gauge cache for that model type. Other model types' entries are left untouched.
+
+If you still see stale data, check:
+
+1. Is the standalone exporter running? It reads the JSON file every 10 seconds.
+2. Did the exporter start before the training run? If not, restart the exporter after training starts.
+3. Check the JSON file: `cat /tmp/sentimentizer_training_metrics.json` — the entry for the model type currently being trained should have all-zero values at the start, then update as epochs complete.
 
 ### Ray metrics not appearing
 
