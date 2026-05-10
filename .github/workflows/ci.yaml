@@ -80,7 +80,7 @@ jobs:
 
     - name: install dependencies (CPU-only torch)
       run: |
-        uv sync --extra dev, ray \
+        uv sync --extra dev,ray \
           --no-install-package nvidia-cublas \
           --no-install-package nvidia-cuda-cupti \
           --no-install-package nvidia-cuda-nvrtc \
@@ -108,7 +108,8 @@ jobs:
     - name: test with pytest
       run: |
         uv run pytest --exitfirst --verbose --failed-first \
-        --cov=. --cov-report html
+          --cov=sentimentizer --cov=workflows \
+          --cov-report=term-missing --cov-report=html
       working-directory: .
       env:
         RAY_DISABLE_IMPORT_WARNING: "1"
@@ -161,8 +162,9 @@ jobs:
 
     - name: run ray train tests
       run: |
-        uv run pytest tests/test_rnn.py -v -k "Ray" \
-        --cov=sentimentizer.trainer --cov-report=term-missing
+        uv run pytest tests/test_rnn.py tests/test_ray_compat.py -v -k "Ray" \
+          --cov=sentimentizer --cov=workflows \
+          --cov-report=term-missing
       working-directory: .
       env:
         RAY_DISABLE_IMPORT_WARNING: "1"

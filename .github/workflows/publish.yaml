@@ -69,7 +69,10 @@ jobs:
             --no-install-package nvidia-nvjitlink \
             --no-install-package nvidia-nvshmem-cu13 \
             --no-install-package nvidia-nvtx
-      - run: uv run pytest --exitfirst --verbose --failed-first --cov=. --cov-report html
+      - run: |
+          uv run pytest --exitfirst --verbose --failed-first \
+            --cov=sentimentizer --cov=workflows \
+            --cov-report=term-missing --cov-report=html
 
   publish:
     needs: test
