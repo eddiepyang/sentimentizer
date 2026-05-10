@@ -13,11 +13,17 @@ from workflows.lifecycle import State, _ensure_ray_initialized, logger
 
 def run_tokenize(state: State, *, resume: bool = False) -> None:
     """Build/update dictionary and write processed parquet."""
-    from sentimentizer.config import DriverConfig
+    from sentimentizer.config import DriverConfig, TokenizerConfig
     from sentimentizer.tokenizer import Tokenizer, regex_tokenize
     from workflows.lifecycle import is_ray_available
 
     _ensure_ray_initialized()
+
+    stop = TokenizerConfig.stop
+    existing_rows = _parquet_row_count(DriverConfig.files.processed_reviews_file_path)
+    if existing_rows >= stop:
+        logger.info(f"skipping tokenize: {existing_rows} rows already exist (need {stop})")
+        return
 
     # For 'new' runs, always (re)create the dictionary and re-tokenize
     if state.run_type == "new":
@@ -48,15 +54,6 @@ def run_tokenize(state: State, *, resume: bool = False) -> None:
             )
 
     elif resume or state.run_type == "update":
-        # Skip tokenization if the processed parquet already has enough rows
-        from sentimentizer.config import TokenizerConfig
-
-        stop = TokenizerConfig.stop
-        existing_rows = _parquet_row_count(DriverConfig.files.processed_reviews_file_path)
-        if existing_rows >= stop:
-            logger.info(f"skipping tokenize: {existing_rows} rows already exist (need {stop})")
-            return
-
         if is_ray_available():
             import ray
             from gensim import corpora
@@ -88,8 +85,6 @@ def run_tokenize(state: State, *, resume: bool = False) -> None:
                     f"resuming from checkpoint: updating dictionary from "
                     f"{DriverConfig.files.dictionary_file_path}"
                 )
-                from sentimentizer.config import TokenizerConfig
-
                 t_cfg = TokenizerConfig()
                 texts = reviews_data[t_cfg.text_col].apply(
                     lambda x: (

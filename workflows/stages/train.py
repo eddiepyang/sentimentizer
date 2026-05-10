@@ -24,44 +24,53 @@ def _metrics_path(model_type: str) -> Path:
     return _METRICS_DIR / f"{model_type}_metrics.json"
 
 
-def _reset_stale_metrics(model_type: str) -> None:
-    """Clear stale persisted metrics and reset Prometheus gauges for *model_type*."""
-    zeroed_metrics: dict[str, Any] = {
-        "train_loss": 0.0,
-        "val_loss": 0.0,
-        "accuracy": 0.0,
-        "precision": 0.0,
-        "recall": 0.0,
-        "f1": 0.0,
-        "cohen_kappa": 0.0,
-        "auc_roc": None,
-        "positive_accuracy": 0.0,
-        "negative_accuracy": 0.0,
-        "epoch": 0,
-        "lr": 0.0,
-        "_trace": {
-            "reset_by": model_type,
-            "reset_at": __import__("time").time(),
-        },
-    }
+_ALL_MODEL_TYPES = ("rnn", "encoder", "decoder")
 
-    # --- 1. Persisted JSON file (per-model, no race) ---
+
+def _reset_stale_metrics(model_type: str) -> None:
+    """Clear stale persisted metrics and reset Prometheus gauges for ALL model types.
+
+    When a new training run starts for *model_type*, metrics from previous runs of
+    any model type (including the current one) are stale.  We zero out all three
+    per-model JSON files and all Prometheus gauge labels so the dashboard only
+    shows fresh data from the new run.
+    """
+    import time
+
+    # --- 1. Persisted JSON files (zero all model types) ---
     try:
         _METRICS_DIR.mkdir(parents=True, exist_ok=True)
-        # Only write / touch the file for the current model type.
-        # Other model types' files are untouched; the exporter zeroes gauges
-        # for any file that is missing or stale.
-        path = _metrics_path(model_type)
-        path.write_text(json.dumps(zeroed_metrics, indent=2))
+        for mt in _ALL_MODEL_TYPES:
+            zeroed_metrics: dict[str, Any] = {
+                "train_loss": 0.0,
+                "val_loss": 0.0,
+                "accuracy": 0.0,
+                "precision": 0.0,
+                "recall": 0.0,
+                "f1": 0.0,
+                "cohen_kappa": 0.0,
+                "auc_roc": None,
+                "positive_accuracy": 0.0,
+                "negative_accuracy": 0.0,
+                "epoch": 0,
+                "lr": 0.0,
+                "_trace": {
+                    "reset_by": model_type,
+                    "reset_at": time.time(),
+                },
+            }
+            path = _metrics_path(mt)
+            path.write_text(json.dumps(zeroed_metrics, indent=2))
+
         logger.info(
             "stale_metrics_cleared",
-            path=str(path),
             model_type=model_type,
+            cleared_types=list(_ALL_MODEL_TYPES),
         )
     except OSError as exc:
         logger.warning("failed_to_clear_stale_metrics_file: %s", exc)
 
-    # --- 2. prometheus_client gauges (driver process) ---
+    # --- 2. prometheus_client gauges (zero all model types) ---
     try:
         from sentimentizer.exporter import (
             TRAINING_EPOCH,
@@ -78,32 +87,31 @@ def _reset_stale_metrics(model_type: str) -> None:
             TRAINING_VAL_RECALL,
         )
 
-        lbl = {"model_type": model_type}
-        for gauge in (
-            TRAINING_TRAIN_LOSS,
-            TRAINING_VAL_LOSS,
-            TRAINING_VAL_ACCURACY,
-            TRAINING_VAL_PRECISION,
-            TRAINING_VAL_RECALL,
-            TRAINING_VAL_F1,
-            TRAINING_VAL_COHEN_KAPPA,
-            TRAINING_VAL_POSITIVE_ACCURACY,
-            TRAINING_VAL_NEGATIVE_ACCURACY,
-            TRAINING_EPOCH,
-            TRAINING_LR,
-        ):
-            gauge.labels(**lbl).set(0)
-        # AUC-ROC uses None / no value as sentinel — clear it
-        TRAINING_VAL_AUC_ROC.labels(**lbl).set(0)
+        for mt in _ALL_MODEL_TYPES:
+            lbl = {"model_type": mt}
+            for gauge in (
+                TRAINING_TRAIN_LOSS,
+                TRAINING_VAL_LOSS,
+                TRAINING_VAL_ACCURACY,
+                TRAINING_VAL_PRECISION,
+                TRAINING_VAL_RECALL,
+                TRAINING_VAL_F1,
+                TRAINING_VAL_COHEN_KAPPA,
+                TRAINING_VAL_POSITIVE_ACCURACY,
+                TRAINING_VAL_NEGATIVE_ACCURACY,
+                TRAINING_EPOCH,
+                TRAINING_LR,
+            ):
+                gauge.labels(**lbl).set(0)
+            TRAINING_VAL_AUC_ROC.labels(**lbl).set(0)
     except ImportError:
         pass
 
-    # --- 3. Ray _RAY_GAUGES cache ---
+    # --- 3. Ray _RAY_GAUGES cache (invalidate all) ---
     try:
         from sentimentizer.trainer import _RAY_GAUGES
 
-        if model_type in _RAY_GAUGES:
-            del _RAY_GAUGES[model_type]
+        _RAY_GAUGES.clear()
     except ImportError:
         pass
 
@@ -163,8 +171,6 @@ def run_train(
         else:
             logger.error("Failed to pull weights from HF Hub. Proceeding with original run type.")
 
-    model = _load_model(state, device)
-
     epochs = default_epochs(state.model)
 
     if distributed:
@@ -177,7 +183,6 @@ def run_train(
         _run_fit_distributed(
             state=state,
             device=device,
-            model=model,
             epochs=epochs,
             num_workers=num_workers,
             checkpoint_dir=checkpoint_dir,
@@ -190,6 +195,7 @@ def run_train(
             hf_repo=hf_repo,
         )
     else:
+        model = _load_model(state, device)
         _run_fit_single(
             state=state,
             device=device,
@@ -310,7 +316,6 @@ def _run_fit_single(
 def _run_fit_distributed(
     state: State,
     device: str,
-    model: Any,
     epochs: int,
     num_workers: int,
     checkpoint_dir: str,
@@ -322,7 +327,13 @@ def _run_fit_distributed(
     push_to_hub: bool,
     hf_repo: str | None,
 ) -> None:
-    """Distributed training using Ray Train TorchTrainer."""
+    """Distributed training using Ray Train TorchTrainer.
+
+    The model is NOT loaded in the driver process — Ray workers create their
+    own model from scratch in ``_train_func``.  Loading the model here would
+    waste GPU memory (for ``run_type="update"``) since the driver-side model
+    is never used for training.
+    """
     import torch
 
     from sentimentizer.config import (

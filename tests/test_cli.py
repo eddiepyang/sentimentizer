@@ -311,6 +311,54 @@ def test_resolve_device() -> None:
     assert resolve_device("auto") in ("cpu", "cuda", "mps")
 
 
+def test_resolve_device_warns_on_cpu_torch_with_nvidia_libs(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """resolve_device should warn when torch is CPU-only but NVIDIA libs exist."""
+    import torch
+
+    # Skip if torch actually has CUDA (no warning expected)
+    if torch.cuda.is_available():
+        return
+
+    from sentimentizer import device as device_mod
+
+    # Simulate CPU-only torch (+cpu suffix) with NVIDIA libs present
+    monkeypatch.setattr(torch, "__version__", "2.11.0+cpu")
+    monkeypatch.setattr(device_mod, "_has_nvidia_libs", lambda: True)
+
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        result = device_mod.resolve_device("auto")
+
+    assert result == "cpu"
+    assert any("CPU-only" in rec.message for rec in caplog.records)
+
+
+def test_resolve_device_no_warning_when_no_nvidia_libs(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """resolve_device should NOT warn when CPU-only torch and no NVIDIA libs."""
+    import torch
+
+    if torch.cuda.is_available():
+        return
+
+    from sentimentizer import device as device_mod
+
+    monkeypatch.setattr(torch, "__version__", "2.11.0+cpu")
+    monkeypatch.setattr(device_mod, "_has_nvidia_libs", lambda: False)
+
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        result = device_mod.resolve_device("auto")
+
+    assert result == "cpu"
+    assert not any("CPU-only" in rec.message for rec in caplog.records)
+
+
 def test_config_reexport() -> None:
     """Verify that auto_detect_device is re-exported from sentimentizer.config."""
     from sentimentizer.config import auto_detect_device

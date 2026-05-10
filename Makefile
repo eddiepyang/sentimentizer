@@ -1,4 +1,4 @@
-.PHONY: setup setup-dev download-data train train-rnn train-encoder train-decoder \
+.PHONY: setup setup-ci setup-dev download-data train train-rnn train-encoder train-decoder \
        train-distributed train-quick serve test lint format check clean docker-build docker-run \
 	   gpu-reset tune tune-rnn tune-encoder tune-decoder tune-standalone \
 	   start-metrics stop-metrics setup-dashboards start-exporter stop-exporter stop-ray \
@@ -22,8 +22,17 @@ EXPORTER_PORT ?= 8081
 # Setup
 # ──────────────────────────────────────────────
 
-## Install dependencies (production only)
+## Install dependencies with CUDA-enabled PyTorch (for local GPU development)
 setup:
+	uv sync --extra ray
+
+## Install dependencies with CPU-only PyTorch (for CI or machines without GPU)
+## Installs the CPU-only torch wheel from PyTorch's index, then syncs the rest.
+setup-ci:
+	uv pip install --index-url https://download.pytorch.org/whl/cpu torch
+	uv sync --extra ray
+
+setup-mps:
 	uv sync
 
 ## Install dependencies with dev tools (pytest, ruff, black, etc.)
