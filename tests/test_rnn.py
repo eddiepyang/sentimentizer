@@ -464,7 +464,7 @@ class TestSingleTrainer:
         emb_weights = torch.randn(100, 100)
         model = RNN(emb_weights=emb_weights)
         cfg = TrainerConfig(device="cpu")
-        trainer = new_trainer(model=model, cfg=cfg)
+        trainer = new_trainer(model=model, cfg=cfg, model_type="rnn")
         assert isinstance(trainer.loss_function, torch.nn.BCEWithLogitsLoss)
 
 

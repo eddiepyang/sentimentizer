@@ -26,12 +26,9 @@ Sentimentizer is a PyTorch-based sentiment analysis pipeline with three model ar
 
 ### Stale Metrics Cleanup
 
-**Problem**: When training the encoder model, the dashboard showed unexpected RNN metrics from a previous training run because `/tmp/sentimentizer_training_metrics.json` accumulates entries across runs and `prometheus_client` gauges retain their last-set values.
+**Problem**: When training the encoder model, the dashboard showed unexpected RNN metrics from a previous training run because a single shared JSON file accumulated entries across runs and `prometheus_client` gauges retained their last-set values. Concurrent training processes could also race on the shared file, overwriting each other.
 
-**Solution**: Added `_reset_stale_metrics(model_type)` in `workflows/stages/train.py` that is called at the start of every `run_train()` invocation. It:
-1. Writes a zeroed-out entry for the current `model_type` in `/tmp/sentimentizer_training_metrics.json` (sets all metrics to 0, epoch to 0). This is critical: deleting the entry would cause the standalone exporter to keep serving stale in-process gauge values, since it only updates labels found in the file.
-2. Resets all 11 `sentimentizer_training_*` Prometheus gauges for that model type to 0
-3. Invalidates the `_RAY_GAUGES` cache entry so a fresh gauge is lazily created
+**Solution**: Switched from a single shared JSON file (`/tmp/sentimentizer_training_metrics.json`) to per-model-type JSON files (`/tmp/sentimentizer_metrics/{model_type}_metrics.json`). Each model type writes to its own file, so concurrent training processes never race. The standalone exporter discovers all three files and zeroes gauges for any model type whose file is missing or stale. Added `_written_by` and `_written_at` trace fields to every write, and `_trace.reset_by` / `_trace.reset_at` to reset files, so debugging future issues is trivial: just `cat` the file to see which model_type wrote it and when.
 
 **Tests**: `TestResetStaleMetrics` in `tests/test_training.py` (6 tests covering JSON file cleanup, missing/corrupt files, Prometheus gauge reset, and Ray gauge cache invalidation).
 
@@ -73,7 +70,7 @@ tests/
 
 ## Metrics Pipeline
 
-- **Training driver** writes metrics to `/tmp/sentimentizer_training_metrics.json` (one key per `model_type`)
+- **Training driver** writes metrics to `/tmp/sentimentizer_metrics/{model_type}_metrics.json` (one file per `model_type`)
 - **Standalone exporter** (port 8081) reads JSON every 10s and serves `sentimentizer_training_*` gauges
 - **Ray workers** (port 8080) emit `ray_sentimentizer_live_*` gauges from rank 0
 - **Tune process** (port 8082) emits `sentimentizer_tune_*` gauges per trial

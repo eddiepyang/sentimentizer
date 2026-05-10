@@ -35,7 +35,7 @@ class TuningDeps:
     metrics, and the model type being tuned.
     """
 
-    model_type: str = "rnn"
+    model_type: str
     history: list[dict[str, Any]] | None = None
     current_metrics: dict[str, Any] | None = None
     search_space_defaults: dict[str, dict[str, Any]] | None = None

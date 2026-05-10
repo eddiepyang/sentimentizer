@@ -14,27 +14,19 @@ from typing import Any
 from workflows.helpers import _load_model
 from workflows.lifecycle import State, _cuda_cleanup, _ensure_ray_initialized, logger
 
-_METRICS_PERSISTENCE_PATH = Path("/tmp/sentimentizer_training_metrics.json")
+# Per-model-type metrics file base directory.  Each model writes to its own
+# file so concurrent training processes never race on a shared JSON file.
+_METRICS_DIR = Path("/tmp/sentimentizer_metrics")
+
+
+def _metrics_path(model_type: str) -> Path:
+    """Return the JSON file path for *model_type* metrics."""
+    return _METRICS_DIR / f"{model_type}_metrics.json"
 
 
 def _reset_stale_metrics(model_type: str) -> None:
-    """Clear stale persisted metrics and reset Prometheus gauges for *model_type*.
-
-    When training starts for a given model type, any residual metrics from a
-    previous run (persisted in the JSON file and cached in prometheus_client
-    gauges) would otherwise appear on the dashboard as "current" data.  This
-    function:
-
-    1. Writes a zeroed-out entry for *model_type* in the persisted JSON file
-       so the standalone exporter pushes zeroes to Prometheus on its next
-       scrape cycle, overwriting the stale values.
-    2. Resets the driver-level ``prometheus_client`` gauges for *model_type*
-       to 0 so a Prometheus scrape that happens mid-training doesn't show the
-       old values.  (The gauges are re-populated during training.)
-    3. Invalidates the Ray ``_RAY_GAUGES`` cache entry for *model_type* so a
-       fresh gauge is lazily created in the current Ray worker context.
-    """
-    zeroed_metrics = {
+    """Clear stale persisted metrics and reset Prometheus gauges for *model_type*."""
+    zeroed_metrics: dict[str, Any] = {
         "train_loss": 0.0,
         "val_loss": 0.0,
         "accuracy": 0.0,
@@ -47,22 +39,23 @@ def _reset_stale_metrics(model_type: str) -> None:
         "negative_accuracy": 0.0,
         "epoch": 0,
         "lr": 0.0,
+        "_trace": {
+            "reset_by": model_type,
+            "reset_at": __import__("time").time(),
+        },
     }
 
-    # --- 1. Persisted JSON file ---
-    # Replace the file with zeroed entries for all model types, then set
-    # the current model_type to zeros.  This ensures the exporter pushes
-    # zeros for every model type, overwriting stale Prometheus data.
+    # --- 1. Persisted JSON file (per-model, no race) ---
     try:
-        data = {
-            "rnn": zeroed_metrics.copy(),
-            "encoder": zeroed_metrics.copy(),
-            "decoder": zeroed_metrics.copy(),
-        }
-        _METRICS_PERSISTENCE_PATH.write_text(json.dumps(data, indent=2))
+        _METRICS_DIR.mkdir(parents=True, exist_ok=True)
+        # Only write / touch the file for the current model type.
+        # Other model types' files are untouched; the exporter zeroes gauges
+        # for any file that is missing or stale.
+        path = _metrics_path(model_type)
+        path.write_text(json.dumps(zeroed_metrics, indent=2))
         logger.info(
             "stale_metrics_cleared",
-            path=str(_METRICS_PERSISTENCE_PATH),
+            path=str(path),
             model_type=model_type,
         )
     except OSError as exc:
@@ -492,65 +485,22 @@ def _publish_distributed_metrics(result: Any, model_type: str) -> None:
 
 
 def _persist_metrics_to_file(metrics: dict, model_type: str) -> None:
-    """Write final training metrics to a JSON file for the standalone exporter.
+    """Write final training metrics to a per-model JSON file for the standalone exporter.
 
-    The standalone exporter on port 8081 reads this file periodically and
-    updates its own Prometheus gauges.  This ensures training metrics persist
-    after the driver process exits.
+    Each model type writes to its own file
+    (``/tmp/sentimentizer_metrics/{model_type}_metrics.json``) so concurrent
+    training processes never race on a shared JSON file.  The standalone
+    exporter discovers all three files and zeroes out Prometheus gauges for
+    any model type whose file is missing or stale.
 
     Accepts both Ray Train key names (``pos_acc``, ``neg_acc``) and direct
     key names (``positive_accuracy``, ``negative_accuracy``).
     """
-    path = Path("/tmp/sentimentizer_training_metrics.json")
+    _METRICS_DIR.mkdir(parents=True, exist_ok=True)
+    path = _metrics_path(model_type)
 
     auc_roc = metrics.get("auc_roc")
-    # Write all known model types to the JSON, zeroing non-current ones.
-    # This ensures the exporter overwrites stale Prometheus gauge values.
-    data = {
-        "rnn": {
-            "train_loss": 0.0,
-            "val_loss": 0.0,
-            "accuracy": 0.0,
-            "precision": 0.0,
-            "recall": 0.0,
-            "f1": 0.0,
-            "cohen_kappa": 0.0,
-            "auc_roc": None,
-            "positive_accuracy": 0.0,
-            "negative_accuracy": 0.0,
-            "epoch": 0,
-            "lr": 0.0,
-        },
-        "encoder": {
-            "train_loss": 0.0,
-            "val_loss": 0.0,
-            "accuracy": 0.0,
-            "precision": 0.0,
-            "recall": 0.0,
-            "f1": 0.0,
-            "cohen_kappa": 0.0,
-            "auc_roc": None,
-            "positive_accuracy": 0.0,
-            "negative_accuracy": 0.0,
-            "epoch": 0,
-            "lr": 0.0,
-        },
-        "decoder": {
-            "train_loss": 0.0,
-            "val_loss": 0.0,
-            "accuracy": 0.0,
-            "precision": 0.0,
-            "recall": 0.0,
-            "f1": 0.0,
-            "cohen_kappa": 0.0,
-            "auc_roc": None,
-            "positive_accuracy": 0.0,
-            "negative_accuracy": 0.0,
-            "epoch": 0,
-            "lr": 0.0,
-        },
-    }
-    data[model_type] = {
+    data: dict[str, Any] = {
         "train_loss": float(metrics.get("train_loss", 0)),
         "val_loss": float(metrics.get("val_loss", 0)),
         "accuracy": float(metrics.get("accuracy", 0)),
@@ -563,6 +513,8 @@ def _persist_metrics_to_file(metrics: dict, model_type: str) -> None:
         "negative_accuracy": float(metrics.get("neg_acc", metrics.get("negative_accuracy", 0))),
         "epoch": int(metrics.get("epoch", 0)),
         "lr": float(metrics.get("lr", 0.0)),
+        "_written_by": model_type,
+        "_written_at": __import__("time").time(),
     }
 
     path.write_text(json.dumps(data, indent=2))

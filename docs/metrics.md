@@ -24,11 +24,13 @@ The following gaps were identified between this document and the current codebas
 ┌──────────────────────┐     ┌──────────────────────┐
 │  Training Driver      │     │  Standalone Exporter  │
 │                       │     │  (port 8081)           │
-│  Writes metrics to    │────▶│  Reads JSON file every │
-│  /tmp/sentimentizer_  │     │  10s, serves gauges    │
-│  training_metrics.json│     │  + system/GPU/Ray stats │
+│  Writes per-model    │────▶│  Reads per-model JSON │
+│  JSON files to        │     │  files every 10s,     │
+│  /tmp/sentimentizer_ │     │  serves gauges        │
+│  metrics/*.json       │     │  + system/GPU/Ray     │
+│                       │     │  stats                │
 └───────────────────────┘     └──────────┬───────────┘
-                                         │
+                                          │
 ┌──────────────────────┐                  │
 │  Ray Workers         │                  │
 │  (port 8080)         │                  │
@@ -146,7 +148,8 @@ Always available from port 8081:
 
 When training starts for a model type (e.g., `encoder`), any residual metrics from a previous model type's training run (e.g., `rnn`) would persist in two places:
 
-1. **Persisted JSON file** (`/tmp/sentimentizer_training_metrics.json`) — accumulates entries across runs (one key per `model_type`). The standalone exporter reads this file every 10 seconds and updates its gauges for **all** model types found in the file. Without cleanup, stale values from a previous model type's run continue to appear on the dashboard.
+1. **Persisted JSON files** (`/tmp/sentimentizer_metrics/{model_type}_metrics.json`) — each model type writes to its own file, so concurrent training processes never race on a shared file. The standalone exporter reads all three files and updates gauges for each model type independently. Missing files result in zeroed-out gauges.
+```
 2. **`prometheus_client` gauges** — retain their last-set values in the driver process until overwritten. A Prometheus scrape mid-training would show stale data.
 3. **`_RAY_GAUGES` cache** — lazily-created Ray Gauge dicts keyed by `model_type`. If a previous Ray session created gauges for a model type, those cached entries reference gauges from a now-defunct Ray worker context.
 
@@ -163,14 +166,14 @@ Other model types' entries in the JSON file are left untouched — they'll natur
 ### During Distributed Training (`make train-distributed`)
 
 1. **Ray workers** (port 8080) emit `ray_sentimentizer_live_*` gauges every 100 training steps from rank 0
-2. **Driver process** sets `sentimentizer_training_*` gauges in-process and writes final metrics to `/tmp/sentimentizer_training_metrics.json`
+2. **Driver process** sets `sentimentizer_training_*` gauges in-process and writes final metrics to `/tmp/sentimentizer_metrics/{model_type}_metrics.json`
 3. **Standalone exporter** (port 8081) reads the JSON file every 10 seconds and updates its gauges
 4. **Prometheus** scrapes ports 8080 and 8081 every 10 seconds
 5. **Grafana** queries `sentimentizer_training_* or ray_sentimentizer_live_*` to show whichever data is available
 
 ### After Training Completes
 
-1. **Driver process** writes final metrics to `/tmp/sentimentizer_training_metrics.json`
+1. **Driver process** writes final metrics to `/tmp/sentimentizer_metrics/{model_type}_metrics.json`
 2. **Driver process** exits
 3. **Standalone exporter** (port 8081, always-on) reads the JSON file every 10 seconds and updates its `sentimentizer_training_*` gauges
 4. **Prometheus** continues scraping port 8081, picking up the persisted metrics
@@ -265,12 +268,12 @@ sentimentizer_training_val_accuracy{model_type=~"$model_type"}
 
 1. **Check Prometheus targets**: Visit `http://localhost:9090/targets` — `sentimentizer` and `ray` should be UP
 2. **Check exporter is running**: `curl http://localhost:8081/metrics | grep sentimentizer_training` should show metrics for models that have completed training
-3. **Check training completed**: `cat /tmp/sentimentizer_training_metrics.json` should contain the final metrics
+3. **Check training completed**: `cat /tmp/sentimentizer_metrics/{model_type}_metrics.json` should contain the final metrics
 4. **Check dashboard queries**: The dashboard uses `ray_` prefix for Ray metrics (`ray_sentimentizer_live_*`), not `sentimentizer_live_*`
 
 ### Metrics disappear after training ends
 
-The standalone exporter (port 8081) reads persisted metrics from `/tmp/sentimentizer_training_metrics.json` every 10 seconds. If the file doesn't exist or is empty, training gauges will not appear.
+The standalone exporter (port 8081) reads persisted metrics from `/tmp/sentimentizer_metrics/{model_type}_metrics.json` every 10 seconds for each model type. If a file doesn't exist or is empty, the corresponding model_type gauges will be zeroed out.
 
 ### "ValueError: Input contains NaN" crash
 
@@ -301,15 +304,20 @@ This is usually one of three problems:
 
 ### Stale metrics from previous training run appear on dashboard
 
-If you train the RNN model and then train the encoder model, the dashboard may briefly show RNN metrics alongside encoder metrics. This happens because `/tmp/sentimentizer_training_metrics.json` accumulates entries across runs and `prometheus_client` gauges retain their last-set values.
+If you train the RNN model and then train the encoder model, the dashboard may briefly show RNN metrics alongside encoder metrics. This happens because `prometheus_client` gauges retain their last-set values until explicitly overwritten.
 
-**This is now handled automatically.** `_reset_stale_metrics(model_type)` is called at the start of every training run and zeroes out the entry for the current `model_type` in the JSON file, resets the Prometheus gauges to 0, and invalidates the Ray gauge cache for that model type. Other model types' entries are left untouched.
+**This is now handled automatically.** `_reset_stale_metrics(model_type)` is called at the start of every training run and:
+1. Writes a zeroed-out per-model JSON file (`/tmp/sentimentizer_metrics/{model_type}_metrics.json`) with a `_trace` field documenting the reset, so the exporter clear stale values.
+2. Resets all 11 `sentimentizer_training_*` Prometheus gauges for that `model_type` to `0`.
+3. Invalidates the Ray gauge cache for that `model_type`.
+
+Each model type's metrics live in its own file, so concurrent training processes never race.
 
 If you still see stale data, check:
 
-1. Is the standalone exporter running? It reads the JSON file every 10 seconds.
-2. Did the exporter start before the training run? If not, restart the exporter after training starts.
-3. Check the JSON file: `cat /tmp/sentimentizer_training_metrics.json` — the entry for the model type currently being trained should have all-zero values at the start, then update as epochs complete.
+1. Is the standalone exporter running? It polls individual files every 10 seconds.
+2. Did the exporter start before the training run? If not, restart the exporter.
+3. Check the JSON files: `ls /tmp/sentimentizer_metrics/*.json` — each file should correspond to a model type; the one currently being trained should have `_trace.reset_by` matching its filename.
 
 ### Ray metrics not appearing
 
