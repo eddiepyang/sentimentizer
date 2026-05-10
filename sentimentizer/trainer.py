@@ -33,6 +33,7 @@ from sentimentizer.config import (
     default_epochs,
 )
 from sentimentizer.loader import CorpusDataset
+from sentimentizer.metrics import ClassificationMetrics
 
 # ---------------------------------------------------------------------------
 # Ray custom metrics (lazy initialization)
@@ -235,6 +236,9 @@ class Trainer:
     model_type: str = "rnn"
     losses: list[float] = field(default_factory=list)
     val_loss: float = float("inf")
+    latest_train_loss: float = 0.0
+    latest_epoch: int = 0
+    latest_metrics: ClassificationMetrics | None = None
 
     def _train_epoch(self, model: torch.nn.Module, train_loader: DataLoader, epoch: int) -> None:
         i = 0
@@ -386,6 +390,9 @@ class Trainer:
         )
 
         self.val_loss = float(np.mean(losses))
+        self.latest_train_loss = float(np.mean(self.losses)) if self.losses else 0.0
+        self.latest_epoch = epoch
+        self.latest_metrics = metrics
         gauges = _get_ray_gauges(self.model_type)
         if gauges is not None:
             gauges["val_loss"].set(self.val_loss)

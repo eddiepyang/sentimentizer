@@ -479,9 +479,13 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
         expr = f"{metric}{lbl}\n  or\n{live_metric}{lbl}"
         return {"datasource": _DS, "expr": expr, "legendFormat": legend, "refId": ref, **extra}
 
-    def _table_target(metric: str, live_metric: str, legend: str, ref: str) -> dict:
+    def _table_target(metric: str, legend: str, ref: str) -> dict:
+        # Table snapshots only use exporter metrics (not live Ray metrics).
+        # An "or" fallback would produce duplicate rows from both sources,
+        # which Grafana's merge join renders diagonally (each series appears
+        # under a different model_type label set).
         lbl = '{model_type=~"$model_type"}'
-        expr = f"{metric}{lbl}\n  or\n{live_metric}{lbl}"
+        expr = f"{metric}{lbl}"
         return {
             "datasource": _DS,
             "expr": expr,
@@ -726,66 +730,21 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
                 "datasource": _DS,
                 "gridPos": {"h": 8, "w": 24, "x": 0, "y": 16},
                 "targets": [
+                    _table_target("sentimentizer_training_epoch", "Epoch", "A"),
+                    _table_target("sentimentizer_training_train_loss", "Train Loss", "B"),
+                    _table_target("sentimentizer_training_val_loss", "Val Loss", "C"),
+                    _table_target("sentimentizer_training_val_accuracy", "Accuracy", "D"),
+                    _table_target("sentimentizer_training_val_f1", "F1", "E"),
+                    _table_target("sentimentizer_training_val_precision", "Precision", "F"),
+                    _table_target("sentimentizer_training_val_recall", "Recall", "G"),
+                    _table_target("sentimentizer_training_val_cohen_kappa", "Kappa", "H"),
                     _table_target(
-                        "sentimentizer_training_epoch", "ray_sentimentizer_live_epoch", "Epoch", "A"
+                        "sentimentizer_training_val_positive_accuracy", "Pos Acc", "I"
                     ),
                     _table_target(
-                        "sentimentizer_training_train_loss",
-                        "ray_sentimentizer_live_train_loss",
-                        "Train Loss",
-                        "B",
+                        "sentimentizer_training_val_negative_accuracy", "Neg Acc", "J"
                     ),
-                    _table_target(
-                        "sentimentizer_training_val_loss",
-                        "ray_sentimentizer_live_val_loss",
-                        "Val Loss",
-                        "C",
-                    ),
-                    _table_target(
-                        "sentimentizer_training_val_accuracy",
-                        "ray_sentimentizer_live_val_accuracy",
-                        "Accuracy",
-                        "D",
-                    ),
-                    _table_target(
-                        "sentimentizer_training_val_f1", "ray_sentimentizer_live_val_f1", "F1", "E"
-                    ),
-                    _table_target(
-                        "sentimentizer_training_val_precision",
-                        "ray_sentimentizer_live_val_precision",
-                        "Precision",
-                        "F",
-                    ),
-                    _table_target(
-                        "sentimentizer_training_val_recall",
-                        "ray_sentimentizer_live_val_recall",
-                        "Recall",
-                        "G",
-                    ),
-                    _table_target(
-                        "sentimentizer_training_val_cohen_kappa",
-                        "ray_sentimentizer_live_val_cohen_kappa",
-                        "Kappa",
-                        "H",
-                    ),
-                    _table_target(
-                        "sentimentizer_training_val_positive_accuracy",
-                        "ray_sentimentizer_live_val_positive_accuracy",
-                        "Pos Acc",
-                        "I",
-                    ),
-                    _table_target(
-                        "sentimentizer_training_val_negative_accuracy",
-                        "ray_sentimentizer_live_val_negative_accuracy",
-                        "Neg Acc",
-                        "J",
-                    ),
-                    _table_target(
-                        "sentimentizer_training_val_auc_roc",
-                        "ray_sentimentizer_live_val_auc_roc",
-                        "AUC-ROC",
-                        "K",
-                    ),
+                    _table_target("sentimentizer_training_val_auc_roc", "AUC-ROC", "K"),
                 ],
                 "transformations": [
                     {"id": "merge", "options": {}},
