@@ -599,7 +599,7 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
                 },
             },
             {
-                "title": "Loss (Train vs Val)",
+                "title": "Loss (Train vs Val) + LR",
                 "type": "timeseries",
                 "datasource": _DS,
                 "gridPos": {"h": 8, "w": 10, "x": 4, "y": 0},
@@ -616,13 +616,26 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
                         "Val Loss ({{model_type}})",
                         "B",
                     ),
+                    _target(
+                        "sentimentizer_training_lr",
+                        "ray_sentimentizer_live_lr",
+                        "LR ({{model_type}})",
+                        "C",
+                    ),
                 ],
                 "fieldConfig": {
                     "defaults": {
                         "custom": {"drawStyle": "line", "lineWidth": 2},
                         "unit": "none",
                     },
-                    "overrides": [],
+                    "overrides": [
+                        {
+                            "matcher": {"id": "byRegexp", "options": "^LR \\("},
+                            "properties": [
+                                {"id": "custom.axisPlacement", "value": "right"},
+                            ],
+                        },
+                    ],
                 },
             },
             {
@@ -741,6 +754,7 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
                     _table_target("sentimentizer_training_val_positive_accuracy", "Pos Acc", "I"),
                     _table_target("sentimentizer_training_val_negative_accuracy", "Neg Acc", "J"),
                     _table_target("sentimentizer_training_val_auc_roc", "AUC-ROC", "K"),
+                    _table_target("sentimentizer_training_lr", "LR", "M"),
                 ],
                 "transformations": [
                     {
@@ -770,6 +784,7 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
                                 "Value #I": "Pos Acc",
                                 "Value #J": "Neg Acc",
                                 "Value #K": "AUC-ROC",
+                                "Value #M": "LR",
                             },
                         },
                     },

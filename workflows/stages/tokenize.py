@@ -92,7 +92,11 @@ def run_tokenize(state: State, *, resume: bool = False) -> None:
 
                 t_cfg = TokenizerConfig()
                 texts = reviews_data[t_cfg.text_col].apply(
-                    lambda x: x if isinstance(x, list) else regex_tokenize(str(x))
+                    lambda x: (
+                        x
+                        if isinstance(x, list)
+                        else list(x) if hasattr(x, "__iter__") else regex_tokenize(str(x))
+                    )
                 )
                 dictionary.add_documents(texts)
                 if t_cfg.save_dictionary:

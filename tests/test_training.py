@@ -27,6 +27,7 @@ from sentimentizer.metrics import compute_classification_metrics
 from sentimentizer.trainer import (
     _get_opt_params,
     _get_sched_params,
+    _LinearWarmupCosineScheduler,
     train_step,
     val_step,
 )
@@ -333,10 +334,124 @@ class TestOptAndSchedParams:
     def test_encoder_sched_params(self) -> None:
         sched = _get_sched_params("encoder")
         assert sched.warmup_epochs == 1
+        assert sched.T_max == 8
 
     def test_decoder_sched_params(self) -> None:
         sched = _get_sched_params("decoder")
         assert sched.warmup_epochs == 1
+        assert sched.T_max == 8
+
+
+# ─── Scheduler Correctness ────────────────────────────────────────
+
+
+class TestSchedulerCorrectness:
+    """Test that learning rate schedules produce correct values."""
+
+    def test_warmup_cosine_no_zero_lr(self) -> None:
+        """_LinearWarmupCosineScheduler must not produce zero LR.
+
+        The old implementation used `step / warmup_steps` which returns
+        0.0 at step=0, making the entire first epoch train with zero LR.
+        The fix uses `(step + 1) / warmup_steps` so the first step gets
+        a non-zero LR multiplier.
+        """
+        from sentimentizer.config import default_epochs
+
+        base_lr = 0.0005
+        warmup_steps = 1
+        total_steps = default_epochs("encoder")  # 8
+        model = TinyModel()
+        optimizer = torch.optim.AdamW(model.parameters(), lr=base_lr)
+        scheduler = _LinearWarmupCosineScheduler(
+            optimizer, warmup_steps=warmup_steps, total_steps=total_steps, eta_min=1e-6
+        )
+
+        lrs = [optimizer.param_groups[0]["lr"]]
+        for _ in range(total_steps):
+            # Simulate optimizer.step() so PyTorch doesn't warn
+            optimizer.zero_grad()
+            loss = model(torch.randn(2, 10)).sum()
+            loss.backward()
+            optimizer.step()
+            scheduler.step()
+            lrs.append(optimizer.param_groups[0]["lr"])
+
+        # First LR (before any step) must be non-zero
+        assert lrs[0] > 0, f"Initial LR must be > 0, got {lrs[0]}"
+        # After warmup step (step 0 -> step 1), LR should be base_lr or close
+        assert lrs[1] > 0, f"LR after warmup step must be > 0, got {lrs[1]}"
+        # LR should decrease after warmup phase
+        assert lrs[-1] < lrs[1], "LR should decay after warmup"
+
+    def test_warmup_cosine_lr_starts_at_half_base(self) -> None:
+        """With warmup_steps=1, the initial LR multiplier should be 1/2.
+
+        lr_lambda(0) = (0 + 1) / 1 = 1.0 after the LambdaLR init, but
+        LambdaLR with last_epoch=-1 starts at lr_lambda(0) * base_lr.
+        Wait — LambdaLR actually starts at lr_lambda(0), so:
+        initial multiplier = (0 + 1) / warmup_steps = 1/1 = 1.0 * base_lr? No.
+
+        LambdaLR initial LR = base_lr * lr_lambda(0).
+        With the fix: lr_lambda(0) = (0 + 1) / 1 = 1.0.
+        But with warmup_steps=1 and total_steps=8:
+        step 0: lr_lambda = 1.0 (warmup complete)
+        step 1: lr_lambda = cosine decay starts
+
+        For warmup_steps=2: step 0: (0+1)/2 = 0.5, step 1: (1+1)/2 = 1.0
+        """
+        base_lr = 0.001
+        model = TinyModel()
+        optimizer = torch.optim.AdamW(model.parameters(), lr=base_lr)
+        _LinearWarmupCosineScheduler(optimizer, warmup_steps=2, total_steps=8, eta_min=1e-6)
+
+        # LambdaLR with last_epoch=-1 starts at lr_lambda(0)
+        initial_lr = optimizer.param_groups[0]["lr"]
+        expected_multiplier = 1.0 / 2  # (0+1)/warmup_steps = 0.5
+        assert (
+            abs(initial_lr - base_lr * expected_multiplier) < 1e-8
+        ), f"Expected initial LR={base_lr * expected_multiplier}, got {initial_lr}"
+
+    def test_cosine_annealing_lr_decay(self) -> None:
+        """CosineAnnealingLR should decay LR over the configured T_max."""
+        base_lr = 0.001
+        model = TinyModel()
+        optimizer = torch.optim.AdamW(model.parameters(), lr=base_lr)
+        T_max = 4
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=T_max, eta_min=1e-6)
+
+        lrs = [optimizer.param_groups[0]["lr"]]
+        for _ in range(T_max):
+            optimizer.zero_grad()
+            loss = model(torch.randn(2, 10)).sum()
+            loss.backward()
+            optimizer.step()
+            scheduler.step()
+            lrs.append(optimizer.param_groups[0]["lr"])
+
+        # LR should be highest at step 0 and decrease
+        assert lrs[0] == base_lr
+        # Final LR should be close to eta_min
+        assert lrs[-1] < lrs[0], f"LR should decrease: {lrs}"
+
+    def test_scheduler_t_max_matches_default_epochs(self) -> None:
+        """Encoder/decoder T_max should match their default epoch counts.
+
+        If T_max < default_epochs, the LR decays to minimum before training
+        finishes, leaving the model to train at eta_min for remaining epochs.
+        """
+        from sentimentizer.config import (
+            default_epochs,
+        )
+
+        for model_type in ("encoder", "decoder"):
+            sched = _get_sched_params(model_type)
+            epochs = default_epochs(model_type)
+            assert sched.T_max == epochs, (
+                f"{model_type}: T_max={sched.T_max} != default_epochs={epochs}. "
+                f"LR would bottom out after {sched.T_max} epochs but training "
+                f"continues for {epochs} epochs."
+            )
 
 
 # ─── Checkpoint with DDP Model ───────────────────────────────────

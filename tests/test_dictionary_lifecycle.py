@@ -84,6 +84,63 @@ class TestCountVocabBatch:
         assert num_docs == 0
         assert len(word_freq) == 0
 
+    def test_numpy_array_tokens(self):
+        """_count_vocab_batch should handle numpy array tokens without stringifying.
+
+        Parquet stores list columns as numpy arrays of strings. When each
+        row in the batch is a numpy array (not a Python list), the function
+        must convert it to a list of clean strings, NOT call str() which
+        would produce "['word1' 'word2' ...]" with wrapping quotes.
+        """
+        import numpy as np
+
+        batch = {
+            "tokens": np.array(
+                [
+                    np.array(["good", "food", "great"]),
+                    np.array(["bad", "service"]),
+                    np.array(["good", "place"]),
+                ],
+                dtype=object,
+            ),
+            "stars": [5, 1, 4],
+        }
+        word_freq, doc_freq, num_docs = _count_vocab_batch(batch, "tokens")
+
+        assert num_docs == 3
+        assert word_freq["good"] == 2
+        assert word_freq["food"] == 1
+        assert word_freq["bad"] == 1
+        # Ensure no tokens have wrapping quotes (the old bug)
+        for word in word_freq:
+            assert not word.startswith("'"), f"Token {word!r} has a leading quote"
+            assert not word.endswith("'"), f"Token {word!r} has a trailing quote"
+
+    def test_pandas_series_tokens(self):
+        """_count_vocab_batch should handle pandas-series-style token arrays.
+
+        When iterating over a pandas DataFrame column, each row may be a
+        numpy array rather than a Python list.
+        """
+        import numpy as np
+
+        doc_tokens = np.array(["the", "food", "was", "good"], dtype=object)
+        batch = {
+            "tokens": [doc_tokens, np.array(["bad", "service"], dtype=object)],
+            "stars": [5, 1],
+        }
+        word_freq, doc_freq, num_docs = _count_vocab_batch(batch, "tokens")
+
+        assert num_docs == 2
+        assert word_freq["good"] == 1
+        assert word_freq["bad"] == 1
+        assert "the" in word_freq
+        assert "food" in word_freq
+        # No wrapping quotes
+        for word in word_freq:
+            assert not word.startswith("'"), f"Token {word!r} has a leading quote"
+        assert len(word_freq) == 6
+
 
 # ---------------------------------------------------------------------------
 # Dictionary save/load alignment tests

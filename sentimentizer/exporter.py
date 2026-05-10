@@ -260,6 +260,12 @@ TRAINING_EPOCH = Gauge(
     ["model_type"],
 )
 
+TRAINING_LR = Gauge(
+    "sentimentizer_training_lr",
+    "Current learning rate",
+    ["model_type"],
+)
+
 # ──────────────────────────────────────────────
 # Ray health metrics
 # ──────────────────────────────────────────────
@@ -436,6 +442,9 @@ def _update_training_metrics() -> None:
                 float(metrics.get("negative_accuracy", 0))
             )
             TRAINING_EPOCH.labels(**lbl).set(int(metrics.get("epoch", 0)))
+            lr = metrics.get("lr")
+            if lr is not None:
+                TRAINING_LR.labels(**lbl).set(float(lr))
     except Exception as e:
         logger.warning("Error updating training metrics from file: %s", e)
 

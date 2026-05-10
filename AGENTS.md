@@ -6,7 +6,25 @@ Sentimentizer is a PyTorch-based sentiment analysis pipeline with three model ar
 
 ## Recent Changes
 
-### Stale Metrics Cleanup (current)
+### Dictionary Tokenization Bug Fix (current)
+
+**Problem**: The dictionary stored tokens with wrapping quotes (e.g., `"'the'"` instead of `"the"`) because `str()` was called on numpy arrays from parquet columns instead of converting them to Python lists via `list()`. This caused a 99.9% GloVe vocabulary mismatch — nearly every word was mapped to the OOV embedding index (row `len(dictionary) + 1`), so the model trained on random embeddings and collapsed to predicting the majority class (zero negative accuracy, zero Cohen's kappa).
+
+**Root cause**: `isinstance(doc_tokens, list)` returns `False` for numpy arrays. The fallback `regex_tokenize(str(numpy_array))` stringified the array representation `"['if' 'you' ...]"` and the regex `[a-z0-9'-]+` captured the wrapping quotes as part of each token.
+
+**Fix**: Changed the fallback in `new_dictionary()` and `_count_vocab_batch()` to `list(doc_tokens)` with a `TypeError` catch for genuinely non-iterable types. Same fix in `workflows/stages/tokenize.py` for the resume path.
+
+**Related fix — scheduler**: `EncoderSchedulerParams.T_max` was `4` but `default_epochs("encoder")` is `8`, causing the LR to decay to minimum after half the epochs. Changed `T_max` to `8`. Also fixed `_LinearWarmupCosineScheduler` which returned `0.0` at step 0 (zero LR for the entire first epoch) — changed from `step / warmup_steps` to `(step + 1) / warmup_steps`.
+
+**Tests**: `TestDictionaryNumpyArrays` in `tests/test_loader.py`, `TestSchedulerCorrectness` in `tests/test_training.py`, `TestCountVocabBatch.test_numpy_array_tokens` and `TestCountVocabBatch.test_pandas_series_tokens` in `tests/test_dictionary_lifecycle.py`.
+
+**Key files changed**:
+- `sentimentizer/tokenizer.py` — numpy array handling in `new_dictionary()` and `_count_vocab_batch()`
+- `workflows/stages/tokenize.py` — numpy array handling in resume path
+- `sentimentizer/config.py` — `EncoderSchedulerParams.T_max` changed from 4 to 8
+- `sentimentizer/trainer.py` — `_LinearWarmupCosineScheduler` warmup formula fix
+
+### Stale Metrics Cleanup
 
 **Problem**: When training the encoder model, the dashboard showed unexpected RNN metrics from a previous training run because `/tmp/sentimentizer_training_metrics.json` accumulates entries across runs and `prometheus_client` gauges retain their last-set values.
 
@@ -46,8 +64,10 @@ workflows/
   helpers.py         — Model loading, config utilities
 
 tests/
-  test_training.py  — Training primitives, Trainer.fit, checkpoints, stale metrics
-  test_rnn.py        — RNN/Encoder model integration + Ray distributed tests
+  test_training.py          — Training primitives, Trainer.fit, checkpoints, scheduler correctness, stale metrics
+  test_loader.py            — DataLoader, compute_pos_weight, dictionary numpy array handling
+  test_dictionary_lifecycle.py — Dictionary save/load, _count_vocab_batch with numpy arrays
+  test_rnn.py                — RNN/Encoder model integration + Ray distributed tests
   test_skill.py      — Agent/tuning config tests
 ```
 
@@ -60,6 +80,15 @@ tests/
 - **Grafana dashboards** use `sentimentizer_training_* or ray_sentimentizer_live_*` PromQL fallback
 
 ## Common Tasks
+
+### Troubleshooting
+
+See [`docs/troubleshooting.md`](docs/troubleshooting.md) for common issues and fixes, including:
+- Zero negative-class accuracy / Cohen's kappa = 0
+- Dictionary tokens with wrapping quotes
+- GloVe match rate below 50%
+- Scheduler T_max and warmup issues
+- Class imbalance
 
 ### Running tests
 
@@ -112,3 +141,6 @@ Grafana only reads provisioned dashboard files on **startup**, so a restart is r
 - `prometheus_client` gauges must NOT be created at module import time for Ray workers — use lazy init via `_get_ray_gauges()`
 - `ray.init(ignore_reinit_error=True)` in tests; `ray.shutdown()` in cleanup
 - All function signatures need type hints
+- When iterating over DataFrame or batch columns containing token lists, use `list(doc_tokens)` with a `TypeError` catch — never `str(doc_tokens)`. Numpy arrays from parquet are iterable but not `isinstance(x, list)`, and `str()` produces array representations with wrapping quotes
+- Scheduler `T_max` must match `default_epochs()` for the model type — otherwise LR decays to minimum before training finishes
+- _LinearWarmupCosineScheduler warmup must use `(step + 1) / warmup_steps` to avoid zero LR at step 0

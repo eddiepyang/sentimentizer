@@ -47,6 +47,7 @@ def _write_epoch_metrics_to_file(
     train_loss: float,
     val_loss: float,
     metrics: ClassificationMetrics,
+    lr: float | None = None,
 ) -> None:
     """Write current epoch metrics to the JSON file the standalone exporter reads.
 
@@ -118,6 +119,7 @@ def _write_epoch_metrics_to_file(
         "positive_accuracy": float(metrics.positive_accuracy),
         "negative_accuracy": float(metrics.negative_accuracy),
         "epoch": int(epoch),
+        "lr": float(lr) if lr is not None else None,
     }
 
     with contextlib.suppress(OSError):
@@ -210,6 +212,11 @@ def _get_ray_gauges(model_type: str) -> dict[str, Any] | None:
         "epoch": Gauge(
             "sentimentizer_live_epoch",
             description="Live training epoch",
+            tag_keys=("model_type",),
+        ),
+        "lr": Gauge(
+            "sentimentizer_live_lr",
+            description="Live learning rate",
             tag_keys=("model_type",),
         ),
     }
@@ -357,13 +364,11 @@ class Trainer:
                 except ImportError:
                     pass
                 logger.info(
-                    f"[epoch {epoch}] {i / n:.2f} of rows completed in "
-                    f"{j + 1} cycles, current loss at {np.mean(self.losses[-60:]):.6f},"
-                    f" model_type={self.model_type}"
+                    f"[{self.model_type}] [epoch {epoch}] {i / n:.2f} of rows completed in "
+                    f"{j + 1} cycles, current loss at {np.mean(self.losses[-60:]):.6f}"
                 )
                 logger.info(
-                    f"[epoch {epoch}] current learning rate at {self.optimizer.param_groups[0]['lr']:.6f},"  # noqa: E501
-                    f" model_type={self.model_type}"
+                    f"[{self.model_type}] [epoch {epoch}] current learning rate at {self.optimizer.param_groups[0]['lr']:.6f}"  # noqa: E501
                 )
 
     def fit(
@@ -378,7 +383,7 @@ class Trainer:
         if epochs == -1:
             epochs = default_epochs(self.model_type)
 
-        logger.info("fitting model...")
+        logger.info(f"[{self.model_type}] fitting model...")
 
         best_val_loss = float("inf")
         patience_counter = 0
@@ -402,14 +407,15 @@ class Trainer:
                 if checkpoint_dir and checkpoint_every > 0 and (epoch + 1) % checkpoint_every == 0:
                     ckpt_path = Path(checkpoint_dir) / f"checkpoint_epoch_{epoch + 1}.pth"
                     save_checkpoint(model, self.optimizer, epoch + 1, ckpt_path)
-                    logger.info(f"saved checkpoint: {ckpt_path}")
+                    logger.info(f"[{self.model_type}] saved checkpoint: {ckpt_path}")
 
                 # Save best model checkpoint
                 if checkpoint_dir and checkpoint_best and self.val_loss < best_val_loss:
                     best_path = Path(checkpoint_dir) / "best_model.pth"
                     save_checkpoint(model, self.optimizer, epoch + 1, best_path)
                     logger.info(
-                        f"saved best model checkpoint (val_loss={self.val_loss:.6f}): {best_path}"
+                        f"[{self.model_type}] saved best model checkpoint "
+                        f"(val_loss={self.val_loss:.6f}): {best_path}"
                     )
 
                 # Early stopping based on validation loss
@@ -421,12 +427,14 @@ class Trainer:
                         patience_counter += 1
                         if patience_counter >= self.cfg.early_stopping_patience:
                             logger.info(
-                                f"early stopping at epoch {epoch}, "
+                                f"[{self.model_type}] early stopping at epoch {epoch}, "
                                 f"val_loss hasn't improved for {patience_counter} epochs"
                             )
                             break
 
-                logger.info(f"[epoch {epoch}] completed, val_loss={self.val_loss:.6f}")
+                logger.info(
+                    f"[{self.model_type}] [epoch {epoch}] completed, val_loss={self.val_loss:.6f}"
+                )
         finally:
             # Release CUDA resources even on Ctrl-C or exception.
             # Prevents error 804 ("forward compatibility was attempted on
@@ -435,10 +443,12 @@ class Trainer:
                 torch.cuda.synchronize()
                 torch.cuda.empty_cache()
 
-        logger.info(f"model fitting completed, {time.time() - start:.0f} seconds passed")
+        logger.info(
+            f"[{self.model_type}] model fitting completed, {time.time() - start:.0f} seconds passed"
+        )
 
     def evaluate(self, model: torch.nn.Module, val_loader: DataLoader, epoch: int) -> None:
-        logger.info(f"[epoch {epoch}] evaluating predictions...")
+        logger.info(f"[{self.model_type}] [epoch {epoch}] evaluating predictions...")
         model.to(self.cfg.device)
         model.eval()
 
@@ -465,8 +475,8 @@ class Trainer:
         if nan_mask.any():
             nan_count = int(nan_mask.sum())
             logger.warning(
-                "nan_in_probabilities",
-                message=(f"Found {nan_count} NaN values in " "probabilities, replacing with 0.5"),
+                f"[{self.model_type}] nan_in_probabilities",
+                message=f"Found {nan_count} NaN values in probabilities, replacing with 0.5",
             )
             probabilities = np.where(nan_mask, 0.5, probabilities)
 
@@ -497,11 +507,13 @@ class Trainer:
             gauges["val_positive_accuracy"].set(float(metrics.positive_accuracy))
             gauges["val_negative_accuracy"].set(float(metrics.negative_accuracy))
             gauges["epoch"].set(epoch)
+            gauges["lr"].set(float(self.optimizer.param_groups[0]["lr"]))
 
         # Also push to the standalone Prometheus exporter gauges
         try:
             from sentimentizer.exporter import (
                 TRAINING_EPOCH,
+                TRAINING_LR,
                 TRAINING_VAL_ACCURACY,
                 TRAINING_VAL_AUC_ROC,
                 TRAINING_VAL_COHEN_KAPPA,
@@ -525,6 +537,7 @@ class Trainer:
             TRAINING_VAL_POSITIVE_ACCURACY.labels(**lbl).set(float(metrics.positive_accuracy))
             TRAINING_VAL_NEGATIVE_ACCURACY.labels(**lbl).set(float(metrics.negative_accuracy))
             TRAINING_EPOCH.labels(**lbl).set(epoch)
+            TRAINING_LR.labels(**lbl).set(float(self.optimizer.param_groups[0]["lr"]))
         except ImportError:
             pass
 
@@ -536,10 +549,11 @@ class Trainer:
             train_loss=self.latest_train_loss,
             val_loss=self.val_loss,
             metrics=metrics,
+            lr=self.optimizer.param_groups[0]["lr"],
         )
 
         logger.info(  # type: ignore[call-arg]
-            f"[epoch {epoch}] evaluation complete",
+            f"[{self.model_type}] [epoch {epoch}] evaluation complete",
             model_type=self.model_type,
             val_loss=self.val_loss,
             accuracy=metrics.accuracy,
@@ -574,7 +588,7 @@ def _get_sched_params(model_type: str) -> SchedulerParams | EncoderSchedulerPara
 class _LinearWarmupCosineScheduler(torch.optim.lr_scheduler.LambdaLR):
     """Linear warmup followed by cosine decay.
 
-    During warmup, LR increases linearly from 0 to base_lr.
+    During warmup, LR increases linearly from base_lr/warmup_steps to base_lr.
     After warmup, follows CosineAnnealing decay to eta_min.
     """
 
@@ -587,7 +601,7 @@ class _LinearWarmupCosineScheduler(torch.optim.lr_scheduler.LambdaLR):
     ) -> None:
         def lr_lambda(step: int) -> float:
             if step < warmup_steps:
-                return step / max(1, warmup_steps)
+                return (step + 1) / max(1, warmup_steps)
             progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
             return eta_min + (1.0 - eta_min) * 0.5 * (1.0 + math.cos(math.pi * progress))
 
@@ -739,7 +753,7 @@ def _train_func(config: dict) -> None:
     val_shard = train.get_dataset_shard("val")
 
     start = time.time()
-    logger.info("fitting model (distributed)...")
+    logger.info(f"[{model_type}] fitting model (distributed)...")
 
     for epoch in range(epochs):
         model.train()
@@ -773,7 +787,7 @@ def _train_func(config: dict) -> None:
             scheduler.step()
 
         # Validation
-        logger.info(f"[epoch {epoch}] evaluating predictions...")
+        logger.info(f"[{model_type}] [epoch {epoch}] evaluating predictions...")
         val_losses = []
         all_probs = []
         all_targets = []
@@ -802,8 +816,8 @@ def _train_func(config: dict) -> None:
         if nan_mask.any():
             nan_count = int(nan_mask.sum())
             logger.warning(
-                "nan_in_probabilities",
-                message=(f"Found {nan_count} NaN values in " "probabilities, replacing with 0.5"),
+                f"[{model_type}] nan_in_probabilities",
+                message=f"Found {nan_count} NaN values in probabilities, replacing with 0.5",
             )
             probabilities = np.where(nan_mask, 0.5, probabilities)
 
@@ -830,11 +844,13 @@ def _train_func(config: dict) -> None:
                 gauges["val_positive_accuracy"].set(float(metrics.positive_accuracy))
                 gauges["val_negative_accuracy"].set(float(metrics.negative_accuracy))
                 gauges["epoch"].set(epoch)
+                gauges["lr"].set(float(optimizer.param_groups[0]["lr"]))
 
         # Also push to standalone Prometheus exporter gauges from rank 0
         try:
             from sentimentizer.exporter import (  # noqa: E402
                 TRAINING_EPOCH,
+                TRAINING_LR,
                 TRAINING_TRAIN_LOSS,
                 TRAINING_VAL_ACCURACY,
                 TRAINING_VAL_AUC_ROC,
@@ -861,6 +877,7 @@ def _train_func(config: dict) -> None:
                 TRAINING_VAL_POSITIVE_ACCURACY.labels(**lbl).set(float(metrics.positive_accuracy))
                 TRAINING_VAL_NEGATIVE_ACCURACY.labels(**lbl).set(float(metrics.negative_accuracy))
                 TRAINING_EPOCH.labels(**lbl).set(epoch)
+                TRAINING_LR.labels(**lbl).set(float(optimizer.param_groups[0]["lr"]))
 
                 # Write current epoch metrics to the JSON file so the standalone
                 # exporter serves up-to-date data in the dashboard table panel.
@@ -870,12 +887,13 @@ def _train_func(config: dict) -> None:
                     train_loss=float(train_loss),
                     val_loss=float(val_loss),
                     metrics=metrics,
+                    lr=optimizer.param_groups[0]["lr"],
                 )
         except ImportError:
             pass
 
         logger.info(  # type: ignore[call-arg]
-            f"[epoch {epoch}] completed",
+            f"[{model_type}] [epoch {epoch}] completed",
             model_type=model_type,
             train_loss=train_loss,
             val_loss=val_loss,
@@ -927,11 +945,12 @@ def _train_func(config: dict) -> None:
                     "fn": metrics.fn,
                     "total": metrics.total,
                     "epoch": epoch,
+                    "lr": optimizer.param_groups[0]["lr"],
                 },
                 checkpoint=checkpoint,
             )
 
-    logger.info(f"model fitting completed, {time.time() - start:.0f} seconds passed")
+    logger.info(f"[{model_type}] model fitting completed, {time.time() - start:.0f} seconds passed")
 
 
 # ──────────────────────────────────────────────

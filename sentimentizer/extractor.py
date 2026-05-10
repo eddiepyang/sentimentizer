@@ -120,10 +120,20 @@ def extract_embeddings(
         if word in glove:
             embeddings_dict[token_id + 1] = glove[word].astype(EMBEDDING_DTYPE)
 
+    match_rate = len(embeddings_dict) / max(len(dictionary), 1)
     logger.info(
         f"matched {len(embeddings_dict)}/{len(dictionary)} dictionary words "
-        f"to {cfg.model_name} vectors"
+        f"to {cfg.model_name} vectors ({match_rate:.1%})"
     )
+    if match_rate < 0.5:
+        raise ValueError(
+            f"GloVe vocabulary match rate is {match_rate:.1%} "
+            f"({len(embeddings_dict)}/{len(dictionary)} words). "
+            f"This usually means the dictionary tokens have wrapping quotes "
+            f'(e.g. "\'the\'" instead of "the") caused by calling str() on '
+            f"numpy arrays. Check that new_dictionary() and _count_vocab_batch() "
+            f"use list() instead of str() on non-list iterables."
+        )
     return embeddings_dict
 
 
