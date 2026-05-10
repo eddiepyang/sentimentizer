@@ -294,6 +294,10 @@ def _run_fit_single(
     finally:
         _cuda_cleanup()
 
+    # Persist final single-node metrics so the standalone exporter
+    # shows them after the driver exits.
+    _persist_single_node_metrics(trainer, state.model)
+
     if save:
         weights_path = weights_path_for(state.model)
         torch.save(model.state_dict(), weights_path)
@@ -493,6 +497,9 @@ def _persist_metrics_to_file(metrics: dict, model_type: str) -> None:
     The standalone exporter on port 8081 reads this file periodically and
     updates its own Prometheus gauges.  This ensures training metrics persist
     after the driver process exits.
+
+    Accepts both Ray Train key names (``pos_acc``, ``neg_acc``) and direct
+    key names (``positive_accuracy``, ``negative_accuracy``).
     """
     path = Path("/tmp/sentimentizer_training_metrics.json")
 
@@ -512,10 +519,40 @@ def _persist_metrics_to_file(metrics: dict, model_type: str) -> None:
         "f1": float(metrics.get("f1", 0)),
         "cohen_kappa": float(metrics.get("cohen_kappa", 0)),
         "auc_roc": float(auc_roc) if auc_roc is not None else None,
-        "positive_accuracy": float(metrics.get("pos_acc", 0)),
-        "negative_accuracy": float(metrics.get("neg_acc", 0)),
+        "positive_accuracy": float(metrics.get("pos_acc", metrics.get("positive_accuracy", 0))),
+        "negative_accuracy": float(metrics.get("neg_acc", metrics.get("negative_accuracy", 0))),
         "epoch": int(metrics.get("epoch", 0)),
     }
 
     path.write_text(json.dumps(data, indent=2))
     logger.info("training_metrics_persisted", path=str(path), model_type=model_type)
+
+
+def _persist_single_node_metrics(trainer: Any, model_type: str) -> None:
+    """Persist single-node Trainer metrics to JSON for the standalone exporter.
+
+    After single-node ``Trainer.fit()`` completes, only the driver process
+    knows the final metrics.  This function constructs a dict compatible with
+    ``_persist_metrics_to_file`` from the Trainer's stored metrics.
+    """
+    if trainer.latest_metrics is None:
+        return
+
+    metrics = {
+        "train_loss": float(trainer.latest_train_loss),
+        "val_loss": float(trainer.val_loss),
+        "accuracy": float(trainer.latest_metrics.accuracy),
+        "precision": float(trainer.latest_metrics.precision),
+        "recall": float(trainer.latest_metrics.recall),
+        "f1": float(trainer.latest_metrics.f1),
+        "cohen_kappa": float(trainer.latest_metrics.cohen_kappa),
+        "auc_roc": (
+            float(trainer.latest_metrics.auc_roc)
+            if trainer.latest_metrics.auc_roc is not None
+            else None
+        ),
+        "positive_accuracy": float(trainer.latest_metrics.positive_accuracy),
+        "negative_accuracy": float(trainer.latest_metrics.negative_accuracy),
+        "epoch": int(trainer.latest_epoch),
+    }
+    _persist_metrics_to_file(metrics, model_type)
