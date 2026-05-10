@@ -15,6 +15,105 @@ from typing import Any
 from workflows.helpers import _load_model
 from workflows.lifecycle import State, _cuda_cleanup, _ensure_ray_initialized, logger
 
+_METRICS_PERSISTENCE_PATH = Path("/tmp/sentimentizer_training_metrics.json")
+
+
+def _reset_stale_metrics(model_type: str) -> None:
+    """Clear stale persisted metrics and reset Prometheus gauges for *model_type*.
+
+    When training starts for a given model type, any residual metrics from a
+    previous run (persisted in the JSON file and cached in prometheus_client
+    gauges) would otherwise appear on the dashboard as "current" data.  This
+    function:
+
+    1. Writes a zeroed-out entry for *model_type* in the persisted JSON file
+       so the standalone exporter pushes zeroes to Prometheus on its next
+       scrape cycle, overwriting the stale values.
+    2. Resets the driver-level ``prometheus_client`` gauges for *model_type*
+       to 0 so a Prometheus scrape that happens mid-training doesn't show the
+       old values.  (The gauges are re-populated during training.)
+    3. Invalidates the Ray ``_RAY_GAUGES`` cache entry for *model_type* so a
+       fresh gauge is lazily created in the current Ray worker context.
+    """
+    zeroed_metrics = {
+        "train_loss": 0.0,
+        "val_loss": 0.0,
+        "accuracy": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "cohen_kappa": 0.0,
+        "auc_roc": None,
+        "positive_accuracy": 0.0,
+        "negative_accuracy": 0.0,
+        "epoch": 0,
+    }
+
+    # --- 1. Persisted JSON file ---
+    # Write a zeroed entry instead of deleting: the standalone exporter only
+    # updates gauge labels for model types present in the file.  If we delete
+    # the entry, the exporter's in-process gauges keep serving the last value.
+    try:
+        data: dict = {}
+        if _METRICS_PERSISTENCE_PATH.exists():
+            with contextlib.suppress(json.JSONDecodeError, OSError):
+                data = json.loads(_METRICS_PERSISTENCE_PATH.read_text())
+        if not isinstance(data, dict):
+            data = {}
+        data[model_type] = zeroed_metrics
+        _METRICS_PERSISTENCE_PATH.write_text(json.dumps(data, indent=2))
+        logger.info(
+            "stale_metrics_cleared",
+            path=str(_METRICS_PERSISTENCE_PATH),
+            model_type=model_type,
+        )
+    except OSError as exc:
+        logger.warning("failed_to_clear_stale_metrics_file: %s", exc)
+
+    # --- 2. prometheus_client gauges (driver process) ---
+    try:
+        from sentimentizer.exporter import (
+            TRAINING_EPOCH,
+            TRAINING_TRAIN_LOSS,
+            TRAINING_VAL_ACCURACY,
+            TRAINING_VAL_AUC_ROC,
+            TRAINING_VAL_COHEN_KAPPA,
+            TRAINING_VAL_F1,
+            TRAINING_VAL_LOSS,
+            TRAINING_VAL_NEGATIVE_ACCURACY,
+            TRAINING_VAL_POSITIVE_ACCURACY,
+            TRAINING_VAL_PRECISION,
+            TRAINING_VAL_RECALL,
+        )
+
+        lbl = {"model_type": model_type}
+        for gauge in (
+            TRAINING_TRAIN_LOSS,
+            TRAINING_VAL_LOSS,
+            TRAINING_VAL_ACCURACY,
+            TRAINING_VAL_PRECISION,
+            TRAINING_VAL_RECALL,
+            TRAINING_VAL_F1,
+            TRAINING_VAL_COHEN_KAPPA,
+            TRAINING_VAL_POSITIVE_ACCURACY,
+            TRAINING_VAL_NEGATIVE_ACCURACY,
+            TRAINING_EPOCH,
+        ):
+            gauge.labels(**lbl).set(0)
+        # AUC-ROC uses None / no value as sentinel — clear it
+        TRAINING_VAL_AUC_ROC.labels(**lbl).set(0)
+    except ImportError:
+        pass
+
+    # --- 3. Ray _RAY_GAUGES cache ---
+    try:
+        from sentimentizer.trainer import _RAY_GAUGES
+
+        if model_type in _RAY_GAUGES:
+            del _RAY_GAUGES[model_type]
+    except ImportError:
+        pass
+
 
 def run_train(
     state: State,
@@ -36,6 +135,10 @@ def run_train(
     from sentimentizer.device import resolve_device
 
     device = resolve_device(state.device)
+
+    # Clear stale metrics from previous training runs for this model type
+    # so the dashboard doesn't show residual data from other model types.
+    _reset_stale_metrics(state.model)
 
     from sentimentizer.config import (
         DriverConfig,

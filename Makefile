@@ -297,6 +297,8 @@ clean: stop-ray
 	rm -rf /tmp/ray/*
 	@echo "==> Cleaning Ray Tune results..."
 	rm -rf ~/ray_results/*
+	@echo "==> Cleaning persisted training metrics..."
+	rm -f /tmp/sentimentizer_training_metrics.json
 
 ## Clean only Ray-related files and logs
 clean-ray: stop-ray
