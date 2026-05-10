@@ -15,10 +15,16 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from ray import tune
-from ray.tune import CLIReporter, RunConfig
-from ray.tune.schedulers import ASHAScheduler, HyperBandScheduler, MedianStoppingRule
-from ray.tune.search.optuna import OptunaSearch
+
+try:
+    from ray import tune
+    from ray.tune import CLIReporter, RunConfig
+    from ray.tune.schedulers import ASHAScheduler, HyperBandScheduler, MedianStoppingRule
+    from ray.tune.search.optuna import OptunaSearch
+
+    TuneCallback = tune.callback.Callback
+except ImportError:
+    TuneCallback = object
 
 from sentimentizer import new_logger
 from sentimentizer.config import DEFAULT_LOG_LEVEL
@@ -31,7 +37,7 @@ logger = new_logger(DEFAULT_LOG_LEVEL)
 # ---------------------------------------------------------------------------
 
 
-class TunePrometheusCallback(tune.callback.Callback):
+class TunePrometheusCallback(TuneCallback):
     """Ray Tune callback that pushes trial metrics to Prometheus gauges.
 
     This callback updates the ``sentimentizer_tune_*`` Prometheus gauges

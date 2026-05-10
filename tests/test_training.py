@@ -396,6 +396,7 @@ class TestCheckpointWithDDP:
         This mirrors the exact pattern used in _train_func for saving
         and in driver.py for loading checkpoints.
         """
+        pytest.importorskip("ray")
         import ray.cloudpickle as pickle
         from ray.train import Checkpoint
 
@@ -514,12 +515,14 @@ class TestDistributedConfig:
         The correct API is: train.get_dataset_shard("train")
         NOT: train.get_context().get_dataset_shard("train")
         """
+        pytest.importorskip("ray")
         from ray import train
 
         assert callable(train.get_dataset_shard)
 
     def test_get_context_outside_worker_raises(self) -> None:
         """train.get_context() must raise RuntimeError outside a worker."""
+        pytest.importorskip("ray")
         from ray import train
 
         with pytest.raises(RuntimeError, match="cannot be used outside"):

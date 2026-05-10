@@ -1,13 +1,25 @@
+from __future__ import annotations
+
 import tarfile
 import zipfile
 from collections.abc import Generator
-from typing import IO
+from typing import IO, TYPE_CHECKING
 
 import numpy as np
 import orjson as json
-import ray
+import pandas as pd
 from gensim import corpora
 from gensim import downloader as gensim_api
+
+try:
+    import ray
+
+    RAY_AVAILABLE = True
+except ImportError:
+    RAY_AVAILABLE = False
+
+if TYPE_CHECKING:
+    import ray.data
 
 from sentimentizer import new_logger, time_decorator
 from sentimentizer.config import (
@@ -34,11 +46,13 @@ def process_json(json_file: IO[bytes], stop: int = 0) -> Generator:
 
 
 @time_decorator
-def extract_data(file_path: str, compressed_file_name: str, stop: int = 0) -> ray.data.Dataset:
-    """Reads from zipped or tarred yelp data file.
+def extract_data_ray(file_path: str, compressed_file_name: str, stop: int = 0) -> ray.data.Dataset:
+    """Reads from zipped or tarred yelp data file using Ray.
 
     Supports both .zip and .tar/.tar.gz archives.
     """
+    if not RAY_AVAILABLE:
+        raise ImportError("Ray is required for extract_data_ray. Use extract_data_local instead.")
 
     def generate_lines(_row: int) -> Generator:
         if file_path.endswith((".tar", ".tar.gz", ".tgz")):
@@ -61,6 +75,32 @@ def extract_data(file_path: str, compressed_file_name: str, stop: int = 0) -> ra
         return row
 
     return ds.map(tokenize)
+
+
+@time_decorator
+def extract_data_local(file_path: str, compressed_file_name: str, stop: int = 0) -> pd.DataFrame:
+    """Reads from zipped or tarred yelp data file into a Pandas DataFrame.
+
+    Local fallback when Ray is not available.
+    """
+
+    def generate_lines() -> Generator:
+        if file_path.endswith((".tar", ".tar.gz", ".tgz")):
+            with tarfile.open(file_path, "r:*") as tar:
+                member = tar.getmember(compressed_file_name)
+                f = tar.extractfile(member)
+                if f is None:
+                    raise ValueError(f"Could not extract {compressed_file_name} from {file_path}")
+                yield from process_json(f, stop)
+        else:
+            with zipfile.ZipFile(file_path) as zfile:
+                inf = zfile.open(compressed_file_name)
+                yield from process_json(inf, stop)
+
+    data = list(generate_lines())
+    df = pd.DataFrame(data)
+    df["tokens"] = df["text"].apply(regex_tokenize)
+    return df
 
 
 @time_decorator

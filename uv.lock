@@ -2685,7 +2685,7 @@ wheels = [
 
 [[package]]
 name = "pydantic-ai-slim"
-version = "1.89.1"
+version = "1.93.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "genai-prices" },
@@ -2696,9 +2696,9 @@ dependencies = [
     { name = "pydantic-graph" },
     { name = "typing-inspection" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/23/91/b2134056eb5debb7cb28e4efe7ca19fc5c7b2935e55b299a30ddad0d7746/pydantic_ai_slim-1.89.1.tar.gz", hash = "sha256:3ed967bff8dec992a907c1d1dabab2034a5f4aee75289de22e88b2ef9def8da6", size = 614728, upload-time = "2026-05-01T19:09:38.551Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/bb/44/438dd99c7d044094037e767dab969d704232aab73e4fffd9f9a1f69bded9/pydantic_ai_slim-1.93.0.tar.gz", hash = "sha256:977364ecd3b6a2201e25d917f4efe80895210e44e66cb6983e1fc0477c78910b", size = 639585, upload-time = "2026-05-09T00:23:25.604Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/95/14/d0f7c8f828c460a517531e0df7cfe9e20f4315da8357a9068caaf0193bbb/pydantic_ai_slim-1.89.1-py3-none-any.whl", hash = "sha256:9e7d615a0a3e48993d067901e596e85708e9c8d1f6bef96c20c340385028d465", size = 780314, upload-time = "2026-05-01T19:09:28.843Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/67/bbfa2eda2493de6027e3322bccc676c8a7062dc5fe89d68cacf9e50889ce/pydantic_ai_slim-1.93.0-py3-none-any.whl", hash = "sha256:6733e3f19c83f4121fb9fe42aee918bd8f402ce670a519ecc898f108378fadb7", size = 804814, upload-time = "2026-05-09T00:23:17.122Z" },
 ]
 
 [package.optional-dependencies]
@@ -2811,7 +2811,7 @@ wheels = [
 
 [[package]]
 name = "pydantic-graph"
-version = "1.89.1"
+version = "1.93.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -2819,9 +2819,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "typing-inspection" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ea/64/f26c4d17568ab06ae576af0771ad83753cc2661bf9ca5a5698d01404ee20/pydantic_graph-1.89.1.tar.gz", hash = "sha256:99b8ae10fd10400208ee469355969e2dc253a600c3f667a5e790874064846e85", size = 59257, upload-time = "2026-05-01T19:09:40.998Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/63/40/4addcd3c9d06fbdf6c0776026d8a5b87e7ebb17c9896ac2452e714bb17c6/pydantic_graph-1.93.0.tar.gz", hash = "sha256:17effd900200aa7b72ec0509a79f36d3e161c2a6ef02dda6285a381e867ab195", size = 59250, upload-time = "2026-05-09T00:23:28.081Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7e/52/9070e11f52424fe34e2ca96ae122902cab7c4325e2a90b33d44a410843b1/pydantic_graph-1.89.1-py3-none-any.whl", hash = "sha256:2ebce28573e81de9924c2ff68f90f949ccd96bbc2e8dc6cf4bb96208b34fbec0", size = 73065, upload-time = "2026-05-01T19:09:32.912Z" },
+    { url = "https://files.pythonhosted.org/packages/2b/bc/5f9eb611c6b9315fb0c6ae58bb82a63d9d9f17340b6c8778319261593fbb/pydantic_graph-1.93.0-py3-none-any.whl", hash = "sha256:ef1b0dcd55a6b5a3544de53a9594216ee8f51ac26bf4be79f7ef310747be598a", size = 73066, upload-time = "2026-05-09T00:23:20.847Z" },
 ]
 
 [[package]]
@@ -3484,7 +3484,7 @@ wheels = [
 
 [[package]]
 name = "sentimentizer"
-version = "0.101.1"
+version = "0.102.0"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
@@ -3492,7 +3492,6 @@ dependencies = [
     { name = "huggingface-hub" },
     { name = "langgraph" },
     { name = "numpy" },
-    { name = "optuna" },
     { name = "orjson" },
     { name = "pandas" },
     { name = "prometheus-client" },
@@ -3501,7 +3500,6 @@ dependencies = [
     { name = "pydantic-ai-slim", extra = ["openai"] },
     { name = "python-dotenv" },
     { name = "pyyaml" },
-    { name = "ray", extra = ["data", "serve", "train", "tune"] },
     { name = "rich" },
     { name = "scikit-learn" },
     { name = "smart-open" },
@@ -3518,6 +3516,10 @@ dev = [
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
+]
+ray = [
+    { name = "optuna" },
+    { name = "ray", extra = ["data", "serve", "train", "tune"] },
 ]
 
 [package.dev-dependencies]
@@ -3539,24 +3541,24 @@ requires-dist = [
     { name = "gensim", specifier = ">=4.3.3" },
     { name = "huggingface-hub" },
     { name = "isort", marker = "extra == 'dev'" },
-    { name = "langgraph", specifier = ">=0.2" },
+    { name = "langgraph", specifier = ">=1.1.10" },
     { name = "numpy", specifier = ">=1.23.0" },
-    { name = "optuna", specifier = ">=3.5" },
+    { name = "optuna", marker = "extra == 'ray'", specifier = ">=3.5" },
     { name = "orjson", specifier = ">=3.8.5" },
     { name = "pandas", specifier = ">=1.5.2" },
     { name = "pip-tools", marker = "extra == 'dev'" },
     { name = "prometheus-client", specifier = ">=0.14.0" },
     { name = "psutil" },
     { name = "pyarrow", specifier = ">=11.0.0" },
-    { name = "pydantic-ai-slim", extras = ["openai"], specifier = ">=0.0.36" },
+    { name = "pydantic-ai-slim", extras = ["openai"], specifier = ">=1.93.0" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pytest-cov", marker = "extra == 'dev'" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "ray", extras = ["data"], specifier = ">=2.55.0,<2.56.0" },
-    { name = "ray", extras = ["serve"], specifier = ">=2.55.0,<2.56.0" },
-    { name = "ray", extras = ["train"], specifier = ">=2.55.0,<2.56.0" },
-    { name = "ray", extras = ["tune"], specifier = ">=2.55.0,<2.56.0" },
+    { name = "ray", extras = ["data"], marker = "extra == 'ray'", specifier = ">=2.55.0,<2.56.0" },
+    { name = "ray", extras = ["serve"], marker = "extra == 'ray'", specifier = ">=2.55.0,<2.56.0" },
+    { name = "ray", extras = ["train"], marker = "extra == 'ray'", specifier = ">=2.55.0,<2.56.0" },
+    { name = "ray", extras = ["tune"], marker = "extra == 'ray'", specifier = ">=2.55.0,<2.56.0" },
     { name = "rich", specifier = ">=13.0.0" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "scikit-learn" },
@@ -3564,7 +3566,7 @@ requires-dist = [
     { name = "structlog" },
     { name = "torch", specifier = ">=2.10" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["ray", "dev"]
 
 [package.metadata.requires-dev]
 dev = [

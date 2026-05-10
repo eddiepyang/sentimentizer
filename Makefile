@@ -255,6 +255,10 @@ stop-exporter:
 ## Start Prometheus, Grafana, and metrics exporter for dashboard metrics
 start-metrics: setup-dashboards
 	cd metrics && docker compose up -d
+	@echo "Restarting Grafana to load newly generated dashboards..."
+	cd metrics && docker compose restart grafana
+	@echo "Stopping old metrics exporter if running..."
+	@pkill -f "sentimentizer/exporter.py" 2>/dev/null || true
 	@echo "Starting metrics exporter (port 8081)..."
 	uv run python sentimentizer/exporter.py &
 	@sleep 2
@@ -262,8 +266,11 @@ start-metrics: setup-dashboards
 
 ## Stop Prometheus, Grafana, and metrics exporter
 stop-metrics:
+	@echo "Stopping exporter..."
 	@pkill -f "sentimentizer/exporter.py" 2>/dev/null || true
-	cd metrics && docker compose down
+	@echo "Stopping Docker containers (this may take a few seconds)..."
+	@cd metrics && docker compose down -t 2 || true
+	@echo "Metrics stopped."
 
 # ──────────────────────────────────────────────
 # Cleanup

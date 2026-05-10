@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import math
 import time
 from collections.abc import Callable
@@ -6,13 +8,17 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import ray
 import torch
-from ray import train
-from ray.train import Checkpoint, ScalingConfig
-from ray.train.torch import TorchTrainer, prepare_model
 from torch import optim
 from torch.utils.data import DataLoader
+
+try:
+    import ray
+    from ray import train
+    from ray.train import Checkpoint, ScalingConfig
+    from ray.train.torch import TorchTrainer, prepare_model
+except ImportError:
+    pass
 
 from sentimentizer import new_logger
 from sentimentizer.config import (

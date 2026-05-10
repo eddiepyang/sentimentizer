@@ -12,7 +12,9 @@ import os
 import tempfile
 
 import pytest
-import ray
+
+# ruff: noqa: E402
+ray = pytest.importorskip("ray")
 from gensim import corpora
 
 from sentimentizer.config import DriverConfig, TokenizerConfig

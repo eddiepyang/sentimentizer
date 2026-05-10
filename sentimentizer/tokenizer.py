@@ -1,13 +1,24 @@
+from __future__ import annotations
+
 import re
 from collections import Counter
 from dataclasses import dataclass, field
 from importlib.resources import files
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 import numpy as np
 import pandas as pd
-import ray
 from gensim import corpora
+
+try:
+    import ray
+
+    RAY_AVAILABLE = True
+except ImportError:
+    RAY_AVAILABLE = False
+
+if TYPE_CHECKING:
+    import ray.data
 
 from sentimentizer import new_logger, time_decorator
 from sentimentizer.config import DEFAULT_LOG_LEVEL, FileConfig, TokenizerConfig
@@ -75,7 +86,31 @@ def regex_tokenize(x: str) -> list[str]:
 
 def new_dictionary(data: pd.DataFrame, cfg: TokenizerConfig) -> corpora.Dictionary:
     """builds a dictionary from a dataframe"""
-    dictionary = corpora.Dictionary(data[cfg.text_col])
+    # Create dictionary from text column
+    # To guarantee alignment with _build_dictionary_distributed, we must assign
+    # IDs by descending frequency and ascending word.
+
+    word_freq = Counter()
+    doc_freq = Counter()
+    num_docs = 0
+
+    for doc_tokens in data[cfg.text_col]:
+        if not isinstance(doc_tokens, list):
+            doc_tokens = regex_tokenize(str(doc_tokens))
+        num_docs += 1
+        word_freq.update(doc_tokens)
+        doc_freq.update(set(doc_tokens))
+
+    dictionary = corpora.Dictionary()
+    dictionary.num_docs = num_docs
+
+    for idx, word in enumerate(sorted(word_freq.keys(), key=lambda w: (-word_freq[w], w))):
+        dictionary.token2id[word] = idx
+        dictionary.dfs[idx] = doc_freq[word]
+
+    dictionary.num_pos = sum(word_freq.values())
+    dictionary.num_nnz = sum(doc_freq.values())
+
     dictionary.filter_extremes(
         no_below=cfg.dict_min,
         no_above=cfg.no_above,
@@ -244,6 +279,8 @@ def _count_vocab_batch(batch: dict, text_col: str) -> tuple[Counter, Counter, in
     num_docs = 0
 
     for doc_tokens in batch[text_col]:
+        if not isinstance(doc_tokens, list):
+            doc_tokens = regex_tokenize(str(doc_tokens))
         num_docs += 1
         word_freq.update(doc_tokens)
         # doc_freq counts each word once per document

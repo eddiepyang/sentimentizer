@@ -1,0 +1,99 @@
+"""Tune stage: hyperparameter tuning (agent or standalone Ray Tune).
+
+Heavy imports (torch, ray, config) are DEFERRED to function bodies to avoid
+importing the ML stack at module level. Do NOT add module-level imports
+of torch, ray, gensim, or sentimentizer.config here.
+"""
+
+from __future__ import annotations
+
+from workflows.lifecycle import State, _cuda_cleanup, _ensure_ray_initialized, logger
+
+
+def run_tune(
+    state: State,
+    *,
+    mode: str,
+    agent_config: str | None,
+    tune_samples: int,
+    tune_max_iterations: int,
+    tune_output_dir: str,
+    no_validate: bool,
+    validation_threshold: float,
+    max_retries: int,
+    save: bool,
+    push_to_hub: bool,
+    balance_classes: bool,
+    balance_seed: int,
+    pos_weight: float,
+) -> None:
+    """Hyperparameter tuning (LLM-guided agent or standalone Ray Tune run)."""
+    from workflows.lifecycle import is_ray_available
+
+    if not is_ray_available():
+        raise ImportError("Ray is required for tuning. Install with: pip install '.[ray]'")
+    _ensure_ray_initialized()
+
+    from sentimentizer.agent.skill import TuningRun, TuningRunConfig
+    from sentimentizer.device import resolve_device
+
+    device = resolve_device(state.device)
+
+    config = TuningRunConfig(
+        model_type=state.model,
+        mode=mode,
+        config_path=agent_config,
+        num_samples=tune_samples,
+        max_iterations=tune_max_iterations,
+        device=device,
+        save_best_model=save,
+        output_dir=tune_output_dir,
+        validate_predictions=not no_validate,
+        validation_threshold=validation_threshold,
+        max_retries=max_retries,
+        balance_classes=balance_classes,
+        balance_seed=balance_seed,
+        pos_weight=pos_weight,
+        push_to_hub=push_to_hub,
+    )
+
+    run = TuningRun(config)
+
+    logger.info(  # type: ignore[call-arg]
+        "starting_tuning_skill",
+        model_type=config.model_type,
+        mode=config.mode,
+        device=config.device,
+        validate=config.validate_predictions,
+        max_retries=config.max_retries,
+    )
+
+    try:
+        result = run.execute()
+    finally:
+        _cuda_cleanup()
+
+    logger.info(  # type: ignore[call-arg]
+        "tuning_skill_complete",
+        best_accuracy=result.best_accuracy,
+        best_loss=result.best_loss,
+        best_f1=result.best_f1,
+        best_cohen_kappa=result.best_cohen_kappa,
+        best_positive_accuracy=result.best_positive_accuracy,
+        best_negative_accuracy=result.best_negative_accuracy,
+        iterations=result.iterations_completed,
+        converged=result.converged,
+        validation_passed=result.validation_passed,
+        retry_count=result.retry_count,
+        model_path=result.model_path,
+        results_path=result.results_path,
+        elapsed_seconds=result.elapsed_seconds,
+    )
+
+    if result.validation_passed:
+        logger.info("tuning_skill_passed: model predictions validated successfully")
+    else:
+        logger.warning(
+            "tuning_skill_failed: model predictions did not meet validation threshold "
+            f"({result.validation_threshold}) after {result.retry_count} retries"
+        )

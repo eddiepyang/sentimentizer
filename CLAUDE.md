@@ -19,11 +19,14 @@ uv run pytest tests/ -v -k "Ray"
 This project uses **uv** for dependency management. Key commands:
 
 ```bash
-# Install all dependencies
+# Install dependencies (local-only mode)
 uv sync
 
+# Install with Ray distributed features
+uv sync --extra ray
+
 # Install with dev dependencies (includes ruff, black, pytest)
-uv sync --extra dev
+uv sync --extra dev --extra ray
 
 # Add a new dependency
 uv add <package>
