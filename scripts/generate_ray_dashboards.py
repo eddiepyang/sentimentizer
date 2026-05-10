@@ -92,6 +92,9 @@ def _fix_promql_expr(expr: str) -> str:
     #     {{{global_filters}}}, deployment=~"$deployment"}
     expr = re.sub(r"\{\s*,\s*", "{", expr)
 
+    # 2c. Fix multiple consecutive commas: {foo="bar", , baz="qux"} → {foo="bar", baz="qux"}
+    expr = re.sub(r",\s*,", ",", expr)
+
     # 3. Replace single-quoted string matchers with double quotes in PromQL
     #    e.g. resource='GPU' → resource="GPU"
     #    This is safe here because we're operating on parsed JSON string values,
@@ -148,36 +151,27 @@ def _patch_template_vars(templating: dict, fallback_metrics: list[str]) -> dict:
 
             # First, fix any formatting issues in the original value
             fixed_val = _fix_promql_expr(old_val)
+            new_val = fixed_val
 
-            # Build a chain of OR fallback alternatives using label_values()
-            parts = [fixed_val.strip()]
-            for fb in fallback_metrics:
-                # Replace the metric name (and its optional label selector) inside
-                # label_values() with the fallback metric name, preserving the label
-                # selector if present.
-                #
-                # Correctly handles both forms:
-                #   label_values(metric_name, label) → label_values(fb, label)
-                #   label_values(metric_name{filters}, label) → label_values(fb{filters}, label)
-                #
-                # The regex matches the metric name with optional {filters} and
-                # replaces only the metric name portion, keeping any filters intact.
+            # Replace the metric name inside label_values() with the first highly reliable
+            # fallback metric (like ray_node_cpu_count) so the dropdown always populates.
+            # Grafana does NOT support combining label_values() calls with `+` or `OR`.
+            if fallback_metrics:
+                fb = fallback_metrics[0]
+                # Replace metric with {filters}
                 candidate = re.sub(
                     r"label_values\((\w+)\{([^}]*)\},",
                     lambda m: f"label_values({fb}{{{m.group(2)}}},",
                     fixed_val,
                 )
-                # Also handle the simple case without braces: label_values(metric, label)
+                # Replace metric without braces
                 candidate = re.sub(
                     r"label_values\((\w+),",
                     f"label_values({fb},",
                     candidate,
-                    count=1,  # Only replace the first match to avoid double-replacing
+                    count=1,
                 )
-                if candidate != fixed_val and candidate not in parts:
-                    parts.append(candidate)
-
-            new_val = " + ".join(parts)
+                new_val = candidate
 
             if field == "query" and fields_to_patch.get("_query_is_dict"):
                 var["query"]["query"] = new_val
@@ -383,6 +377,10 @@ def apply_patches(name: str, output_dir: str) -> None:
     # This happens when {{{global_filters}}} is removed from expressions like
     # metric{{{global_filters}}}, deployment=~"$deployment"}
     content = re.sub(r"\{\s*,\s*", "{", content)
+
+    # Fix multiple consecutive commas: {foo="bar", , baz="qux"} → {foo="bar", baz="qux"}
+    # This happens when {{{global_filters}}} is sandwiched between other labels
+    content = re.sub(r",\s*,", ",", content)
 
     # --- JSON-level structural patches ---
     data = json.loads(content)

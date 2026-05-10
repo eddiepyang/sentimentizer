@@ -232,3 +232,10 @@ Ray metrics are only available while Ray is running. Check that `ray` is in the 
 - Port 8082: Tune metrics (started by `tune_model()`)
 
 If a port is already in use, the code logs a warning and continues — `prometheus_client` gauges are process-global, so metrics still work within the same process.
+
+### Grafana PromQL Parse Errors (e.g., `unexpected ","`)
+
+If you encounter syntax or parse errors in Grafana after modifying the dashboard generator scripts, check the following common pitfalls:
+
+1. **Invalid `label_values()` macro usage**: Grafana's Prometheus datasource plugin does **not** support combining multiple `label_values()` macro calls using `+` or `OR` in template variable queries (e.g., `label_values(metric_A, label) + label_values(metric_B, label)`). This will crash Grafana's PromQL parser. The correct format is to use a single `label_values()` call referencing a highly reliable metric (such as `ray_node_cpu_count` which is emitted universally) instead of trying to chain fragile metrics.
+2. **Hanging commas from stripped filters**: Ray's internal dashboard generators use Jinja2-style placeholders (like `{{{global_filters}}}`). When scripts strip these placeholders out during patching, it can leave behind leading commas (`{, label="x"}`) or consecutive commas (`{x="1", , y="2"}`). The `scripts/generate_ray_dashboards.py` includes robust regex sanitization to clean these artifacts natively.
