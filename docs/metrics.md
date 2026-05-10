@@ -187,17 +187,19 @@ make start-exporter
 make train-distributed
 ```
 
-## Grafana Dashboard
+## Grafana Dashboards
 
-The `sentimentizerTraining` dashboard (UID: `sentimentizerTraining`) shows:
+The following dashboards are provisioned in Grafana:
 
-- **Loss**: Training + validation loss over time
-- **Accuracy**: Overall, positive-class, and negative-class accuracy
-- **Precision / Recall / F1**: Classification metrics
-- **Cohen's Kappa / AUC-ROC**: Agreement and discrimination metrics
-- **Training Epoch**: Current epoch number
+| Dashboard | UID | Metrics Shown |
+|-----------|-----|---------------|
+| **Sentimentizer Training** | `sentimentizerTraining` | Training loss, validation accuracy / precision / recall / F1, per-class accuracy, Cohen's Kappa, AUC-ROC, epoch |
+| **Sentimentizer Tuning** | `sentimentizerTuning` | Ray Tune trial metrics: aggregate stats (best accuracy/loss/F1, trial counts) and per-trial time-series for all validation metrics |
+| **Sentimentizer System** | `sentimentizerSystem` | CPU / memory / disk usage, GPU utilization / memory / temperature, Ray cluster health (availability, node count, controller state) |
 
-The dashboard uses PromQL `or` expressions to fall back between data sources:
+All custom dashboards use the provisioned Prometheus datasource (`uid: prometheus`).
+
+The Training dashboard uses PromQL `or` expressions to fall back between data sources:
 ```promql
 # Shows training metrics if available, falls back to live Ray metrics
 sentimentizer_training_val_accuracy{model_type=~"$model_type"}
