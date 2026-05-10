@@ -72,6 +72,20 @@ class EncoderOptimizationParams:
 
 
 @dataclass
+class DecoderOptimizationParams:
+    """Optimization params for Decoder model.
+
+    The decoder has more parameters than the encoder due to cross-attention
+    layers, so it uses a lower LR and higher weight decay to prevent
+    overfitting on the sentiment classification task.
+    """
+
+    lr: float = 0.0003
+    betas: tuple[float, float] = (0.9, 0.999)
+    weight_decay: float = 0.02
+
+
+@dataclass
 class SchedulerParams:
     """Default scheduler params (used for RNN).
 
@@ -85,7 +99,7 @@ class SchedulerParams:
 
 @dataclass
 class EncoderSchedulerParams:
-    """Scheduler params for Transformer models.
+    """Scheduler params for Encoder model.
 
     Includes warmup_epochs for linear LR warmup at the start of training.
     """
@@ -94,6 +108,21 @@ class EncoderSchedulerParams:
     eta_min: float = 1e-6
     last_epoch: int = -1
     warmup_epochs: int = 1  # linear warmup for this many epochs
+
+
+@dataclass
+class DecoderSchedulerParams:
+    """Scheduler params for Decoder model.
+
+    Uses a longer warmup and higher minimum LR than the encoder because
+    the decoder has more parameters and is more prone to overfitting
+    during early training.
+    """
+
+    T_max: int = 8
+    eta_min: float = 1e-5
+    last_epoch: int = -1
+    warmup_epochs: int = 2  # longer warmup for stable decoder training
 
 
 @dataclass(frozen=True)
@@ -145,7 +174,7 @@ def weights_path_for(model_type: str) -> str:
 class TrainerConfig:
     batch_size: int = 64
     epochs: int = -1  # -1 means use model-specific default (4 for RNN, 8 for encoder/decoder)
-    early_stopping_patience: int = 2  # stop if val_loss doesn't improve for this many epochs
+    early_stopping_patience: int = 3  # stop if val_loss doesn't improve for this many epochs
     dataloader_workers: int = -1  # -1 means auto-detect based on device
     ray_workers: int = 1  # Ray Train workers (only used with --distributed)
     device: str = "auto"  # "auto" detects best available: cuda > mps > cpu
@@ -206,14 +235,20 @@ class EncoderConfig:
 
 @dataclass(frozen=True)
 class DecoderConfig:
-    """Configuration for the Transformer Decoder model architecture."""
+    """Configuration for the Transformer Decoder model architecture.
+
+    The decoder uses fewer layers and higher dropout than the encoder
+    because the cross-attention mechanism (2 encoder + 2 decoder = 4
+    layers total) adds significant capacity.  With the original 2+4
+    configuration the model had ~5.9M parameters and overfit quickly.
+    """
 
     d_model: int = 256
     n_heads: int = 4
     n_encoder_layers: int = 2
-    n_decoder_layers: int = 4
-    dropout: float = 0.2
-    ff_multiplier: int = 4  # dim_feedforward = d_model * ff_multiplier
+    n_decoder_layers: int = 2
+    dropout: float = 0.3
+    ff_multiplier: int = 4
 
 
 @dataclass
