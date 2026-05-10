@@ -194,6 +194,7 @@ def patch_train_dashboard(data: dict) -> dict:
 def apply_patches(name: str, output_dir: str) -> None:
     """Load a generated dashboard JSON, apply compatibility patches, and save."""
     import re
+
     output_path = os.path.join(output_dir, f"{name}.json")
     if not os.path.exists(output_path):
         return
@@ -202,10 +203,10 @@ def apply_patches(name: str, output_dir: str) -> None:
         content = f.read()
 
     # Fix Prometheus parse error: unexpected left brace '{'
-    # Ray's dashboard generator produces `label_values(metric{}, label)` which 
+    # Ray's dashboard generator produces `label_values(metric{}, label)` which
     # is rejected by modern Grafana versions. We strip the empty braces.
     content = re.sub(r"label_values\(([^,]+?)\{\}\s*,", r"label_values(\1,", content)
-    
+
     data = json.loads(content)
 
     patchers = {
@@ -216,7 +217,7 @@ def apply_patches(name: str, output_dir: str) -> None:
     patcher = patchers.get(name)
     if patcher:
         data = patcher(data)
-        
+
     with open(output_path, "w") as f:
         json.dump(data, f, indent=4)
     print(f"Patched {output_path}")
@@ -241,18 +242,18 @@ def generate_ml_metrics_dashboard():
                     {
                         "expr": "sentimentizer_training_train_loss",
                         "legendFormat": "Train Loss ({{model_type}})",
-                        "refId": "A"
+                        "refId": "A",
                     },
                     {
                         "expr": "sentimentizer_training_val_loss",
                         "legendFormat": "Val Loss ({{model_type}})",
-                        "refId": "B"
-                    }
+                        "refId": "B",
+                    },
                 ],
                 "lines": True,
                 "linewidth": 2,
                 "nullPointMode": "connected",
-                "fill": 0
+                "fill": 0,
             },
             {
                 "title": "Validation Core Metrics",
@@ -263,32 +264,29 @@ def generate_ml_metrics_dashboard():
                     {
                         "expr": "sentimentizer_training_val_accuracy",
                         "legendFormat": "Accuracy ({{model_type}})",
-                        "refId": "A"
+                        "refId": "A",
                     },
                     {
                         "expr": "sentimentizer_training_val_f1",
                         "legendFormat": "F1 Score ({{model_type}})",
-                        "refId": "B"
+                        "refId": "B",
                     },
                     {
                         "expr": "sentimentizer_training_val_precision",
                         "legendFormat": "Precision ({{model_type}})",
-                        "refId": "C"
+                        "refId": "C",
                     },
                     {
                         "expr": "sentimentizer_training_val_recall",
                         "legendFormat": "Recall ({{model_type}})",
-                        "refId": "D"
-                    }
+                        "refId": "D",
+                    },
                 ],
                 "lines": True,
                 "linewidth": 2,
                 "nullPointMode": "connected",
                 "fill": 0,
-                "yaxes": [
-                    {"min": 0, "max": 1, "show": True},
-                    {"show": True}
-                ]
+                "yaxes": [{"min": 0, "max": 1, "show": True}, {"show": True}],
             },
             {
                 "title": "Current Epoch & Metrics Table",
@@ -301,70 +299,67 @@ def generate_ml_metrics_dashboard():
                         "format": "table",
                         "instant": True,
                         "legendFormat": "Epoch",
-                        "refId": "A"
+                        "refId": "A",
                     },
                     {
                         "expr": "sentimentizer_training_train_loss",
                         "format": "table",
                         "instant": True,
                         "legendFormat": "Train Loss",
-                        "refId": "B"
+                        "refId": "B",
                     },
                     {
                         "expr": "sentimentizer_training_val_loss",
                         "format": "table",
                         "instant": True,
                         "legendFormat": "Val Loss",
-                        "refId": "C"
+                        "refId": "C",
                     },
                     {
                         "expr": "sentimentizer_training_val_cohen_kappa",
                         "format": "table",
                         "instant": True,
                         "legendFormat": "Kappa",
-                        "refId": "D"
+                        "refId": "D",
                     },
                     {
                         "expr": "sentimentizer_training_val_precision",
                         "format": "table",
                         "instant": True,
                         "legendFormat": "Precision",
-                        "refId": "E"
+                        "refId": "E",
                     },
                     {
                         "expr": "sentimentizer_training_val_recall",
                         "format": "table",
                         "instant": True,
                         "legendFormat": "Recall",
-                        "refId": "F"
+                        "refId": "F",
                     },
                     {
                         "expr": "sentimentizer_training_val_f1",
                         "format": "table",
                         "instant": True,
                         "legendFormat": "F1",
-                        "refId": "G"
+                        "refId": "G",
                     },
                     {
                         "expr": "sentimentizer_training_val_positive_accuracy",
                         "format": "table",
                         "instant": True,
                         "legendFormat": "Pos Acc",
-                        "refId": "H"
+                        "refId": "H",
                     },
                     {
                         "expr": "sentimentizer_training_val_negative_accuracy",
                         "format": "table",
                         "instant": True,
                         "legendFormat": "Neg Acc",
-                        "refId": "I"
-                    }
+                        "refId": "I",
+                    },
                 ],
                 "transformations": [
-                    {
-                        "id": "merge",
-                        "options": {}
-                    },
+                    {"id": "merge", "options": {}},
                     {
                         "id": "organize",
                         "options": {
@@ -372,7 +367,7 @@ def generate_ml_metrics_dashboard():
                                 "Time": False,
                                 "__name__": True,
                                 "instance": True,
-                                "job": True
+                                "job": True,
                             },
                             "renameByName": {
                                 "Value #A": "Epoch",
@@ -383,22 +378,16 @@ def generate_ml_metrics_dashboard():
                                 "Value #F": "Recall",
                                 "Value #G": "F1",
                                 "Value #H": "Pos Acc",
-                                "Value #I": "Neg Acc"
-                            }
-                        }
-                    }
+                                "Value #I": "Neg Acc",
+                            },
+                        },
+                    },
                 ],
                 "fieldConfig": {
-                    "defaults": {
-                        "custom": {
-                            "align": "auto",
-                            "displayMode": "auto"
-                        },
-                        "decimals": 4
-                    }
-                }
-            }
-        ]
+                    "defaults": {"custom": {"align": "auto", "displayMode": "auto"}, "decimals": 4}
+                },
+            },
+        ],
     }
     return json.dumps(data, indent=4), None
 
