@@ -555,7 +555,7 @@ class TestResetStaleMetrics:
     def test_zeroes_target_model_type_in_json(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """_reset_stale_metrics zeroes the specified model_type entry, leaving others intact."""
+        """_reset_stale_metrics replaces the file with a single zeroed model_type entry."""
         from workflows.stages.train import _reset_stale_metrics
 
         metrics_file = tmp_path / "metrics.json"
@@ -572,12 +572,12 @@ class TestResetStaleMetrics:
         assert "encoder" in result
         assert result["encoder"]["train_loss"] == 0.0
         assert result["encoder"]["epoch"] == 0
-        assert result["rnn"]["train_loss"] == 0.3
+        assert "rnn" not in result
 
     def test_adds_model_type_entry_when_missing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """_reset_stale_metrics creates a zeroed entry if model_type is not in the file."""
+        """_reset_stale_metrics replaces the file with a single zeroed model_type entry."""
         from workflows.stages.train import _reset_stale_metrics
 
         metrics_file = tmp_path / "metrics.json"
@@ -588,7 +588,7 @@ class TestResetStaleMetrics:
         _reset_stale_metrics("decoder")
 
         result = json.loads(metrics_file.read_text())
-        assert "rnn" in result
+        assert "rnn" not in result
         assert "decoder" in result
         assert result["decoder"]["train_loss"] == 0.0
         assert result["decoder"]["epoch"] == 0
