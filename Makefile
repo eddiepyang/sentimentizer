@@ -299,7 +299,7 @@ clean: stop-metrics stop-ray
 	@echo "==> Cleaning Ray Tune results..."
 	rm -rf ~/ray_results/*
 	@echo "==> Cleaning persisted training metrics..."
-	rm -f /tmp/sentimentizer_training_metrics.json
+	rm -f /tmp/sentimentizer_metrics/*_metrics.json
 	@echo "==> Cleaning Prometheus TSDB data..."
 	@docker volume rm metrics_prometheus-data 2>/dev/null || true
 	@docker volume prune -f 2>/dev/null || true

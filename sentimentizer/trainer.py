@@ -49,68 +49,26 @@ def _write_epoch_metrics_to_file(
     metrics: ClassificationMetrics,
     lr: float | None = None,
 ) -> None:
-    """Write current epoch metrics to the JSON file the standalone exporter reads.
+    """Write current epoch metrics to the per-model JSON file.
 
-    The standalone exporter (port 8081) polls ``/tmp/sentimentizer_training_metrics.json``
-    every 10 seconds.  Updating this file after each validation epoch lets the table
-    panel on the dashboard show live data while single-node training is running,
-    instead of remaining at zeros until training finishes.
+    Each model type writes to its own file
+    (``/tmp/sentimentizer_metrics/{model_type}_metrics.json``) so concurrent
+    training processes never race on a shared JSON file.  The standalone
+    exporter discovers the file directly by model type.
     """
     import contextlib
     import json
+    import time
     from pathlib import Path
 
-    path = Path("/tmp/sentimentizer_training_metrics.json")
+    metrics_dir = Path("/tmp/sentimentizer_metrics")
+    with contextlib.suppress(OSError):
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+
+    path = metrics_dir / f"{model_type}_metrics.json"
 
     auc_roc = metrics.auc_roc
-    # Write all known model types to the JSON, zeroing non-current ones.
-    # The exporter pushes every entry to Prometheus; this ensures stale data
-    # from a previous model type is overwritten with zeros.
     data = {
-        "rnn": {
-            "train_loss": 0.0,
-            "val_loss": 0.0,
-            "accuracy": 0.0,
-            "precision": 0.0,
-            "recall": 0.0,
-            "f1": 0.0,
-            "cohen_kappa": 0.0,
-            "auc_roc": None,
-            "positive_accuracy": 0.0,
-            "negative_accuracy": 0.0,
-            "epoch": 0,
-            "lr": 0.0,
-        },
-        "encoder": {
-            "train_loss": 0.0,
-            "val_loss": 0.0,
-            "accuracy": 0.0,
-            "precision": 0.0,
-            "recall": 0.0,
-            "f1": 0.0,
-            "cohen_kappa": 0.0,
-            "auc_roc": None,
-            "positive_accuracy": 0.0,
-            "negative_accuracy": 0.0,
-            "epoch": 0,
-            "lr": 0.0,
-        },
-        "decoder": {
-            "train_loss": 0.0,
-            "val_loss": 0.0,
-            "accuracy": 0.0,
-            "precision": 0.0,
-            "recall": 0.0,
-            "f1": 0.0,
-            "cohen_kappa": 0.0,
-            "auc_roc": None,
-            "positive_accuracy": 0.0,
-            "negative_accuracy": 0.0,
-            "epoch": 0,
-            "lr": 0.0,
-        },
-    }
-    data[model_type] = {
         "train_loss": float(train_loss),
         "val_loss": float(val_loss),
         "accuracy": float(metrics.accuracy),
@@ -123,6 +81,8 @@ def _write_epoch_metrics_to_file(
         "negative_accuracy": float(metrics.negative_accuracy),
         "epoch": int(epoch),
         "lr": float(lr) if lr is not None else None,
+        "_written_by": model_type,
+        "_written_at": time.time(),
     }
 
     with contextlib.suppress(OSError):
@@ -332,7 +292,7 @@ class Trainer:
     optimizer: optim.Optimizer
     scheduler: optim.lr_scheduler.LRScheduler
     cfg: TrainerConfig
-    model_type: str = "rnn"
+    model_type: str
     losses: list[float] = field(default_factory=list)
     val_loss: float = float("inf")
     latest_train_loss: float = 0.0
@@ -614,7 +574,7 @@ class _LinearWarmupCosineScheduler(torch.optim.lr_scheduler.LambdaLR):
 def new_trainer(
     model: torch.nn.Module,
     cfg: TrainerConfig,
-    model_type: str = "rnn",
+    model_type: str,
 ) -> Trainer:
     opt = _get_opt_params(model_type)
     sched = _get_sched_params(model_type)
@@ -1066,7 +1026,7 @@ def new_ray_trainer(
     train_ds: ray.data.Dataset,
     val_ds: ray.data.Dataset,
     cfg: TrainerConfig,
-    model_type: str = "rnn",
+    model_type: str,
     driver_config: type[DriverConfig] = DriverConfig,
 ) -> TorchTrainer:
     """Factory function to create a Ray Train TorchTrainer for distributed training.

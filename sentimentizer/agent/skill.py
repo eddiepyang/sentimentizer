@@ -772,7 +772,7 @@ class TuningRun:
 # ---------------------------------------------------------------------------
 
 
-def diagnose_training_issues(model_type: str = "rnn") -> dict[str, Any]:
+def diagnose_training_issues(model_type: str) -> dict[str, Any]:
     """Run diagnostic checks to detect common training issues.
 
     Checks for problems that cause incorrect or "whacky" predictions,

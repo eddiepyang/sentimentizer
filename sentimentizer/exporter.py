@@ -12,17 +12,35 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import json
 import logging
 import os
 import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 
 import psutil
 from prometheus_client import Gauge, Info, start_http_server
 
 logger = logging.getLogger(__name__)
+
+# ──────────────────────────────────────────────
+# Persisted metrics directory (per-model-type files)
+# ──────────────────────────────────────────────
+
+_METRICS_DIR = Path("/tmp/sentimentizer_metrics")
+
+
+def get_training_metrics_path(model_type: str) -> Path:
+    """Return the per-model-type path for persisted training metrics.
+
+    Each model type (rnn, encoder, decoder) writes to its own JSON file to
+    eliminate race conditions when multiple training processes run concurrently.
+    """
+    return _METRICS_DIR / f"{model_type}_metrics.json"
+
 
 # ──────────────────────────────────────────────
 # System metrics
@@ -403,46 +421,69 @@ def _update_ray_metrics(ray_url: str) -> None:
 
 
 def _update_training_metrics() -> None:
-    """Read persisted training metrics from JSON and update gauges.
+    """Read persisted training metrics from per-model JSON files and update gauges.
 
-    The driver process writes final training metrics to
-    ``/tmp/sentimentizer_training_metrics.json`` before exiting.  This
-    function reads that file and updates the training gauges so that
-    training metrics remain visible in Prometheus/Grafana even after the
-    driver process has exited.
+    Each model type (rnn, encoder, decoder) writes to its own JSON file in
+    ``/tmp/sentimentizer_metrics/{model_type}_metrics.json`` to eliminate
+    race conditions when multiple training processes run concurrently.  The
+    exporter discovers all three files and zeroes out Prometheus gauges for
+    any model type whose file is missing or stale.
     """
-    path = "/tmp/sentimentizer_training_metrics.json"
     try:
-        import json
-
-        p = __import__("pathlib").Path(path)
-        if not p.exists():
-            return
-        data = json.loads(p.read_text())
-        if not isinstance(data, dict):
-            return
-        for model_type, metrics in data.items():
-            if not isinstance(metrics, dict):
-                continue
+        _METRICS_DIR.mkdir(parents=True, exist_ok=True)
+        for model_type in ("rnn", "encoder", "decoder"):
+            path = get_training_metrics_path(model_type)
             lbl = {"model_type": model_type}
-            TRAINING_TRAIN_LOSS.labels(**lbl).set(float(metrics.get("train_loss", 0)))
-            TRAINING_VAL_LOSS.labels(**lbl).set(float(metrics.get("val_loss", 0)))
-            TRAINING_VAL_ACCURACY.labels(**lbl).set(float(metrics.get("accuracy", 0)))
-            TRAINING_VAL_PRECISION.labels(**lbl).set(float(metrics.get("precision", 0)))
-            TRAINING_VAL_RECALL.labels(**lbl).set(float(metrics.get("recall", 0)))
-            TRAINING_VAL_F1.labels(**lbl).set(float(metrics.get("f1", 0)))
-            TRAINING_VAL_COHEN_KAPPA.labels(**lbl).set(float(metrics.get("cohen_kappa", 0)))
-            auc_roc = metrics.get("auc_roc")
+
+            if not path.exists():
+                # File absent → zero out gauges so stale values are cleared
+                TRAINING_TRAIN_LOSS.labels(**lbl).set(0)
+                TRAINING_VAL_LOSS.labels(**lbl).set(0)
+                TRAINING_VAL_ACCURACY.labels(**lbl).set(0)
+                TRAINING_VAL_PRECISION.labels(**lbl).set(0)
+                TRAINING_VAL_RECALL.labels(**lbl).set(0)
+                TRAINING_VAL_F1.labels(**lbl).set(0)
+                TRAINING_VAL_COHEN_KAPPA.labels(**lbl).set(0)
+                TRAINING_VAL_AUC_ROC.labels(**lbl).set(0)
+                TRAINING_VAL_POSITIVE_ACCURACY.labels(**lbl).set(0)
+                TRAINING_VAL_NEGATIVE_ACCURACY.labels(**lbl).set(0)
+                TRAINING_EPOCH.labels(**lbl).set(0)
+                TRAINING_LR.labels(**lbl).set(0)
+                continue
+
+            data = json.loads(path.read_text())
+            if not isinstance(data, dict):
+                continue
+
+            # Sanity check — the file name should match _written_by trace field
+            written_by = data.get("_written_by", model_type)
+            if written_by != model_type:
+                logger.warning(
+                    "metrics file mismatch: expected %s but found _written_by=%s",
+                    model_type,
+                    written_by,
+                )
+
+            TRAINING_TRAIN_LOSS.labels(**lbl).set(float(data.get("train_loss", 0)))
+            TRAINING_VAL_LOSS.labels(**lbl).set(float(data.get("val_loss", 0)))
+            TRAINING_VAL_ACCURACY.labels(**lbl).set(float(data.get("accuracy", 0)))
+            TRAINING_VAL_PRECISION.labels(**lbl).set(float(data.get("precision", 0)))
+            TRAINING_VAL_RECALL.labels(**lbl).set(float(data.get("recall", 0)))
+            TRAINING_VAL_F1.labels(**lbl).set(float(data.get("f1", 0)))
+            TRAINING_VAL_COHEN_KAPPA.labels(**lbl).set(float(data.get("cohen_kappa", 0)))
+            auc_roc = data.get("auc_roc")
             if auc_roc is not None:
                 TRAINING_VAL_AUC_ROC.labels(**lbl).set(float(auc_roc))
+            else:
+                TRAINING_VAL_AUC_ROC.labels(**lbl).set(0)
             TRAINING_VAL_POSITIVE_ACCURACY.labels(**lbl).set(
-                float(metrics.get("positive_accuracy", 0))
+                float(data.get("positive_accuracy", 0))
             )
             TRAINING_VAL_NEGATIVE_ACCURACY.labels(**lbl).set(
-                float(metrics.get("negative_accuracy", 0))
+                float(data.get("negative_accuracy", 0))
             )
-            TRAINING_EPOCH.labels(**lbl).set(int(metrics.get("epoch", 0)))
-            lr = metrics.get("lr")
+            TRAINING_EPOCH.labels(**lbl).set(int(data.get("epoch", 0)))
+            lr = data.get("lr")
             TRAINING_LR.labels(**lbl).set(0.0 if lr is None else float(lr))
     except Exception as e:
         logger.warning("Error updating training metrics from file: %s", e)
