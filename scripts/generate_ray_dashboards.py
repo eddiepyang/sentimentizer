@@ -87,6 +87,11 @@ def _fix_promql_expr(expr: str) -> str:
     # 2. Remove trailing commas inside label selectors: {foo="bar",} → {foo="bar"}
     expr = re.sub(r",\s*\}", "}", expr)
 
+    # 2b. Remove leading commas inside label selectors: {, foo="bar"} → {foo="bar"}
+    #     This happens when {{{global_filters}}} is removed from expressions like
+    #     {{{global_filters}}}, deployment=~"$deployment"}
+    expr = re.sub(r"\{\s*,\s*", "{", expr)
+
     # 3. Replace single-quoted string matchers with double quotes in PromQL
     #    e.g. resource='GPU' → resource="GPU"
     #    This is safe here because we're operating on parsed JSON string values,
@@ -374,8 +379,25 @@ def apply_patches(name: str, output_dir: str) -> None:
     # Fix trailing commas inside label selectors: {job="ray",} → {job="ray"}
     content = re.sub(r",\s*\}", "}", content)
 
+    # Fix leading commas inside label selectors: {, foo="bar"} → {foo="bar"}
+    # This happens when {{{global_filters}}} is removed from expressions like
+    # metric{{{global_filters}}}, deployment=~"$deployment"}
+    content = re.sub(r"\{\s*,\s*", "{", content)
+
     # --- JSON-level structural patches ---
     data = json.loads(content)
+
+    # Strip __inputs and __requires — these are Grafana *import* metadata fields
+    # that are NOT used (and cause warnings/errors) when loading dashboards via
+    # file provisioning.  Grafana logs a JSON parsing error for provisioned
+    # dashboards that still contain these keys.
+    data.pop("__inputs", None)
+    data.pop("__requires", None)
+
+    # Rewrite any datasource references that still use the placeholder UID
+    # "DS_PROMETHEUS" (emitted by Ray's generator for some dashboards) to the
+    # stable uid "prometheus" that matches our provisioned datasource.
+    _rewrite_datasource_uid(data, old_uid="DS_PROMETHEUS", new_uid="prometheus")
 
     patchers = {
         "default_grafana_dashboard": patch_default_dashboard,
@@ -398,40 +420,77 @@ def apply_patches(name: str, output_dir: str) -> None:
     print(f"Patched {output_path}")
 
 
+def _rewrite_datasource_uid(data: dict, old_uid: str, new_uid: str) -> None:
+    """Recursively rewrite datasource UID references in panels and annotations.
+
+    Rewrites both string datasources (legacy format) and dict datasources
+    ({"type": ..., "uid": old_uid}) in panels, rows, and annotation lists.
+    """
+
+    def _fix_panels(panels):
+        for panel in panels:
+            ds = panel.get("datasource")
+            if ds == old_uid:
+                panel["datasource"] = {"type": "prometheus", "uid": new_uid}
+            elif isinstance(ds, dict) and ds.get("uid") == old_uid:
+                ds["uid"] = new_uid
+            _fix_panels(panel.get("panels", []))
+            for target in panel.get("targets", []):
+                t_ds = target.get("datasource")
+                if t_ds == old_uid:
+                    target["datasource"] = {"type": "prometheus", "uid": new_uid}
+                elif isinstance(t_ds, dict) and t_ds.get("uid") == old_uid:
+                    t_ds["uid"] = new_uid
+
+    _fix_panels(data.get("panels", []))
+
+    for ann in data.get("annotations", {}).get("list", []):
+        ann_ds = ann.get("datasource")
+        if ann_ds == old_uid:
+            ann["datasource"] = {"type": "prometheus", "uid": new_uid}
+        elif isinstance(ann_ds, dict) and ann_ds.get("uid") == old_uid:
+            ann_ds["uid"] = new_uid
+
+
 def generate_ml_metrics_dashboard():
-    """Generate a custom dashboard for Sentimentizer ML metrics."""
+    """Generate the Sentimentizer Training dashboard.
+
+    Dashboard UID: ``sentimentizerTraining`` (docs/metrics.md line 150).
+
+    Panel queries use PromQL ``or`` to fall back between the two metric sources
+    described in docs/metrics.md lines 158-163:
+
+    - ``sentimentizer_training_*`` (port 8081, standalone exporter) — available
+      after each training epoch and persisted to disk after training completes.
+    - ``ray_sentimentizer_live_*`` (port 8080, Ray workers) — only available
+      while Ray is running; Ray adds the ``ray_`` prefix automatically.
+
+    This ensures the dashboard shows data in all three states:
+    1. During distributed training (live Ray gauges from rank-0 worker).
+    2. During single-node training (exporter gauges from trainer.evaluate()).
+    3. After training completes (persisted exporter gauges from JSON file).
+    """
+    _DS = {"type": "prometheus", "uid": "prometheus"}
+
+    def _target(metric: str, live_metric: str, legend: str, ref: str, **extra) -> dict:
+        lbl = '{model_type=~"$model_type"}'
+        expr = f"{metric}{lbl}\n  or\n{live_metric}{lbl}"
+        return {"datasource": _DS, "expr": expr, "legendFormat": legend, "refId": ref, **extra}
+
+    def _table_target(metric: str, live_metric: str, legend: str, ref: str) -> dict:
+        lbl = '{model_type=~"$model_type"}'
+        expr = f"{metric}{lbl}\n  or\n{live_metric}{lbl}"
+        return {
+            "datasource": _DS,
+            "expr": expr,
+            "format": "table",
+            "instant": True,
+            "legendFormat": legend,
+            "refId": ref,
+        }
+
     data = {
-        "__inputs": [
-            {
-                "name": "DS_PROMETHEUS",
-                "label": "Prometheus",
-                "description": "",
-                "type": "datasource",
-                "pluginId": "prometheus",
-                "pluginName": "Prometheus",
-            }
-        ],
-        "__requires": [
-            {"type": "grafana", "id": "grafana", "name": "Grafana", "version": "9.0.0"},
-            {
-                "type": "datasource",
-                "id": "prometheus",
-                "name": "Prometheus",
-                "version": "1.0.0",
-            },
-            {
-                "type": "panel",
-                "id": "graph",
-                "name": "Graph (Old)",
-                "version": "",
-            },
-            {
-                "type": "panel",
-                "id": "table",
-                "name": "Table",
-                "version": "",
-            },
-        ],
+        # __requires stripped by apply_patches(); no __inputs needed.
         "annotations": {
             "list": [
                 {
@@ -445,10 +504,10 @@ def generate_ml_metrics_dashboard():
                 }
             ]
         },
-        "title": "Sentimentizer ML Metrics",
-        "uid": "sentimentizerMLMetrics",
+        "title": "Sentimentizer Training",
+        "uid": "sentimentizerTraining",
         "version": 1,
-        "schemaVersion": 27,
+        "schemaVersion": 36,
         "style": "dark",
         "refresh": "5s",
         "time": {"from": "now-1h", "to": "now"},
@@ -473,10 +532,12 @@ def generate_ml_metrics_dashboard():
                     "type": "datasource",
                 },
                 {
+                    # Query both families so dropdown populates during distributed
+                    # training (Ray live metrics) and after (exporter metrics).
                     "allValue": ".*",
                     "current": {"selected": True, "text": "All", "value": "$__all"},
-                    "datasource": "${datasource}",
-                    "definition": "label_values(sentimentizer_training_train_loss, model_type)",
+                    "datasource": _DS,
+                    "definition": ("label_values(sentimentizer_training_train_loss, model_type)"),
                     "hide": 0,
                     "includeAll": True,
                     "label": "Model Type",
@@ -500,19 +561,21 @@ def generate_ml_metrics_dashboard():
             {
                 "title": "Loss (Train vs Val)",
                 "type": "timeseries",
-                "datasource": {"type": "prometheus", "uid": "${datasource}"},
+                "datasource": _DS,
                 "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
                 "targets": [
-                    {
-                        "expr": 'sentimentizer_training_train_loss{model_type=~"$model_type"}',
-                        "legendFormat": "Train Loss ({{model_type}})",
-                        "refId": "A",
-                    },
-                    {
-                        "expr": 'sentimentizer_training_val_loss{model_type=~"$model_type"}',
-                        "legendFormat": "Val Loss ({{model_type}})",
-                        "refId": "B",
-                    },
+                    _target(
+                        "sentimentizer_training_train_loss",
+                        "ray_sentimentizer_live_train_loss",
+                        "Train Loss ({{model_type}})",
+                        "A",
+                    ),
+                    _target(
+                        "sentimentizer_training_val_loss",
+                        "ray_sentimentizer_live_val_loss",
+                        "Val Loss ({{model_type}})",
+                        "B",
+                    ),
                 ],
                 "fieldConfig": {
                     "defaults": {
@@ -525,29 +588,33 @@ def generate_ml_metrics_dashboard():
             {
                 "title": "Validation Core Metrics",
                 "type": "timeseries",
-                "datasource": {"type": "prometheus", "uid": "${datasource}"},
+                "datasource": _DS,
                 "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
                 "targets": [
-                    {
-                        "expr": 'sentimentizer_training_val_accuracy{model_type=~"$model_type"}',
-                        "legendFormat": "Accuracy ({{model_type}})",
-                        "refId": "A",
-                    },
-                    {
-                        "expr": 'sentimentizer_training_val_f1{model_type=~"$model_type"}',
-                        "legendFormat": "F1 Score ({{model_type}})",
-                        "refId": "B",
-                    },
-                    {
-                        "expr": 'sentimentizer_training_val_precision{model_type=~"$model_type"}',
-                        "legendFormat": "Precision ({{model_type}})",
-                        "refId": "C",
-                    },
-                    {
-                        "expr": 'sentimentizer_training_val_recall{model_type=~"$model_type"}',
-                        "legendFormat": "Recall ({{model_type}})",
-                        "refId": "D",
-                    },
+                    _target(
+                        "sentimentizer_training_val_accuracy",
+                        "ray_sentimentizer_live_val_accuracy",
+                        "Accuracy ({{model_type}})",
+                        "A",
+                    ),
+                    _target(
+                        "sentimentizer_training_val_f1",
+                        "ray_sentimentizer_live_val_f1",
+                        "F1 Score ({{model_type}})",
+                        "B",
+                    ),
+                    _target(
+                        "sentimentizer_training_val_precision",
+                        "ray_sentimentizer_live_val_precision",
+                        "Precision ({{model_type}})",
+                        "C",
+                    ),
+                    _target(
+                        "sentimentizer_training_val_recall",
+                        "ray_sentimentizer_live_val_recall",
+                        "Recall ({{model_type}})",
+                        "D",
+                    ),
                 ],
                 "fieldConfig": {
                     "defaults": {
@@ -560,74 +627,123 @@ def generate_ml_metrics_dashboard():
                 },
             },
             {
-                "title": "Current Epoch & Metrics Table",
-                "type": "table",
-                "datasource": {"type": "prometheus", "uid": "${datasource}"},
-                "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8},
+                "title": "Per-Class Accuracy",
+                "type": "timeseries",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
                 "targets": [
-                    {
-                        "expr": 'sentimentizer_training_epoch{model_type=~"$model_type"}',
-                        "format": "table",
-                        "instant": True,
-                        "legendFormat": "Epoch",
-                        "refId": "A",
+                    _target(
+                        "sentimentizer_training_val_positive_accuracy",
+                        "ray_sentimentizer_live_val_positive_accuracy",
+                        "Positive Acc ({{model_type}})",
+                        "A",
+                    ),
+                    _target(
+                        "sentimentizer_training_val_negative_accuracy",
+                        "ray_sentimentizer_live_val_negative_accuracy",
+                        "Negative Acc ({{model_type}})",
+                        "B",
+                    ),
+                ],
+                "fieldConfig": {
+                    "defaults": {
+                        "custom": {"drawStyle": "line", "lineWidth": 2},
+                        "unit": "none",
+                        "min": 0,
+                        "max": 1,
                     },
-                    {
-                        "expr": 'sentimentizer_training_train_loss{model_type=~"$model_type"}',
-                        "format": "table",
-                        "instant": True,
-                        "legendFormat": "Train Loss",
-                        "refId": "B",
+                    "overrides": [],
+                },
+            },
+            {
+                "title": "Cohen's Kappa & AUC-ROC",
+                "type": "timeseries",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+                "targets": [
+                    _target(
+                        "sentimentizer_training_val_cohen_kappa",
+                        "ray_sentimentizer_live_val_cohen_kappa",
+                        "Cohen's Kappa ({{model_type}})",
+                        "A",
+                    ),
+                    _target(
+                        "sentimentizer_training_val_auc_roc",
+                        "ray_sentimentizer_live_val_auc_roc",
+                        "AUC-ROC ({{model_type}})",
+                        "B",
+                    ),
+                ],
+                "fieldConfig": {
+                    "defaults": {
+                        "custom": {"drawStyle": "line", "lineWidth": 2},
+                        "unit": "none",
+                        "min": 0,
+                        "max": 1,
                     },
-                    {
-                        "expr": 'sentimentizer_training_val_loss{model_type=~"$model_type"}',
-                        "format": "table",
-                        "instant": True,
-                        "legendFormat": "Val Loss",
-                        "refId": "C",
-                    },
-                    {
-                        "expr": 'sentimentizer_training_val_cohen_kappa{model_type=~"$model_type"}',
-                        "format": "table",
-                        "instant": True,
-                        "legendFormat": "Kappa",
-                        "refId": "D",
-                    },
-                    {
-                        "expr": 'sentimentizer_training_val_precision{model_type=~"$model_type"}',
-                        "format": "table",
-                        "instant": True,
-                        "legendFormat": "Precision",
-                        "refId": "E",
-                    },
-                    {
-                        "expr": 'sentimentizer_training_val_recall{model_type=~"$model_type"}',
-                        "format": "table",
-                        "instant": True,
-                        "legendFormat": "Recall",
-                        "refId": "F",
-                    },
-                    {
-                        "expr": 'sentimentizer_training_val_f1{model_type=~"$model_type"}',
-                        "format": "table",
-                        "instant": True,
-                        "legendFormat": "F1",
-                        "refId": "G",
-                    },
-                    {
-                        "expr": 'sentimentizer_training_val_positive_accuracy{model_type=~"$model_type"}',
-                        "format": "table",
-                        "instant": True,
-                        "legendFormat": "Pos Acc",
-                        "refId": "H",
-                    },
-                    {
-                        "expr": 'sentimentizer_training_val_negative_accuracy{model_type=~"$model_type"}',
-                        "format": "table",
-                        "instant": True,
-                        "legendFormat": "Neg Acc",
-                        "refId": "I",
-                    },
+                    "overrides": [],
+                },
+            },
+            {
+                "title": "Current Epoch & Metrics Snapshot",
+                "type": "table",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 24, "x": 0, "y": 16},
+                "targets": [
+                    _table_target(
+                        "sentimentizer_training_epoch", "ray_sentimentizer_live_epoch", "Epoch", "A"
+                    ),
+                    _table_target(
+                        "sentimentizer_training_train_loss",
+                        "ray_sentimentizer_live_train_loss",
+                        "Train Loss",
+                        "B",
+                    ),
+                    _table_target(
+                        "sentimentizer_training_val_loss",
+                        "ray_sentimentizer_live_val_loss",
+                        "Val Loss",
+                        "C",
+                    ),
+                    _table_target(
+                        "sentimentizer_training_val_accuracy",
+                        "ray_sentimentizer_live_val_accuracy",
+                        "Accuracy",
+                        "D",
+                    ),
+                    _table_target(
+                        "sentimentizer_training_val_f1", "ray_sentimentizer_live_val_f1", "F1", "E"
+                    ),
+                    _table_target(
+                        "sentimentizer_training_val_precision",
+                        "ray_sentimentizer_live_val_precision",
+                        "Precision",
+                        "F",
+                    ),
+                    _table_target(
+                        "sentimentizer_training_val_recall",
+                        "ray_sentimentizer_live_val_recall",
+                        "Recall",
+                        "G",
+                    ),
+                    _table_target(
+                        "sentimentizer_training_val_cohen_kappa",
+                        "ray_sentimentizer_live_val_cohen_kappa",
+                        "Kappa",
+                        "H",
+                    ),
+                    _table_target(
+                        "sentimentizer_training_val_positive_accuracy",
+                        "ray_sentimentizer_live_val_positive_accuracy",
+                        "Pos Acc",
+                        "I",
+                    ),
+                    _table_target(
+                        "sentimentizer_training_val_negative_accuracy",
+                        "ray_sentimentizer_live_val_negative_accuracy",
+                        "Neg Acc",
+                        "J",
+                    ),
                 ],
                 "transformations": [
                     {"id": "merge", "options": {}},
@@ -644,12 +760,13 @@ def generate_ml_metrics_dashboard():
                                 "Value #A": "Epoch",
                                 "Value #B": "Train Loss",
                                 "Value #C": "Val Loss",
-                                "Value #D": "Kappa",
-                                "Value #E": "Precision",
-                                "Value #F": "Recall",
-                                "Value #G": "F1",
-                                "Value #H": "Pos Acc",
-                                "Value #I": "Neg Acc",
+                                "Value #D": "Accuracy",
+                                "Value #E": "F1",
+                                "Value #F": "Precision",
+                                "Value #G": "Recall",
+                                "Value #H": "Kappa",
+                                "Value #I": "Pos Acc",
+                                "Value #J": "Neg Acc",
                             },
                         },
                     },
@@ -666,9 +783,38 @@ def generate_ml_metrics_dashboard():
     return json.dumps(data, indent=4), None
 
 
+def _cleanup_stale_base_files(output_dir: str) -> None:
+    """Remove *_base.json files that cause duplicate UID errors in Grafana.
+
+    These files are artefacts of previous script versions that wrote an
+    unpatched copy alongside the patched one.  Grafana loads every .json file
+    in the provisioning directory; if two files share the same ``uid`` field
+    Grafana logs:
+
+        "the same UID is used more than once"
+        "dashboards provisioning provider has no database write permissions
+         because of duplicates"
+
+    …and refuses to load ANY dashboard in the folder.  Removing the stale
+    ``*_base.json`` files eliminates the duplicates.
+    """
+    import glob
+
+    removed = []
+    for path in glob.glob(os.path.join(output_dir, "*_base.json")):
+        os.remove(path)
+        removed.append(os.path.basename(path))
+    if removed:
+        print(f"Removed {len(removed)} stale base file(s): {', '.join(removed)}")
+
+
 def main():
     output_dir = "metrics/grafana/dashboards"
     os.makedirs(output_dir, exist_ok=True)
+
+    # Remove *_base.json files that create duplicate UIDs and block Grafana
+    # from loading any provisioned dashboard.
+    _cleanup_stale_base_files(output_dir)
 
     generators = {
         "default_grafana_dashboard": generate_default_grafana_dashboard,

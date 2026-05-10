@@ -269,7 +269,7 @@ stop-metrics:
 	@echo "Stopping exporter..."
 	@pkill -f "sentimentizer/exporter.py" 2>/dev/null || true
 	@echo "Stopping Docker containers (this may take a few seconds)..."
-	@cd metrics && docker compose down -t 2 || true
+	@cd metrics && docker compose down -t 10 || true
 	@echo "Metrics stopped."
 
 # ──────────────────────────────────────────────
