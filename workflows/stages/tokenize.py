@@ -21,21 +21,27 @@ def run_tokenize(state: State, *, resume: bool = False) -> None:
 
     stop = TokenizerConfig.stop
     existing_rows = _parquet_row_count(DriverConfig.files.processed_reviews_file_path)
-    if existing_rows >= stop:
+    skip_data = existing_rows >= stop
+
+    if skip_data and (resume or state.run_type == "update"):
         logger.info(f"skipping tokenize: {existing_rows} rows already exist (need {stop})")
         return
 
-    # For 'new' runs, always (re)create the dictionary and re-tokenize
     if state.run_type == "new":
+        if skip_data:
+            logger.info(
+                f"skipping data creation: {existing_rows} rows already exist (need {stop})"
+            )
         if is_ray_available():
             import ray
 
             reviews_data = ray.data.read_parquet(DriverConfig.files.raw_reviews_file_path)
             tokenizer = Tokenizer.from_dataset(reviews_data)
 
-            processed_ds = tokenizer.transform_dataset(reviews_data)
-            _remove_path(DriverConfig.files.processed_reviews_file_path)
-            processed_ds.write_parquet(DriverConfig.files.processed_reviews_file_path)
+            if not skip_data:
+                processed_ds = tokenizer.transform_dataset(reviews_data)
+                _remove_path(DriverConfig.files.processed_reviews_file_path)
+                processed_ds.write_parquet(DriverConfig.files.processed_reviews_file_path)
         else:
             import os
 
@@ -44,14 +50,15 @@ def run_tokenize(state: State, *, resume: bool = False) -> None:
             reviews_data = pd.read_parquet(DriverConfig.files.raw_reviews_file_path)
             tokenizer = Tokenizer.from_data(reviews_data)
 
-            processed_df = tokenizer.transform_dataframe(reviews_data)
-            _remove_path(DriverConfig.files.processed_reviews_file_path)
-            os.makedirs(
-                os.path.dirname(DriverConfig.files.processed_reviews_file_path), exist_ok=True
-            )
-            processed_df.to_parquet(
-                DriverConfig.files.processed_reviews_file_path, engine="pyarrow"
-            )
+            if not skip_data:
+                processed_df = tokenizer.transform_dataframe(reviews_data)
+                _remove_path(DriverConfig.files.processed_reviews_file_path)
+                os.makedirs(
+                    os.path.dirname(DriverConfig.files.processed_reviews_file_path), exist_ok=True
+                )
+                processed_df.to_parquet(
+                    DriverConfig.files.processed_reviews_file_path, engine="pyarrow"
+                )
 
     elif resume or state.run_type == "update":
         if is_ray_available():

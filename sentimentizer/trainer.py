@@ -328,10 +328,10 @@ class Trainer:
                     pass
                 logger.info(
                     f"[{self.model_type}] [epoch {epoch}] {i / n:.2f} of rows completed in "
-                    f"{j + 1} cycles, current loss at {np.mean(self.losses[-60:]):.6f}"
+                    f"{j + 1} cycles, current loss at {np.mean(self.losses[-60:]):.4f}"
                 )
                 logger.info(
-                    f"[{self.model_type}] [epoch {epoch}] current learning rate at {self.optimizer.param_groups[0]['lr']:.6f}"  # noqa: E501
+                    f"[{self.model_type}] [epoch {epoch}] current learning rate at {self.optimizer.param_groups[0]['lr']:.4f}"  # noqa: E501
                 )
 
     def fit(
@@ -346,7 +346,13 @@ class Trainer:
         if epochs == -1:
             epochs = default_epochs(self.model_type)
 
-        logger.info(f"[{self.model_type}] fitting model...")
+        logger.info(
+            f"[{self.model_type}] fitting model...",
+        )
+        logger.info(
+            f"[{self.model_type}] config: model={model.__class__.__name__}, "
+            f"epochs={epochs}, device={self.cfg.device}"
+        )
 
         best_val_loss = float("inf")
         patience_counter = 0
@@ -378,7 +384,7 @@ class Trainer:
                     save_checkpoint(model, self.optimizer, epoch + 1, best_path)
                     logger.info(
                         f"[{self.model_type}] saved best model checkpoint "
-                        f"(val_loss={self.val_loss:.6f}): {best_path}"
+                        f"(val_loss={self.val_loss:.4f}): {best_path}"
                     )
 
                 # Early stopping based on validation loss
@@ -396,7 +402,7 @@ class Trainer:
                             break
 
                 logger.info(
-                    f"[{self.model_type}] [epoch {epoch}] completed, val_loss={self.val_loss:.6f}"
+                    f"[{self.model_type}] [epoch {epoch}] completed, val_loss={self.val_loss:.4f}"
                 )
         finally:
             # Release CUDA resources even on Ctrl-C or exception.
@@ -518,15 +524,15 @@ class Trainer:
         logger.info(  # type: ignore[call-arg]
             f"[{self.model_type}] [epoch {epoch}] evaluation complete",
             model_type=self.model_type,
-            val_loss=self.val_loss,
-            accuracy=metrics.accuracy,
-            precision=metrics.precision,
-            recall=metrics.recall,
-            f1=metrics.f1,
-            cohen_kappa=metrics.cohen_kappa,
-            auc_roc=metrics.auc_roc,
-            pos_acc=metrics.positive_accuracy,
-            neg_acc=metrics.negative_accuracy,
+            val_loss=round(self.val_loss, 4),
+            accuracy=round(metrics.accuracy, 4),
+            precision=round(metrics.precision, 4),
+            recall=round(metrics.recall, 4),
+            f1=round(metrics.f1, 4),
+            cohen_kappa=round(metrics.cohen_kappa, 4),
+            auc_roc=round(metrics.auc_roc, 4) if metrics.auc_roc is not None else None,
+            pos_acc=round(metrics.positive_accuracy, 4),
+            neg_acc=round(metrics.negative_accuracy, 4),
         )
 
 
@@ -716,7 +722,14 @@ def _train_func(config: dict) -> None:
     val_shard = train.get_dataset_shard("val")
 
     start = time.time()
-    logger.info(f"[{model_type}] fitting model (distributed)...")
+    logger.info(
+        f"[{model_type}] fitting model (distributed)...",
+    )
+    logger.info(
+        f"[{model_type}] config: model={model.__class__.__name__}, "
+        f"epochs={epochs}, lr={lr}, device={device}, "
+        f"use_warmup={use_warmup}, warmup_steps={warmup_steps}, total_steps={total_steps}"
+    )
 
     for epoch in range(epochs):
         model.train()
@@ -858,16 +871,16 @@ def _train_func(config: dict) -> None:
         logger.info(  # type: ignore[call-arg]
             f"[{model_type}] [epoch {epoch}] completed",
             model_type=model_type,
-            train_loss=train_loss,
-            val_loss=val_loss,
-            accuracy=metrics.accuracy,
-            precision=metrics.precision,
-            recall=metrics.recall,
-            f1=metrics.f1,
-            cohen_kappa=metrics.cohen_kappa,
-            auc_roc=metrics.auc_roc,
-            pos_acc=metrics.positive_accuracy,
-            neg_acc=metrics.negative_accuracy,
+            train_loss=round(train_loss, 4),
+            val_loss=round(val_loss, 4),
+            accuracy=round(metrics.accuracy, 4),
+            precision=round(metrics.precision, 4),
+            recall=round(metrics.recall, 4),
+            f1=round(metrics.f1, 4),
+            cohen_kappa=round(metrics.cohen_kappa, 4),
+            auc_roc=round(metrics.auc_roc, 4) if metrics.auc_roc is not None else None,
+            pos_acc=round(metrics.positive_accuracy, 4),
+            neg_acc=round(metrics.negative_accuracy, 4),
         )
 
         # Report metrics and checkpoint to Ray Train

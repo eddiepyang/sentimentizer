@@ -480,9 +480,9 @@ def _publish_distributed_metrics(result: Any, model_type: str) -> None:
         logger.info(
             "distributed_metrics_published_to_prometheus",
             model_type=model_type,
-            accuracy=metrics.get("accuracy"),
-            val_loss=metrics.get("val_loss"),
-            train_loss=metrics.get("train_loss"),
+            accuracy=round(metrics.get("accuracy", 0), 4),
+            val_loss=round(metrics.get("val_loss", 0), 4),
+            train_loss=round(metrics.get("train_loss", 0), 4),
         )
     except ImportError:
         logger.warning(
