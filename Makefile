@@ -15,6 +15,8 @@ STOP ?= 300000
 RUN_TYPE ?= new
 # Checkpoint directory (empty = no checkpointing)
 CHECKPOINT_DIR ?=
+# Default metrics exporter port
+EXPORTER_PORT ?= 8081
 
 # ──────────────────────────────────────────────
 # Setup
@@ -246,28 +248,28 @@ setup-dashboards:
 
 ## Start the Sentimentizer Prometheus metrics exporter (system, GPU, Ray health)
 start-exporter:
-	uv run python sentimentizer/exporter.py &
+	@bash -c '( nohup uv run python sentimentizer/exporter.py --addr 0.0.0.0 >/dev/null 2>&1 & disown )'
 
 ## Stop the Sentimentizer metrics exporter
 stop-exporter:
-	@pkill -f "sentimentizer/exporter.py" 2>/dev/null || true
+	@pgrep -f "[s]entimentizer/exporter.py" | xargs -r kill 2>/dev/null || true
 
 ## Start Prometheus, Grafana, and metrics exporter for dashboard metrics
 start-metrics: setup-dashboards
-	cd metrics && docker compose up -d
+	@cd metrics && docker compose up -d
 	@echo "Restarting Grafana to load newly generated dashboards..."
-	cd metrics && docker compose restart grafana
+	@cd metrics && docker compose restart grafana
 	@echo "Stopping old metrics exporter if running..."
-	@pkill -f "sentimentizer/exporter.py" 2>/dev/null || true
+	@pgrep -f "[s]entimentizer/exporter.py" | xargs -r kill 2>/dev/null || true
 	@echo "Starting metrics exporter (port 8081)..."
-	uv run python sentimentizer/exporter.py &
+	@bash -c '( nohup uv run python sentimentizer/exporter.py --addr 0.0.0.0 >/dev/null 2>&1 & disown )'
 	@sleep 2
 	@echo "All metrics services running. Grafana: http://localhost:3000 (admin/admin)"
 
 ## Stop Prometheus, Grafana, and metrics exporter
 stop-metrics:
 	@echo "Stopping exporter..."
-	@pkill -f "sentimentizer/exporter.py" 2>/dev/null || true
+	@pgrep -f "[s]entimentizer/exporter.py" | xargs -r kill 2>/dev/null || true
 	@echo "Stopping Docker containers (this may take a few seconds)..."
 	@cd metrics && docker compose down -t 10 || true
 	@echo "Metrics stopped."

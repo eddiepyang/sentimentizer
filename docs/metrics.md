@@ -176,16 +176,43 @@ During training, `torch.sigmoid()` on extreme logit values can produce NaN, whic
 ## Starting the Metrics Stack
 
 ```bash
-# Start Prometheus + Grafana
-cd metrics && docker compose up -d
+# Start Prometheus + Grafana + exporter (all in one)
+make start-metrics
 
-# Start the standalone metrics exporter (port 8081)
-make start-exporter
-# or: uv run python sentimentizer/exporter.py
-
-# Start training (driver writes metrics to JSON file automatically)
-make train-distributed
+# Or run components individually:
+cd metrics && docker compose up -d          # Prometheus + Grafana
+make start-exporter                           # Standalone exporter
 ```
+
+### Exporter address (`--addr`)
+
+`sentimentizer/exporter.py` accepts an `--addr` argument (default `127.0.0.1`):
+
+```bash
+# Localhost only (default) — not reachable from Docker
+uv run python sentimentizer/exporter.py --port 8081 --addr 127.0.0.1
+
+# Listen on all interfaces — required when Prometheus runs in Docker
+uv run python sentimentizer/exporter.py --port 8081 --addr 0.0.0.0
+```
+
+Prometheus is configured to scrape `host.docker.internal:8081`. On Linux this resolves to the Docker bridge IP (`172.17.0.1`), so the exporter **must** bind to `0.0.0.0` (not `127.0.0.1`) for Prometheus to reach it from within a container.
+
+### Daemonization (`make start-metrics` vs `&`)
+
+The `Makefile` uses `nohup … & disown` (inside a `bash -c` subshell) instead of plain `&`. This is required because `make` spawns a shell that terminates when the target finishes, which sends `SIGHUP` to background jobs and kills them.
+
+- `nohup` catches SIGHUP
+- `disown` removes the job from shell tracking entirely
+- The process survives after `make start-metrics` exits
+
+### Port conflicts
+
+- Port 8080: Ray metrics (auto-configured by `ray.init(_metrics_export_port=8080)`)
+- Port 8081: Standalone exporter (`sentimentizer/exporter.py`)
+- Port 8082: Tune metrics (started by `tune_model()`)
+
+If a port is already in use, the code logs a warning and continues — `prometheus_client` gauges are process-global, so metrics still work within the same process.
 
 ## Grafana Dashboards
 
@@ -223,17 +250,32 @@ The standalone exporter (port 8081) reads persisted metrics from `/tmp/sentiment
 
 This has been fixed. NaN values in probabilities (from extreme logit values) are now replaced with 0.5 at multiple levels. See the "NaN Handling" section above.
 
+### Exporter shows `up=0` in Prometheus or `Connection refused`
+
+This is usually one of three problems:
+
+1. **Exporter launched without `--addr 0.0.0.0`**  
+   By default `sentimentizer/exporter.py` binds to `127.0.0.1` (localhost only). Prometheus runs inside Docker and reaches the host via `host.docker.internal`, which resolves to the Docker bridge IP (`172.17.0.1`). If the exporter is on `127.0.0.1`, the container sees `Connection refused`.  
+   **Fix:** Start with `--addr 0.0.0.0`:
+   ```bash
+   make start-exporter   # (Makefile already passes --addr 0.0.0.0)
+   ```
+
+2. **Exporter dies when `make` exits**  
+   `make` spawns a shell that terminates when the target finishes. Background `&` jobs inside that shell receive `SIGHUP` and die.  
+   **Fix:** The `Makefile` now uses `nohup … & disown` inside a `bash -c` subshell so the exporter survives the shell exit.
+
+3. **`make start-metrics` terminates before reaching "All metrics services running"**  
+   `pkill -f "sentimentizer/exporter.py"` matched **itself** (its own command line contains `"sentimentizer/exporter.py"`), so it killed the shell running `make`.  
+   **Fix:** The kill pattern now uses the bracket trick:  
+   ```bash
+   pgrep -f "[s]entimentizer/exporter.py"
+   ```  
+   The `[s]` is a regex character class matching the letter `s`, but the literal `[s]` in `pgrep`'s own argv doesn't match the pattern, so `pgrep` filters itself out.
+
 ### Ray metrics not appearing
 
 Ray metrics are only available while Ray is running. Check that `ray` is in the UP state at `http://localhost:9090/targets`. The `ray_sentimentizer_live_*` gauges are set by rank 0 workers every 100 training steps.
-
-### Port conflicts
-
-- Port 8080: Ray metrics (auto-configured by `ray.init(_metrics_export_port=8080)`)
-- Port 8081: Standalone exporter (`sentimentizer/exporter.py`)
-- Port 8082: Tune metrics (started by `tune_model()`)
-
-If a port is already in use, the code logs a warning and continues — `prometheus_client` gauges are process-global, so metrics still work within the same process.
 
 ### Grafana PromQL Parse Errors (e.g., `unexpected ","`)
 

@@ -468,6 +468,11 @@ def main() -> None:
         "--port", type=int, default=8081, help="Port to serve metrics on (default: 8081)"
     )
     parser.add_argument(
+        "--addr",
+        default="127.0.0.1",
+        help="Address to serve metrics on (default: 127.0.0.1)",
+    )
+    parser.add_argument(
         "--interval",
         type=int,
         default=10,
@@ -509,7 +514,7 @@ def main() -> None:
     collector.start()
 
     # Start Prometheus HTTP server
-    start_http_server(args.port)
+    start_http_server(args.port, addr=args.addr)
     logger.info("Sentimentizer metrics exporter started on port %d", args.port)
     logger.info("Collecting metrics every %d seconds", args.interval)
     logger.info("Ray metrics URL: %s", args.ray_url)

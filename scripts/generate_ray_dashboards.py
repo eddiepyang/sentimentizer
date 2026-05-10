@@ -928,6 +928,15 @@ def generate_tune_metrics_dashboard() -> tuple[str, None]:
                 "targets": [
                     _target_trial("sentimentizer_tune_val_accuracy", "Trial {{trial_id}}", "A")
                 ],
+                "fieldConfig": {
+                    "defaults": {
+                        "custom": {"drawStyle": "line", "lineWidth": 2},
+                        "unit": "none",
+                        "min": 0,
+                        "max": 1,
+                    },
+                    "overrides": [],
+                },
             },
             {
                 "title": "Train vs Val Loss (per trial)",
@@ -938,6 +947,13 @@ def generate_tune_metrics_dashboard() -> tuple[str, None]:
                     _target_trial("sentimentizer_tune_train_loss", "Train {{trial_id}}", "A"),
                     _target_trial("sentimentizer_tune_val_loss", "Val {{trial_id}}", "B"),
                 ],
+                "fieldConfig": {
+                    "defaults": {
+                        "custom": {"drawStyle": "line", "lineWidth": 2},
+                        "unit": "none",
+                    },
+                    "overrides": [],
+                },
             },
             {
                 "title": "Val Precision (per trial)",
@@ -947,6 +963,15 @@ def generate_tune_metrics_dashboard() -> tuple[str, None]:
                 "targets": [
                     _target_trial("sentimentizer_tune_val_precision", "Trial {{trial_id}}", "A")
                 ],
+                "fieldConfig": {
+                    "defaults": {
+                        "custom": {"drawStyle": "line", "lineWidth": 2},
+                        "unit": "none",
+                        "min": 0,
+                        "max": 1,
+                    },
+                    "overrides": [],
+                },
             },
             {
                 "title": "Val Recall (per trial)",
@@ -956,6 +981,15 @@ def generate_tune_metrics_dashboard() -> tuple[str, None]:
                 "targets": [
                     _target_trial("sentimentizer_tune_val_recall", "Trial {{trial_id}}", "A")
                 ],
+                "fieldConfig": {
+                    "defaults": {
+                        "custom": {"drawStyle": "line", "lineWidth": 2},
+                        "unit": "none",
+                        "min": 0,
+                        "max": 1,
+                    },
+                    "overrides": [],
+                },
             },
             {
                 "title": "Val F1 (per trial)",
@@ -963,6 +997,15 @@ def generate_tune_metrics_dashboard() -> tuple[str, None]:
                 "datasource": _DS,
                 "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
                 "targets": [_target_trial("sentimentizer_tune_val_f1", "Trial {{trial_id}}", "A")],
+                "fieldConfig": {
+                    "defaults": {
+                        "custom": {"drawStyle": "line", "lineWidth": 2},
+                        "unit": "none",
+                        "min": 0,
+                        "max": 1,
+                    },
+                    "overrides": [],
+                },
             },
             {
                 "title": "Val Cohen's Kappa (per trial)",
@@ -972,6 +1015,15 @@ def generate_tune_metrics_dashboard() -> tuple[str, None]:
                 "targets": [
                     _target_trial("sentimentizer_tune_val_cohen_kappa", "Trial {{trial_id}}", "A")
                 ],
+                "fieldConfig": {
+                    "defaults": {
+                        "custom": {"drawStyle": "line", "lineWidth": 2},
+                        "unit": "none",
+                        "min": 0,
+                        "max": 1,
+                    },
+                    "overrides": [],
+                },
             },
             {
                 "title": "Per-Class Accuracy (per trial)",
@@ -986,6 +1038,15 @@ def generate_tune_metrics_dashboard() -> tuple[str, None]:
                         "sentimentizer_tune_val_negative_accuracy", "Neg {{trial_id}}", "B"
                     ),
                 ],
+                "fieldConfig": {
+                    "defaults": {
+                        "custom": {"drawStyle": "line", "lineWidth": 2},
+                        "unit": "none",
+                        "min": 0,
+                        "max": 1,
+                    },
+                    "overrides": [],
+                },
             },
             {
                 "title": "Epoch (per trial)",
@@ -993,6 +1054,13 @@ def generate_tune_metrics_dashboard() -> tuple[str, None]:
                 "datasource": _DS,
                 "gridPos": {"h": 8, "w": 12, "x": 12, "y": 32},
                 "targets": [_target_trial("sentimentizer_tune_epoch", "Trial {{trial_id}}", "A")],
+                "fieldConfig": {
+                    "defaults": {
+                        "custom": {"drawStyle": "line", "lineWidth": 2},
+                        "unit": "none",
+                    },
+                    "overrides": [],
+                },
             },
         ],
         "refresh": "5s",
@@ -1002,6 +1070,7 @@ def generate_tune_metrics_dashboard() -> tuple[str, None]:
         "templating": {
             "list": [
                 {
+                    "allValue": ".*",
                     "current": {"selected": False, "text": "All", "value": "$__all"},
                     "datasource": _DS,
                     "definition": "label_values(sentimentizer_tune_trial_count, model_type)",
@@ -1099,8 +1168,27 @@ def generate_system_metrics_dashboard() -> tuple[str, None]:
                 "datasource": _DS,
                 "gridPos": {"h": 4, "w": 3, "x": 6, "y": 0},
                 "targets": [_target("sentimentizer_ray_available", "Up", "A")],
+                "fieldConfig": {
+                    "defaults": {
+                        "color": {"mode": "thresholds"},
+                        "mappings": [
+                            {"type": "value", "value": "0", "text": "DOWN"},
+                            {"type": "value", "value": "1", "text": "UP"},
+                        ],
+                        "thresholds": {
+                            "mode": "absolute",
+                            "steps": [
+                                {"color": "red", "value": None},
+                                {"color": "green", "value": 1},
+                            ],
+                        },
+                        "decimals": 0,
+                        "unit": "none",
+                    },
+                    "overrides": [],
+                },
                 "options": {
-                    "colorMode": "value",
+                    "colorMode": "background",
                     "graphMode": "none",
                     "justifyMode": "auto",
                     "textMode": "auto",
@@ -1138,8 +1226,27 @@ def generate_system_metrics_dashboard() -> tuple[str, None]:
                 "datasource": _DS,
                 "gridPos": {"h": 4, "w": 3, "x": 15, "y": 0},
                 "targets": [_target("sentimentizer_ray_controller_state", "State", "A")],
+                "fieldConfig": {
+                    "defaults": {
+                        "color": {"mode": "thresholds"},
+                        "mappings": [
+                            {"type": "value", "value": "0", "text": "INACTIVE"},
+                            {"type": "value", "value": "1", "text": "ACTIVE"},
+                        ],
+                        "thresholds": {
+                            "mode": "absolute",
+                            "steps": [
+                                {"color": "red", "value": None},
+                                {"color": "green", "value": 1},
+                            ],
+                        },
+                        "decimals": 0,
+                        "unit": "none",
+                    },
+                    "overrides": [],
+                },
                 "options": {
-                    "colorMode": "value",
+                    "colorMode": "background",
                     "graphMode": "none",
                     "justifyMode": "auto",
                     "textMode": "auto",
