@@ -189,6 +189,7 @@ def _fix_panel_targets(data: dict) -> dict:
     Applies _fix_promql_expr to each expr value, but NOT to legendFormat or
     other Grafana template syntax fields.
     """
+
     def _fix_panels(panels):
         for panel in panels:
             for target in panel.get("targets", []):
@@ -275,8 +276,7 @@ def patch_default_dashboard(data: dict) -> dict:
         fallback_max = {
             "exemplar": True,
             "expr": (
-                "sum(ray_node_cpu_count"
-                '{SessionName=~"$SessionName",ray_io_cluster=~"$Cluster"})'
+                "sum(ray_node_cpu_count" '{SessionName=~"$SessionName",ray_io_cluster=~"$Cluster"})'
             ),
             "interval": "",
             "legendFormat": "MAX (fallback)",
