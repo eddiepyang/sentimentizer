@@ -23,6 +23,8 @@ except ImportError:
 from sentimentizer import new_logger
 from sentimentizer.config import (
     DEFAULT_LOG_LEVEL,
+    DecoderOptimizationParams,
+    DecoderSchedulerParams,
     DriverConfig,
     EncoderOptimizationParams,
     EncoderSchedulerParams,
@@ -536,20 +538,28 @@ class Trainer:
         )
 
 
-def _get_opt_params(model_type: str) -> OptimizationParams | EncoderOptimizationParams:
+def _get_opt_params(
+    model_type: str,
+) -> OptimizationParams | EncoderOptimizationParams | DecoderOptimizationParams:
     """Return optimization params appropriate for the model type."""
-    if model_type in ("encoder", "decoder"):
+    if model_type == "decoder":
+        return DecoderOptimizationParams()
+    if model_type == "encoder":
         return EncoderOptimizationParams()
-    elif model_type == "rnn":
+    if model_type == "rnn":
         return OptimizationParams()
     raise ValueError(f"no matching model: {model_type}")
 
 
-def _get_sched_params(model_type: str) -> SchedulerParams | EncoderSchedulerParams:
+def _get_sched_params(
+    model_type: str,
+) -> SchedulerParams | EncoderSchedulerParams | DecoderSchedulerParams:
     """Return scheduler params appropriate for the model type."""
-    if model_type in ("encoder", "decoder"):
+    if model_type == "encoder":
         return EncoderSchedulerParams()
-    elif model_type == "rnn":
+    if model_type == "decoder":
+        return DecoderSchedulerParams()
+    if model_type == "rnn":
         return SchedulerParams()
     raise ValueError(f"no matching model: {model_type}")
 
@@ -593,11 +603,10 @@ def new_trainer(
     )
 
     # Use warmup+cosine for transformer models, simple cosine for RNN
-    if isinstance(sched, EncoderSchedulerParams) and sched.warmup_epochs > 0:
-        # Estimate total steps: epochs * batches_per_epoch
-        # We'll use a rough estimate; the scheduler steps per optimizer call
-        warmup_steps = sched.warmup_epochs  # number of epoch-level steps for warmup
-        total_steps = sched.T_max  # total epoch-level steps
+    is_transformer = isinstance(sched, (EncoderSchedulerParams, DecoderSchedulerParams))
+    if is_transformer and sched.warmup_epochs > 0:
+        warmup_steps = sched.warmup_epochs
+        total_steps = sched.T_max
         scheduler = _LinearWarmupCosineScheduler(
             optimizer,
             warmup_steps=warmup_steps,
@@ -1062,8 +1071,9 @@ def new_ray_trainer(
     opt = _get_opt_params(model_type)
     sched = _get_sched_params(model_type)
 
-    use_warmup = isinstance(sched, EncoderSchedulerParams) and sched.warmup_epochs > 0
-    if isinstance(sched, EncoderSchedulerParams):
+    warmup_sched = isinstance(sched, (EncoderSchedulerParams, DecoderSchedulerParams))
+    use_warmup = warmup_sched and sched.warmup_epochs > 0
+    if warmup_sched:
         warmup_steps = sched.warmup_epochs
         total_steps = sched.T_max
     else:

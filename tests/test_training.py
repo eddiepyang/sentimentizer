@@ -325,7 +325,8 @@ class TestOptAndSchedParams:
 
     def test_decoder_opt_params(self) -> None:
         opt = _get_opt_params("decoder")
-        assert opt.lr == 0.0005
+        assert opt.lr == 0.0003
+        assert opt.weight_decay == 0.02
 
     def test_rnn_sched_params(self) -> None:
         sched = _get_sched_params("rnn")
@@ -338,7 +339,7 @@ class TestOptAndSchedParams:
 
     def test_decoder_sched_params(self) -> None:
         sched = _get_sched_params("decoder")
-        assert sched.warmup_epochs == 1
+        assert sched.warmup_epochs == 2
         assert sched.T_max == 8
 
 
