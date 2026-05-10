@@ -444,13 +444,13 @@ Kubernetes manifests are in the `k8s/` directory:
 
 ### With uv (recommended)
 
-This project uses [uv](https://docs.astral.sh/uv/) for dependency management:
+This project uses [uv](https://docs.astral.sh/uv/) for dependency management. PyTorch is configured to resolve from the CPU-only wheel index by default (no NVIDIA packages), which is what CI uses. For local GPU development, see the CUDA setup instructions below.
 
 ```bash
 # Install uv (if not already installed)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Install dependencies (local-only mode)
+# Install dependencies (CPU-only PyTorch, no Ray)
 uv sync
 
 # Install with Ray distributed features
@@ -459,6 +459,16 @@ uv sync --extra ray
 # Install with dev dependencies
 uv sync --extra dev --extra ray
 ```
+
+#### Local CUDA / GPU development
+
+The committed lockfile resolves CPU-only PyTorch (no NVIDIA packages). To install CUDA-enabled PyTorch locally:
+
+```bash
+uv sync --no-sources-package torch
+```
+
+This ignores the CPU-only source override in `pyproject.toml` and resolves PyTorch from PyPI (with CUDA support and NVIDIA packages). Note that this will modify `uv.lock` — do not commit those changes.
 
 ### With conda
 

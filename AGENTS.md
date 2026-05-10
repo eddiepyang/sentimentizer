@@ -144,3 +144,4 @@ Grafana only reads provisioned dashboard files on **startup**, so a restart is r
 - When iterating over DataFrame or batch columns containing token lists, use `list(doc_tokens)` with a `TypeError` catch — never `str(doc_tokens)`. Numpy arrays from parquet are iterable but not `isinstance(x, list)`, and `str()` produces array representations with wrapping quotes
 - Scheduler `T_max` must match `default_epochs()` for the model type — otherwise LR decays to minimum before training finishes
 - _LinearWarmupCosineScheduler warmup must use `(step + 1) / warmup_steps` to avoid zero LR at step 0
+- PyTorch CPU-only torch is configured via `[tool.uv.sources]` and `[[tool.uv.index]]` in `pyproject.toml`. CI uses `uv sync` (CPU-only, no nvidia packages). For local CUDA development, run `uv sync --no-sources-package torch` to resolve the CUDA variant from PyPI.
