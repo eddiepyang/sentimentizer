@@ -28,7 +28,7 @@ jobs:
 
     - name: install dependencies (CPU-only torch)
       run: |
-        uv sync --extra dev \
+        uv sync --extra dev,ray \
           --no-install-package nvidia-cublas \
           --no-install-package nvidia-cuda-cupti \
           --no-install-package nvidia-cuda-nvrtc \
