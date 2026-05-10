@@ -90,7 +90,7 @@ class EncoderSchedulerParams:
     Includes warmup_epochs for linear LR warmup at the start of training.
     """
 
-    T_max: int = 4
+    T_max: int = 8
     eta_min: float = 1e-6
     last_epoch: int = -1
     warmup_epochs: int = 1  # linear warmup for this many epochs
