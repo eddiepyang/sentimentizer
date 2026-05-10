@@ -19,7 +19,11 @@ except ImportError as e:
     sys.exit(1)
 
 
-def save_dashboard(name, generator, output_dir):
+from collections.abc import Callable
+from typing import Any
+
+
+def save_dashboard(name: str, generator: Callable[[], tuple[str, Any]], output_dir: str) -> None:
     try:
         content, _ = generator()
         output_path = os.path.join(output_dir, f"{name}.json")
@@ -161,7 +165,7 @@ def _patch_template_vars(templating: dict, fallback_metrics: list[str]) -> dict:
                 # Replace metric with {filters}
                 candidate = re.sub(
                     r"label_values\((\w+)\{([^}]*)\},",
-                    lambda m: f"label_values({fb}{{{m.group(2)}}},",
+                    lambda m, _fb=fb: f"label_values({_fb}{{{m.group(2)}}},",
                     fixed_val,
                 )
                 # Replace metric without braces
@@ -189,7 +193,7 @@ def _fix_panel_targets(data: dict) -> dict:
     other Grafana template syntax fields.
     """
 
-    def _fix_panels(panels):
+    def _fix_panels(panels: list[dict]) -> None:
         for panel in panels:
             for target in panel.get("targets", []):
                 if "expr" in target:
@@ -425,7 +429,7 @@ def _rewrite_datasource_uid(data: dict, old_uid: str, new_uid: str) -> None:
     ({"type": ..., "uid": old_uid}) in panels, rows, and annotation lists.
     """
 
-    def _fix_panels(panels):
+    def _fix_panels(panels: list[dict]) -> None:
         for panel in panels:
             ds = panel.get("datasource")
             if ds == old_uid:
@@ -450,7 +454,7 @@ def _rewrite_datasource_uid(data: dict, old_uid: str, new_uid: str) -> None:
             ann_ds["uid"] = new_uid
 
 
-def generate_ml_metrics_dashboard():
+def generate_ml_metrics_dashboard() -> tuple[str, None]:
     """Generate the Sentimentizer Training dashboard.
 
     Dashboard UID: ``sentimentizerTraining`` (docs/metrics.md line 150).
@@ -470,7 +474,7 @@ def generate_ml_metrics_dashboard():
     """
     _DS = {"type": "prometheus", "uid": "prometheus"}
 
-    def _target(metric: str, live_metric: str, legend: str, ref: str, **extra) -> dict:
+    def _target(metric: str, live_metric: str, legend: str, ref: str, **extra: Any) -> dict:
         lbl = '{model_type=~"$model_type"}'
         expr = f"{metric}{lbl}\n  or\n{live_metric}{lbl}"
         return {"datasource": _DS, "expr": expr, "legendFormat": legend, "refId": ref, **extra}
@@ -557,10 +561,44 @@ def generate_ml_metrics_dashboard():
         },
         "panels": [
             {
+                "title": "Current Epoch",
+                "type": "stat",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 4, "x": 0, "y": 0},
+                "targets": [
+                    _target(
+                        "sentimentizer_training_epoch",
+                        "ray_sentimentizer_live_epoch",
+                        "Epoch ({{model_type}})",
+                        "A",
+                    )
+                ],
+                "fieldConfig": {
+                    "defaults": {
+                        "color": {"mode": "fixed", "fixedColor": "super-light-blue"},
+                        "mappings": [],
+                        "thresholds": {
+                            "mode": "absolute",
+                            "steps": [{"color": "blue", "value": None}],
+                        },
+                        "unit": "none",
+                    },
+                    "overrides": [],
+                },
+                "options": {
+                    "colorMode": "value",
+                    "graphMode": "none",
+                    "justifyMode": "auto",
+                    "orientation": "auto",
+                    "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": False},
+                    "textMode": "auto",
+                },
+            },
+            {
                 "title": "Loss (Train vs Val)",
                 "type": "timeseries",
                 "datasource": _DS,
-                "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+                "gridPos": {"h": 8, "w": 10, "x": 4, "y": 0},
                 "targets": [
                     _target(
                         "sentimentizer_training_train_loss",
@@ -587,7 +625,7 @@ def generate_ml_metrics_dashboard():
                 "title": "Validation Core Metrics",
                 "type": "timeseries",
                 "datasource": _DS,
-                "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+                "gridPos": {"h": 8, "w": 10, "x": 14, "y": 0},
                 "targets": [
                     _target(
                         "sentimentizer_training_val_accuracy",
@@ -742,6 +780,12 @@ def generate_ml_metrics_dashboard():
                         "Neg Acc",
                         "J",
                     ),
+                    _table_target(
+                        "sentimentizer_training_val_auc_roc",
+                        "ray_sentimentizer_live_val_auc_roc",
+                        "AUC-ROC",
+                        "K",
+                    ),
                 ],
                 "transformations": [
                     {"id": "merge", "options": {}},
@@ -765,6 +809,7 @@ def generate_ml_metrics_dashboard():
                                 "Value #H": "Kappa",
                                 "Value #I": "Pos Acc",
                                 "Value #J": "Neg Acc",
+                                "Value #K": "AUC-ROC",
                             },
                         },
                     },
@@ -777,6 +822,510 @@ def generate_ml_metrics_dashboard():
                 },
             },
         ],
+    }
+    return json.dumps(data, indent=4), None
+
+
+def generate_tune_metrics_dashboard() -> tuple[str, None]:
+    """Generate the Sentimentizer Tuning dashboard.
+
+    Dashboard UID: ``sentimentizerTuning``.
+
+    Covers aggregate trial stats (best metrics, trial counts) and per-trial
+    time-series for all metrics emitted during Ray Tune runs.
+    """
+    _DS = {"type": "prometheus", "uid": "prometheus"}
+
+    def _target(metric: str, legend: str, ref: str) -> dict:
+        lbl = '{model_type=~"$model_type"}'
+        expr = f"{metric}{lbl}"
+        return {"datasource": _DS, "expr": expr, "legendFormat": legend, "refId": ref}
+
+    def _target_trial(metric: str, legend: str, ref: str) -> dict:
+        lbl = '{model_type=~"$model_type", trial_id=~"$trial_id"}'
+        expr = f"{metric}{lbl}"
+        return {"datasource": _DS, "expr": expr, "legendFormat": legend, "refId": ref}
+
+    data = {
+        "annotations": {"list": []},
+        "editable": True,
+        "fiscalYearStartMonth": 0,
+        "graphTooltip": 0,
+        "id": None,
+        "links": [],
+        "liveNow": False,
+        "panels": [
+            {
+                "title": "Completed Trials",
+                "type": "stat",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 5, "x": 0, "y": 0},
+                "targets": [_target("sentimentizer_tune_trial_completed_count", "Completed", "A")],
+                "options": {
+                    "colorMode": "value",
+                    "graphMode": "none",
+                    "justifyMode": "auto",
+                    "textMode": "auto",
+                },
+            },
+            {
+                "title": "Best Val Accuracy",
+                "type": "stat",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 5, "x": 5, "y": 0},
+                "targets": [_target("sentimentizer_tune_best_val_accuracy", "Best Acc", "A")],
+                "options": {
+                    "colorMode": "value",
+                    "graphMode": "none",
+                    "justifyMode": "auto",
+                    "textMode": "auto",
+                },
+            },
+            {
+                "title": "Best Val Loss",
+                "type": "stat",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 5, "x": 10, "y": 0},
+                "targets": [_target("sentimentizer_tune_best_val_loss", "Best Loss", "A")],
+                "options": {
+                    "colorMode": "value",
+                    "graphMode": "none",
+                    "justifyMode": "auto",
+                    "textMode": "auto",
+                },
+            },
+            {
+                "title": "Best Val F1",
+                "type": "stat",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 4, "x": 15, "y": 0},
+                "targets": [_target("sentimentizer_tune_best_val_f1", "Best F1", "A")],
+                "options": {
+                    "colorMode": "value",
+                    "graphMode": "none",
+                    "justifyMode": "auto",
+                    "textMode": "auto",
+                },
+            },
+            {
+                "title": "Trial Count",
+                "type": "stat",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 5, "x": 19, "y": 0},
+                "targets": [_target("sentimentizer_tune_trial_count", "Trials", "A")],
+                "options": {
+                    "colorMode": "value",
+                    "graphMode": "none",
+                    "justifyMode": "auto",
+                    "textMode": "auto",
+                },
+            },
+            {
+                "title": "Val Accuracy (per trial)",
+                "type": "timeseries",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+                "targets": [
+                    _target_trial("sentimentizer_tune_val_accuracy", "Trial {{trial_id}}", "A")
+                ],
+            },
+            {
+                "title": "Train vs Val Loss (per trial)",
+                "type": "timeseries",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+                "targets": [
+                    _target_trial("sentimentizer_tune_train_loss", "Train {{trial_id}}", "A"),
+                    _target_trial("sentimentizer_tune_val_loss", "Val {{trial_id}}", "B"),
+                ],
+            },
+            {
+                "title": "Val Precision (per trial)",
+                "type": "timeseries",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+                "targets": [
+                    _target_trial("sentimentizer_tune_val_precision", "Trial {{trial_id}}", "A")
+                ],
+            },
+            {
+                "title": "Val Recall (per trial)",
+                "type": "timeseries",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+                "targets": [
+                    _target_trial("sentimentizer_tune_val_recall", "Trial {{trial_id}}", "A")
+                ],
+            },
+            {
+                "title": "Val F1 (per trial)",
+                "type": "timeseries",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
+                "targets": [_target_trial("sentimentizer_tune_val_f1", "Trial {{trial_id}}", "A")],
+            },
+            {
+                "title": "Val Cohen's Kappa (per trial)",
+                "type": "timeseries",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
+                "targets": [
+                    _target_trial("sentimentizer_tune_val_cohen_kappa", "Trial {{trial_id}}", "A")
+                ],
+            },
+            {
+                "title": "Per-Class Accuracy (per trial)",
+                "type": "timeseries",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 12, "x": 0, "y": 32},
+                "targets": [
+                    _target_trial(
+                        "sentimentizer_tune_val_positive_accuracy", "Pos {{trial_id}}", "A"
+                    ),
+                    _target_trial(
+                        "sentimentizer_tune_val_negative_accuracy", "Neg {{trial_id}}", "B"
+                    ),
+                ],
+            },
+            {
+                "title": "Epoch (per trial)",
+                "type": "timeseries",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 12, "x": 12, "y": 32},
+                "targets": [_target_trial("sentimentizer_tune_epoch", "Trial {{trial_id}}", "A")],
+            },
+        ],
+        "refresh": "5s",
+        "schemaVersion": 38,
+        "style": "dark",
+        "tags": ["sentimentizer", "tune"],
+        "templating": {
+            "list": [
+                {
+                    "current": {"selected": False, "text": "All", "value": "$__all"},
+                    "datasource": _DS,
+                    "definition": "label_values(sentimentizer_tune_trial_count, model_type)",
+                    "hide": 0,
+                    "includeAll": True,
+                    "multi": True,
+                    "name": "model_type",
+                    "options": [],
+                    "query": {
+                        "query": "label_values(sentimentizer_tune_trial_count, model_type)",
+                        "refId": "StandardVariableQuery",
+                    },
+                    "refresh": 1,
+                    "type": "query",
+                },
+                {
+                    "allValue": ".*",
+                    "current": {"selected": False, "text": "All", "value": "$__all"},
+                    "datasource": _DS,
+                    "definition": "label_values(sentimentizer_tune_val_accuracy, trial_id)",
+                    "hide": 0,
+                    "includeAll": True,
+                    "label": "Trial ID",
+                    "multi": True,
+                    "name": "trial_id",
+                    "options": [],
+                    "query": {
+                        "query": "label_values(sentimentizer_tune_val_accuracy, trial_id)",
+                        "refId": "StandardVariableQuery",
+                    },
+                    "refresh": 1,
+                    "type": "query",
+                },
+            ]
+        },
+        "time": {"from": "now-1h", "to": "now"},
+        "timepicker": {},
+        "timezone": "",
+        "title": "Sentimentizer Tuning",
+        "uid": "sentimentizerTuning",
+        "version": 1,
+    }
+    return json.dumps(data, indent=4), None
+
+
+def generate_system_metrics_dashboard() -> tuple[str, None]:
+    """Generate the Sentimentizer System dashboard.
+
+    Dashboard UID: ``sentimentizerSystem``.
+
+    Visualizes system stats (CPU, memory, disk), GPU metrics, and Ray health
+    from the standalone exporter (port 8081).
+    """
+    _DS = {"type": "prometheus", "uid": "prometheus"}
+
+    def _target(metric: str, legend: str, ref: str, **extra: Any) -> dict:
+        return {"datasource": _DS, "expr": metric, "legendFormat": legend, "refId": ref, **extra}
+
+    def _target_gpu(metric: str, legend: str, ref: str) -> dict:
+        lbl = '{gpu_index=~"$gpu_index"}'
+        expr = f"{metric}{lbl}"
+        return {"datasource": _DS, "expr": expr, "legendFormat": legend, "refId": ref}
+
+    data = {
+        "annotations": {"list": []},
+        "editable": True,
+        "fiscalYearStartMonth": 0,
+        "graphTooltip": 0,
+        "id": None,
+        "links": [],
+        "liveNow": False,
+        "panels": [
+            {
+                "title": "System Info",
+                "type": "stat",
+                "datasource": _DS,
+                "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+                "targets": [
+                    _target(
+                        "sentimentizer_system_info",
+                        "{{platform}} / {{python}} / {{cpu_count}} CPUs",
+                        "A",
+                    )
+                ],
+                "options": {
+                    "colorMode": "value",
+                    "graphMode": "none",
+                    "justifyMode": "auto",
+                    "textMode": "auto",
+                },
+            },
+            {
+                "title": "Ray Available",
+                "type": "stat",
+                "datasource": _DS,
+                "gridPos": {"h": 4, "w": 3, "x": 6, "y": 0},
+                "targets": [_target("sentimentizer_ray_available", "Up", "A")],
+                "options": {
+                    "colorMode": "value",
+                    "graphMode": "none",
+                    "justifyMode": "auto",
+                    "textMode": "auto",
+                },
+            },
+            {
+                "title": "Ray Node Count",
+                "type": "stat",
+                "datasource": _DS,
+                "gridPos": {"h": 4, "w": 3, "x": 9, "y": 0},
+                "targets": [_target("sentimentizer_ray_node_count", "Nodes", "A")],
+                "options": {
+                    "colorMode": "value",
+                    "graphMode": "none",
+                    "justifyMode": "auto",
+                    "textMode": "auto",
+                },
+            },
+            {
+                "title": "Ray Metric Count",
+                "type": "stat",
+                "datasource": _DS,
+                "gridPos": {"h": 4, "w": 3, "x": 12, "y": 0},
+                "targets": [_target("sentimentizer_ray_metric_count", "Metrics", "A")],
+                "options": {
+                    "colorMode": "value",
+                    "graphMode": "none",
+                    "justifyMode": "auto",
+                    "textMode": "auto",
+                },
+            },
+            {
+                "title": "Controller State",
+                "type": "stat",
+                "datasource": _DS,
+                "gridPos": {"h": 4, "w": 3, "x": 15, "y": 0},
+                "targets": [_target("sentimentizer_ray_controller_state", "State", "A")],
+                "options": {
+                    "colorMode": "value",
+                    "graphMode": "none",
+                    "justifyMode": "auto",
+                    "textMode": "auto",
+                },
+            },
+            {
+                "title": "Controller Op Time",
+                "type": "stat",
+                "datasource": _DS,
+                "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+                "targets": [
+                    _target("sentimentizer_ray_controller_operation_time_s", "Seconds", "A")
+                ],
+                "options": {
+                    "colorMode": "value",
+                    "graphMode": "none",
+                    "justifyMode": "auto",
+                    "textMode": "auto",
+                },
+            },
+            {
+                "title": "CPU %",
+                "type": "timeseries",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 8, "x": 0, "y": 4},
+                "targets": [_target("sentimentizer_system_cpu_percent", "CPU %", "A")],
+                "fieldConfig": {
+                    "defaults": {
+                        "custom": {"drawStyle": "line", "lineWidth": 2},
+                        "unit": "percent",
+                        "min": 0,
+                        "max": 100,
+                    },
+                    "overrides": [],
+                },
+            },
+            {
+                "title": "Memory %",
+                "type": "timeseries",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 8, "x": 8, "y": 4},
+                "targets": [_target("sentimentizer_system_memory_percent", "Memory %", "A")],
+                "fieldConfig": {
+                    "defaults": {
+                        "custom": {"drawStyle": "line", "lineWidth": 2},
+                        "unit": "percent",
+                        "min": 0,
+                        "max": 100,
+                    },
+                    "overrides": [],
+                },
+            },
+            {
+                "title": "Disk %",
+                "type": "timeseries",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 8, "x": 16, "y": 4},
+                "targets": [_target("sentimentizer_system_disk_percent", "Disk %", "A")],
+                "fieldConfig": {
+                    "defaults": {
+                        "custom": {"drawStyle": "line", "lineWidth": 2},
+                        "unit": "percent",
+                        "min": 0,
+                        "max": 100,
+                    },
+                    "overrides": [],
+                },
+            },
+            {
+                "title": "Memory Bytes",
+                "type": "timeseries",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+                "targets": [
+                    _target("sentimentizer_system_memory_available_bytes", "Available", "A"),
+                    _target("sentimentizer_system_memory_total_bytes", "Total", "B"),
+                ],
+                "fieldConfig": {
+                    "defaults": {
+                        "custom": {"drawStyle": "line", "lineWidth": 2},
+                        "unit": "bytes",
+                    },
+                    "overrides": [],
+                },
+            },
+            {
+                "title": "Disk Bytes",
+                "type": "timeseries",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+                "targets": [
+                    _target("sentimentizer_system_disk_free_bytes", "Free", "A"),
+                    _target("sentimentizer_system_disk_total_bytes", "Total", "B"),
+                ],
+                "fieldConfig": {
+                    "defaults": {
+                        "custom": {"drawStyle": "line", "lineWidth": 2},
+                        "unit": "bytes",
+                    },
+                    "overrides": [],
+                },
+            },
+            {
+                "title": "GPU Utilization",
+                "type": "timeseries",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 12, "x": 0, "y": 20},
+                "targets": [
+                    _target_gpu("sentimentizer_gpu_utilization_percent", "GPU {{gpu_index}}", "A")
+                ],
+                "fieldConfig": {
+                    "defaults": {
+                        "custom": {"drawStyle": "line", "lineWidth": 2},
+                        "unit": "percent",
+                        "min": 0,
+                        "max": 100,
+                    },
+                    "overrides": [],
+                },
+            },
+            {
+                "title": "GPU Memory",
+                "type": "timeseries",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 12, "x": 12, "y": 20},
+                "targets": [
+                    _target_gpu("sentimentizer_gpu_memory_used_bytes", "Used {{gpu_index}}", "A"),
+                    _target_gpu("sentimentizer_gpu_memory_total_bytes", "Total {{gpu_index}}", "B"),
+                ],
+                "fieldConfig": {
+                    "defaults": {
+                        "custom": {"drawStyle": "line", "lineWidth": 2},
+                        "unit": "bytes",
+                    },
+                    "overrides": [],
+                },
+            },
+            {
+                "title": "GPU Temperature",
+                "type": "timeseries",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 24, "x": 0, "y": 28},
+                "targets": [
+                    _target_gpu("sentimentizer_gpu_temperature_celsius", "GPU {{gpu_index}}", "A")
+                ],
+                "fieldConfig": {
+                    "defaults": {
+                        "custom": {"drawStyle": "line", "lineWidth": 2},
+                        "unit": "celsius",
+                        "min": 0,
+                    },
+                    "overrides": [],
+                },
+            },
+        ],
+        "refresh": "5s",
+        "schemaVersion": 38,
+        "style": "dark",
+        "tags": ["sentimentizer", "system"],
+        "templating": {
+            "list": [
+                {
+                    "current": {"selected": False, "text": "All", "value": "$__all"},
+                    "datasource": _DS,
+                    "definition": "label_values(sentimentizer_gpu_utilization_percent, gpu_index)",
+                    "hide": 0,
+                    "includeAll": True,
+                    "label": "GPU Index",
+                    "multi": True,
+                    "name": "gpu_index",
+                    "options": [],
+                    "query": {
+                        "query": "label_values(sentimentizer_gpu_utilization_percent, gpu_index)",
+                        "refId": "StandardVariableQuery",
+                    },
+                    "refresh": 1,
+                    "type": "query",
+                }
+            ]
+        },
+        "time": {"from": "now-1h", "to": "now"},
+        "timepicker": {},
+        "timezone": "",
+        "title": "Sentimentizer System",
+        "uid": "sentimentizerSystem",
+        "version": 1,
     }
     return json.dumps(data, indent=4), None
 
@@ -806,7 +1355,7 @@ def _cleanup_stale_base_files(output_dir: str) -> None:
         print(f"Removed {len(removed)} stale base file(s): {', '.join(removed)}")
 
 
-def main():
+def main() -> None:
     output_dir = "metrics/grafana/dashboards"
     os.makedirs(output_dir, exist_ok=True)
 
@@ -823,6 +1372,8 @@ def main():
         "data_llm_grafana_dashboard": generate_data_llm_grafana_dashboard,
         "train_grafana_dashboard": generate_train_grafana_dashboard,
         "ml_metrics_dashboard": generate_ml_metrics_dashboard,
+        "tune_metrics_dashboard": generate_tune_metrics_dashboard,
+        "system_metrics_dashboard": generate_system_metrics_dashboard,
     }
 
     for name, generator in generators.items():
