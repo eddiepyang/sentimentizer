@@ -743,16 +743,21 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
                     _table_target("sentimentizer_training_val_auc_roc", "AUC-ROC", "K"),
                 ],
                 "transformations": [
-                    {"id": "merge", "options": {}},
                     {
                         "id": "organize",
                         "options": {
                             "excludeByName": {
-                                "Time": False,
+                                "Time": True,
                                 "__name__": True,
                                 "instance": True,
                                 "job": True,
                             },
+                        },
+                    },
+                    {"id": "merge", "options": {}},
+                    {
+                        "id": "organize",
+                        "options": {
                             "renameByName": {
                                 "Value #A": "Epoch",
                                 "Value #B": "Train Loss",
