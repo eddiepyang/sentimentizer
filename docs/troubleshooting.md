@@ -78,7 +78,33 @@ Both options are available for `train`, `train-distributed`, and `run` commands.
 
 ### Stale metrics from previous training run on dashboard
 
-See the [Stale Metrics Reset](#stale-metrics-reset) section in `metrics.md` for details. `_reset_stale_metrics(model_type)` is called automatically at the start of every training run.
+See the [Stale Metrics Reset](#stale-metrics-reset) section in `metrics.md` for details. `_reset_stale_metrics(model_type)` is called automatically at the start of every training run and zeroes **all** model types (rnn, encoder, decoder), not just the current one.
+
+## GPU / CUDA Issues
+
+### Distributed training runs on CPU instead of GPU
+
+**Symptoms**: `make train-distributed MODEL=encoder` trains on CPU; `torch.cuda.is_available()` returns `False`; `resolve_device("auto")` returns `"cpu"`; dashboard shows RNN metrics from a previous run instead of encoder metrics.
+
+**Root cause**: If you previously ran `make setup-ci` or had the CPU-only torch source configured, `torch` resolves from the CPU-only PyTorch wheel index. This gives `torch 2.x+cpu` which has no CUDA support — even when NVIDIA libraries (`nvidia-cublas`, `nvidia-cuda-runtime`, etc.) are installed, `torch.cuda.is_available()` returns `False`.
+
+**Fix**: Install CUDA-enabled torch (the default since `pyproject.toml` no longer pins CPU-only):
+
+```bash
+make setup
+```
+
+This runs `uv sync --extra ray` which resolves torch from PyPI with CUDA support.
+
+This tells `uv` to ignore the `[tool.uv.sources]` override and resolve torch from PyPI, which includes CUDA support.
+
+**Diagnostic**: `resolve_device("auto")` logs a warning when it detects CPU-only torch with NVIDIA libraries installed:
+
+```
+torch 2.11.0+cpu is CPU-only but NVIDIA CUDA libraries are installed.
+Distributed and GPU training will use CPU.
+Install the CUDA variant with: uv sync --no-sources-package torch
+```
 
 ## Running Tests
 

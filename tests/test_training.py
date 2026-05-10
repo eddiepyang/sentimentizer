@@ -665,65 +665,96 @@ class TestDistributedConfig:
 
 
 class TestResetStaleMetrics:
-    """Test _reset_stale_metrics zeroes stale model_type metrics."""
+    """Test _reset_stale_metrics zeroes ALL model types' metrics."""
 
-    def test_zeroes_target_model_type_file(
+    def test_zeroes_all_model_type_files(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """_reset_stale_metrics writes a zeroed per-model-type JSON file."""
+        """_reset_stale_metrics writes zeroed JSON files for ALL model types."""
         from workflows.stages.train import _reset_stale_metrics
 
         monkeypatch.setattr("workflows.stages.train._METRICS_DIR", tmp_path)
 
         _reset_stale_metrics("encoder")
 
-        metrics_file = tmp_path / "encoder_metrics.json"
-        assert metrics_file.exists()
-        result = json.loads(metrics_file.read_text())
-        assert result["train_loss"] == 0.0
-        assert result["epoch"] == 0
-        assert "_trace" in result
+        for mt in ("rnn", "encoder", "decoder"):
+            metrics_file = tmp_path / f"{mt}_metrics.json"
+            assert metrics_file.exists(), f"{mt}_metrics.json should exist"
+            result = json.loads(metrics_file.read_text())
+            assert result["train_loss"] == 0.0
+            assert result["epoch"] == 0
+            assert "_trace" in result
+            assert result["_trace"]["reset_by"] == "encoder"
 
-        # Other model-type files must NOT be created
-        assert not (tmp_path / "rnn_metrics.json").exists()
-        assert not (tmp_path / "decoder_metrics.json").exists()
-
-    def test_creates_per_model_file_when_missing(
+    def test_creates_per_model_files_when_missing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """_reset_stale_metrics creates the JSON file if it doesn't exist."""
+        """_reset_stale_metrics creates JSON files for ALL model types if missing."""
         from workflows.stages.train import _reset_stale_metrics
 
         monkeypatch.setattr("workflows.stages.train._METRICS_DIR", tmp_path)
 
         _reset_stale_metrics("decoder")
 
-        metrics_file = tmp_path / "decoder_metrics.json"
-        assert metrics_file.exists()
-        result = json.loads(metrics_file.read_text())
-        assert result["epoch"] == 0
-        assert "_trace" in result
+        for mt in ("rnn", "encoder", "decoder"):
+            metrics_file = tmp_path / f"{mt}_metrics.json"
+            assert metrics_file.exists()
+            result = json.loads(metrics_file.read_text())
+            assert result["epoch"] == 0
+            assert "_trace" in result
+            assert result["_trace"]["reset_by"] == "decoder"
 
     def test_overwrites_corrupt_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """_reset_stale_metrics overwrites a corrupt per-model file."""
+        """_reset_stale_metrics overwrites corrupt per-model files."""
         from workflows.stages.train import _reset_stale_metrics
 
         monkeypatch.setattr("workflows.stages.train._METRICS_DIR", tmp_path)
 
-        metrics_file = tmp_path / "encoder_metrics.json"
-        metrics_file.write_text("{invalid json")
+        encoder_file = tmp_path / "encoder_metrics.json"
+        encoder_file.write_text("{invalid json")
 
         _reset_stale_metrics("encoder")
 
-        assert metrics_file.exists()
-        result = json.loads(metrics_file.read_text())
+        assert encoder_file.exists()
+        result = json.loads(encoder_file.read_text())
         assert "encoder" not in result  # per-model file, not nested
         assert result["train_loss"] == 0.0
 
-    def test_resets_prometheus_gauges(
+    def test_overwrites_stale_metrics_from_other_model_types(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """_reset_stale_metrics resets prometheus_client gauges for model_type to 0."""
+        """_reset_stale_metrics zeroes files from ALL model types, not just the current one."""
+        from workflows.stages.train import _reset_stale_metrics
+
+        monkeypatch.setattr("workflows.stages.train._METRICS_DIR", tmp_path)
+
+        # Pre-populate rnn_metrics.json with realistic stale data
+        rnn_file = tmp_path / "rnn_metrics.json"
+        rnn_file.write_text(
+            json.dumps(
+                {
+                    "train_loss": 0.5,
+                    "val_loss": 0.6,
+                    "accuracy": 0.75,
+                    "epoch": 5,
+                    "_trace": {"reset_by": "rnn", "reset_at": 12345.0},
+                }
+            )
+        )
+
+        _reset_stale_metrics("encoder")
+
+        # RNN file should now be zeroed (no stale data lingering)
+        rnn_data = json.loads(rnn_file.read_text())
+        assert rnn_data["train_loss"] == 0.0
+        assert rnn_data["accuracy"] == 0.0
+        assert rnn_data["epoch"] == 0
+        assert rnn_data["_trace"]["reset_by"] == "encoder"
+
+    def test_resets_prometheus_gauges_all_model_types(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """_reset_stale_metrics resets prometheus_client gauges for ALL model types to 0."""
         from workflows.stages.train import _reset_stale_metrics
 
         monkeypatch.setattr("workflows.stages.train._METRICS_DIR", tmp_path)
@@ -732,18 +763,24 @@ class TestResetStaleMetrics:
 
         from sentimentizer.exporter import TRAINING_VAL_ACCURACY
 
+        # Set gauges for both encoder and rnn
         TRAINING_VAL_ACCURACY.labels(model_type="encoder").set(0.99)
+        TRAINING_VAL_ACCURACY.labels(model_type="rnn").set(0.88)
 
         _reset_stale_metrics("encoder")
 
-        value = REGISTRY.get_sample_value(
-            "sentimentizer_training_val_accuracy",
-            {"model_type": "encoder"},
-        )
-        assert value == 0.0
+        # Both should be zeroed — not just encoder
+        for mt in ("encoder", "rnn", "decoder"):
+            value = REGISTRY.get_sample_value(
+                "sentimentizer_training_val_accuracy",
+                {"model_type": mt},
+            )
+            assert value == 0.0, f"{mt} accuracy gauge should be 0"
 
-    def test_clears_ray_gauges_cache(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """_reset_stale_metrics removes the _RAY_GAUGES cache entry."""
+    def test_clears_ray_gauges_cache_all_model_types(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """_reset_stale_metrics clears the _RAY_GAUGES cache entirely."""
         from workflows.stages.train import _reset_stale_metrics
 
         monkeypatch.setattr("workflows.stages.train._METRICS_DIR", tmp_path)
@@ -751,34 +788,14 @@ class TestResetStaleMetrics:
         from sentimentizer.trainer import _RAY_GAUGES
 
         _RAY_GAUGES["test_model"] = {"dummy": True}
+        _RAY_GAUGES["rnn"] = {"dummy": True}
         assert "test_model" in _RAY_GAUGES
+        assert "rnn" in _RAY_GAUGES
 
-        _reset_stale_metrics("test_model")
-
-        assert "test_model" not in _RAY_GAUGES
-
-    def test_per_model_files_no_race(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Parallel writes for different model types don't clobber each other."""
-        from workflows.stages.train import _reset_stale_metrics
-
-        monkeypatch.setattr("workflows.stages.train._METRICS_DIR", tmp_path)
-
-        _reset_stale_metrics("rnn")
         _reset_stale_metrics("encoder")
 
-        rnn_file = tmp_path / "rnn_metrics.json"
-        encoder_file = tmp_path / "encoder_metrics.json"
-
-        assert rnn_file.exists()
-        assert encoder_file.exists()
-
-        rnn_data = json.loads(rnn_file.read_text())
-        encoder_data = json.loads(encoder_file.read_text())
-
-        assert rnn_data["train_loss"] == 0.0
-        assert encoder_data["train_loss"] == 0.0
-        assert rnn_data["_trace"]["reset_by"] == "rnn"
-        assert encoder_data["_trace"]["reset_by"] == "encoder"
+        # Entire cache should be cleared
+        assert len(_RAY_GAUGES) == 0
 
 
 class TestMetricsIntegration:

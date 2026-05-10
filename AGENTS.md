@@ -30,7 +30,9 @@ Sentimentizer is a PyTorch-based sentiment analysis pipeline with three model ar
 
 **Solution**: Switched from a single shared JSON file (`/tmp/sentimentizer_training_metrics.json`) to per-model-type JSON files (`/tmp/sentimentizer_metrics/{model_type}_metrics.json`). Each model type writes to its own file, so concurrent training processes never race. The standalone exporter discovers all three files and zeroes gauges for any model type whose file is missing or stale. Added `_written_by` and `_written_at` trace fields to every write, and `_trace.reset_by` / `_trace.reset_at` to reset files, so debugging future issues is trivial: just `cat` the file to see which model_type wrote it and when.
 
-**Tests**: `TestResetStaleMetrics` in `tests/test_training.py` (6 tests covering JSON file cleanup, missing/corrupt files, Prometheus gauge reset, and Ray gauge cache invalidation).
+**Important**: `_reset_stale_metrics(model_type)` zeroes **all three** model types (rnn, encoder, decoder), not just the current one, because starting a new training run makes all previous metrics stale — regardless of which model produced them. Otherwise old RNN metrics linger on the dashboard when training encoder.
+
+**Tests**: `TestResetStaleMetrics` in `tests/test_training.py` (6 tests covering JSON file cleanup for all model types, stale cross-model-type data overwrite, missing/corrupt files, Prometheus gauge reset for all model types, and Ray gauge cache invalidation).
 
 **Key files changed**:
 - `workflows/stages/train.py` — added `_reset_stale_metrics()` function and call in `run_train()`
@@ -141,4 +143,6 @@ Grafana only reads provisioned dashboard files on **startup**, so a restart is r
 - When iterating over DataFrame or batch columns containing token lists, use `list(doc_tokens)` with a `TypeError` catch — never `str(doc_tokens)`. Numpy arrays from parquet are iterable but not `isinstance(x, list)`, and `str()` produces array representations with wrapping quotes
 - Scheduler `T_max` must match `default_epochs()` for the model type — otherwise LR decays to minimum before training finishes
 - _LinearWarmupCosineScheduler warmup must use `(step + 1) / warmup_steps` to avoid zero LR at step 0
-- PyTorch CPU-only torch is configured via `[tool.uv.sources]` and `[[tool.uv.index]]` in `pyproject.toml`. CI uses `uv sync` (CPU-only, no nvidia packages). For local CUDA development, run `uv sync --no-sources-package torch` to resolve the CUDA variant from PyPI.
+- PyTorch CUDA torch is installed by default via `make setup` (resolves from PyPI). For CI environments without GPU, use `make setup-ci` to install the CPU-only variant from the PyTorch wheel index. `resolve_device("auto")` warns when torch is CPU-only (`+cpu` suffix) but NVIDIA libraries are installed — this indicates a misconfigured environment where `torch.cuda.is_available()` returns `False` despite hardware being present.
+- `resolve_device("auto")` warns when torch is CPU-only (`+cpu` suffix) but NVIDIA libraries are installed — this indicates a misconfigured environment where `torch.cuda.is_available()` returns `False` despite hardware being present.
+- `_load_model()` is only called in the single-node path. Distributed training (`_run_fit_distributed`) does NOT load the model in the driver process — Ray workers create their own model via `_train_func`. Loading the model in the driver would waste GPU memory for `run_type="update"`.
