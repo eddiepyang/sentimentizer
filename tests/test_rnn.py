@@ -518,6 +518,7 @@ class TestMetricsGauges:
             "val_positive_accuracy": MagicMock(),
             "val_negative_accuracy": MagicMock(),
             "epoch": MagicMock(),
+            "lr": MagicMock(),
         }
 
         # 4. Mock dependencies to isolate _train_func
@@ -529,6 +530,7 @@ class TestMetricsGauges:
             patch("sentimentizer.trainer._get_ray_gauges", return_value=mock_gauges),
             patch("sentimentizer.models.rnn.new_model") as mock_new_model,
             patch("sentimentizer.trainer.prepare_model", side_effect=lambda m: m),
+            patch("sentimentizer.exporter.TRAINING_LR", create=True),
         ):
             # Setup mock model — parameters() must return a fresh iterator each call
             mock_model = MagicMock()
@@ -547,6 +549,7 @@ class TestMetricsGauges:
             assert mock_gauges["train_loss"].set.called, "train_loss gauge was not updated"
             assert mock_gauges["val_loss"].set.called, "val_loss gauge was not updated"
             assert mock_gauges["val_accuracy"].set.called, "val_accuracy gauge was not updated"
+            assert mock_gauges["lr"].set.called, "lr gauge was not updated"
 
     def test_trainer_evaluate_updates_gauges(self) -> None:
         """Verifies Trainer.evaluate updates Prometheus Gauges during single-node training."""
@@ -579,6 +582,7 @@ class TestMetricsGauges:
             "val_positive_accuracy": MagicMock(),
             "val_negative_accuracy": MagicMock(),
             "epoch": MagicMock(),
+            "lr": MagicMock(),
         }
 
         with (

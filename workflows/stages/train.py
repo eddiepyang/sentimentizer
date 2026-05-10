@@ -46,6 +46,7 @@ def _reset_stale_metrics(model_type: str) -> None:
         "positive_accuracy": 0.0,
         "negative_accuracy": 0.0,
         "epoch": 0,
+        "lr": None,
     }
 
     # --- 1. Persisted JSON file ---
@@ -71,6 +72,7 @@ def _reset_stale_metrics(model_type: str) -> None:
     try:
         from sentimentizer.exporter import (
             TRAINING_EPOCH,
+            TRAINING_LR,
             TRAINING_TRAIN_LOSS,
             TRAINING_VAL_ACCURACY,
             TRAINING_VAL_AUC_ROC,
@@ -95,6 +97,7 @@ def _reset_stale_metrics(model_type: str) -> None:
             TRAINING_VAL_POSITIVE_ACCURACY,
             TRAINING_VAL_NEGATIVE_ACCURACY,
             TRAINING_EPOCH,
+            TRAINING_LR,
         ):
             gauge.labels(**lbl).set(0)
         # AUC-ROC uses None / no value as sentinel — clear it
@@ -437,6 +440,7 @@ def _publish_distributed_metrics(result: Any, model_type: str) -> None:
     try:
         from sentimentizer.exporter import (
             TRAINING_EPOCH,
+            TRAINING_LR,
             TRAINING_TRAIN_LOSS,
             TRAINING_VAL_ACCURACY,
             TRAINING_VAL_AUC_ROC,
@@ -465,6 +469,9 @@ def _publish_distributed_metrics(result: Any, model_type: str) -> None:
         TRAINING_VAL_POSITIVE_ACCURACY.labels(**lbl).set(float(metrics.get("pos_acc", 0)))
         TRAINING_VAL_NEGATIVE_ACCURACY.labels(**lbl).set(float(metrics.get("neg_acc", 0)))
         TRAINING_EPOCH.labels(**lbl).set(int(metrics.get("epoch", 0)))
+        lr = metrics.get("lr")
+        if lr is not None:
+            TRAINING_LR.labels(**lbl).set(float(lr))
 
         logger.info(
             "distributed_metrics_published_to_prometheus",
@@ -512,6 +519,7 @@ def _persist_metrics_to_file(metrics: dict, model_type: str) -> None:
             "positive_accuracy": 0.0,
             "negative_accuracy": 0.0,
             "epoch": 0,
+            "lr": None,
         },
         "encoder": {
             "train_loss": 0.0,
@@ -525,6 +533,7 @@ def _persist_metrics_to_file(metrics: dict, model_type: str) -> None:
             "positive_accuracy": 0.0,
             "negative_accuracy": 0.0,
             "epoch": 0,
+            "lr": None,
         },
         "decoder": {
             "train_loss": 0.0,
@@ -538,6 +547,7 @@ def _persist_metrics_to_file(metrics: dict, model_type: str) -> None:
             "positive_accuracy": 0.0,
             "negative_accuracy": 0.0,
             "epoch": 0,
+            "lr": None,
         },
     }
     data[model_type] = {
@@ -552,6 +562,7 @@ def _persist_metrics_to_file(metrics: dict, model_type: str) -> None:
         "positive_accuracy": float(metrics.get("pos_acc", metrics.get("positive_accuracy", 0))),
         "negative_accuracy": float(metrics.get("neg_acc", metrics.get("negative_accuracy", 0))),
         "epoch": int(metrics.get("epoch", 0)),
+        "lr": float(metrics.get("lr", 0)) if metrics.get("lr") is not None else None,
     }
 
     path.write_text(json.dumps(data, indent=2))
