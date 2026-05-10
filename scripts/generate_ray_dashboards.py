@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sys
 
 try:
@@ -56,6 +57,37 @@ def save_dashboard(name, generator, output_dir):
 # ---------------------------------------------------------------------------
 
 
+def _fix_promql_text(text: str) -> str:
+    """Fix common PromQL and label_values() formatting issues in dashboard text.
+
+    Applies the following fixes:
+    1. Remove empty braces after metric names: metric{} → metric
+       (Grafana rejects label_values(metric{}, label) and query_result(func(metric{})).
+    2. Remove trailing commas inside label selectors: {foo="bar",} → {foo="bar"}
+       (PromQL does not allow trailing commas in label matchers.)
+    3. Replace single-quoted string matchers with double quotes: resource='GPU' → resource="GPU"
+       (PromQL requires double-quoted strings; single quotes are invalid.)
+    4. Remove spaces before =~ and !~ operators: foo =~"bar" → foo=~"bar"
+       (While some parsers tolerate the space, it's non-standard and can cause issues.)
+    """
+    # 1. Remove empty braces after metric names (but NOT inside legendFormat or other
+    #    Grafana template syntax which uses {{ }}).
+    #    Match patterns like: metric_name{}, metric_name{ } but NOT {{ variable }}
+    text = re.sub(r"(\w+)\{\s*\}", r"\1", text)
+
+    # 2. Remove trailing commas inside label selectors: {foo="bar",} → {foo="bar"}
+    text = re.sub(r",\s*\}", "}", text)
+
+    # 3. Replace single-quoted string matchers with double quotes in PromQL
+    #    e.g. resource='GPU' → resource="GPU"
+    text = re.sub(r"([a-zA-Z_]\w*)='([^']*)'", r'\1="\2"', text)
+
+    # 4. Remove spaces before =~ and !~ operators
+    text = re.sub(r"([a-zA-Z_]\w*)\s*(=~|!~)", r"\1\2", text)
+
+    return text
+
+
 def _patch_template_vars(templating: dict, fallback_metrics: list[str]) -> dict:
     """Make template variable label queries resilient by adding OR fallbacks.
 
@@ -64,36 +96,96 @@ def _patch_template_vars(templating: dict, fallback_metrics: list[str]) -> dict:
     running), the dropdown shows no values and every panel filters to an
     empty set.  Adding `OR label_values(fallback_metric{}, label)` ensures
     the dropdowns are populated as long as *some* Ray metric is present.
+
+    This function also fixes formatting issues in the generated expressions:
+    - Strips empty {} after metric names (e.g. label_values(metric{}, label) → label_values(metric, label))
+    - Removes trailing commas inside label selectors
+    - Fixes single-quoted strings and spacing issues
     """
     for var in templating.get("list", []):
         if var.get("type") != "query":
             continue
+
+        # Determine which fields to patch. The query field can be either a
+        # plain string or a dict with a "query" sub-key (Grafana v8+ format).
+        fields_to_patch = {}
         definition = var.get("definition", "")
-        query = var.get("query", "")
+        if definition and "label_values" in definition:
+            fields_to_patch["definition"] = definition
 
-        # Only patch label_values() calls that reference a single metric
-        for field in ("definition", "query"):
-            old_val = var.get(field, "")
-            if not old_val or "label_values" not in old_val:
+        query_val = var.get("query", "")
+        if isinstance(query_val, str) and query_val and "label_values" in query_val:
+            fields_to_patch["query"] = query_val
+        elif isinstance(query_val, dict):
+            # Grafana v8+ uses {"query": "...", "refId": "..."} format
+            inner_query = query_val.get("query", "")
+            if inner_query and "label_values" in inner_query:
+                fields_to_patch["query"] = inner_query
+                fields_to_patch["_query_is_dict"] = True
+
+        for field, old_val in fields_to_patch.items():
+            if field == "_query_is_dict":
                 continue
-            # Build a chain of OR alternatives
-            parts = [old_val.strip()]
-            for fb in fallback_metrics:
-                candidate = old_val
-                # Replace the metric name inside label_values()
-                # e.g. label_values(ray_node_network_receive_speed, SessionName)
-                #   → label_values(ray_node_cpu_utilization, SessionName)
-                import re
+            if not old_val:
+                continue
 
+            # First, fix any formatting issues in the original value
+            fixed_val = _fix_promql_text(old_val)
+
+            # Build a chain of OR fallback alternatives using label_values()
+            parts = [fixed_val.strip()]
+            for fb in fallback_metrics:
+                # Replace the metric name (and its optional label selector) inside
+                # label_values() with the fallback metric name, preserving the label
+                # selector if present.
+                #
+                # Correctly handles both forms:
+                #   label_values(metric_name, label) → label_values(fb, label)
+                #   label_values(metric_name{filters}, label) → label_values(fb{filters}, label)
+                #
+                # The regex matches the metric name with optional {filters} and
+                # replaces only the metric name portion, keeping any filters intact.
                 candidate = re.sub(
-                    r"label_values\([^,]+,",
+                    r"label_values\((\w+)\{([^}]*)\},",
+                    lambda m: f"label_values({fb}{{{m.group(2)}}},",
+                    fixed_val,
+                )
+                # Also handle the simple case without braces: label_values(metric, label)
+                candidate = re.sub(
+                    r"label_values\((\w+),",
                     f"label_values({fb},",
                     candidate,
+                    count=1,  # Only replace the first match to avoid double-replacing
                 )
-                if candidate != old_val and candidate not in parts:
+                if candidate != fixed_val and candidate not in parts:
                     parts.append(candidate)
-            var[field] = " + ".join(parts)
+
+            new_val = " + ".join(parts)
+
+            if field == "query" and fields_to_patch.get("_query_is_dict"):
+                var["query"]["query"] = new_val
+            else:
+                var[field] = new_val
+
     return templating
+
+
+def _fix_panel_targets(data: dict) -> dict:
+    """Fix PromQL expressions in all panel targets recursively.
+
+    Handles both top-level panels and nested panels (rows containing sub-panels).
+    Applies _fix_promql_text to each expr value.
+    """
+    def _fix_panels(panels):
+        for panel in panels:
+            for target in panel.get("targets", []):
+                if "expr" in target:
+                    target["expr"] = _fix_promql_text(target["expr"])
+            # Recurse into row panels that contain sub-panels
+            _fix_panels(panel.get("panels", []))
+
+    _fix_panels(data.get("panels", []))
+    return data
 
 
 def patch_default_dashboard(data: dict) -> dict:
@@ -104,6 +196,7 @@ def patch_default_dashboard(data: dict) -> dict:
        autoscaler metrics.
     2. Node Count panel: add fallback queries using ray_node_cpu_count
        that work in single-node mode.
+    3. Fix any PromQL formatting issues in panel targets.
     """
     # --- Patch template variables ---
     fallback_metrics = [
@@ -112,6 +205,9 @@ def patch_default_dashboard(data: dict) -> dict:
         "ray_node_mem_used",
     ]
     _patch_template_vars(data.get("templating", {}), fallback_metrics)
+
+    # --- Fix PromQL in panel targets ---
+    _fix_panel_targets(data)
 
     # --- Patch Node Count panel ---
     for panel in data.get("panels", []):
@@ -140,7 +236,8 @@ def patch_default_dashboard(data: dict) -> dict:
         fallback_max = {
             "exemplar": True,
             "expr": (
-                "sum(ray_node_cpu_count" '{SessionName=~"$SessionName",ray_io_cluster=~"$Cluster"})'
+                "sum(ray_node_cpu_count"
+                '{SessionName=~"$SessionName",ray_io_cluster=~"$Cluster"})'
             ),
             "interval": "",
             "legendFormat": "MAX (fallback)",
@@ -161,12 +258,17 @@ def patch_serve_dashboard(data: dict) -> dict:
     Changes:
     1. Template variables: add OR fallbacks so dropdowns work even when
        some Serve metrics aren't being emitted yet.
+    2. Fix PromQL formatting issues (single quotes, spacing) in panel targets.
     """
     fallback_metrics = [
         "ray_serve_deployment_request_counter",
         "ray_serve_deployment_replica_healthy",
     ]
     _patch_template_vars(data.get("templating", {}), fallback_metrics)
+
+    # Fix PromQL in panel targets (single quotes, spacing, etc.)
+    _fix_panel_targets(data)
+
     return data
 
 
@@ -176,25 +278,31 @@ def patch_train_dashboard(data: dict) -> dict:
     Changes:
     1. Fix malformed PromQL label selectors generated by empty global filters
        (e.g., trailing commas or double braces).
+    2. Fix template variable label_values expressions.
     """
-    import re
+    # Fix template variables (empty braces, trailing commas)
+    _patch_template_vars(data.get("templating", {}), [])
 
-    for panel in data.get("panels", []):
-        for target in panel.get("targets", []):
-            if "expr" in target:
-                expr = target["expr"]
-                # Fix cases where string formatting left double braces
-                expr = expr.replace("{{", "{").replace("}}", "}")
-                # Fix trailing commas inside label selectors: {job="ray", } -> {job="ray"}
-                expr = re.sub(r",\s*}", "}", expr)
-                target["expr"] = expr
+    # Fix PromQL in panel targets (double braces, trailing commas, etc.)
+    _fix_panel_targets(data)
+
     return data
 
 
 def apply_patches(name: str, output_dir: str) -> None:
-    """Load a generated dashboard JSON, apply compatibility patches, and save."""
-    import re
+    """Load a generated dashboard JSON, apply compatibility patches, and save.
 
+    Applies the following global text-level fixes before JSON parsing:
+    1. Remove {{{global_filters}}} Jinja2-style placeholders → empty string.
+    2. Replace double braces {{ }} → single braces { } (PromQL label selectors).
+    3. Fix trailing commas inside label selectors: {foo="bar",} → {foo="bar"}.
+    4. Remove empty braces after metric names: metric{} → metric.
+    5. Replace single-quoted string matchers: resource='GPU' → resource="GPU".
+    6. Remove spaces before =~ and !~ operators.
+
+    Then applies per-dashboard structural patches (template variable fallbacks,
+    Node Count fallback targets, etc.).
+    """
     output_path = os.path.join(output_dir, f"{name}.json")
     if not os.path.exists(output_path):
         return
@@ -202,11 +310,43 @@ def apply_patches(name: str, output_dir: str) -> None:
     with open(output_path) as f:
         content = f.read()
 
+    # --- Text-level fixes (applied before JSON parsing) ---
+
+    # Remove Jinja2-style {{{global_filters}}} / {{global_filters}} placeholders.
+    # Ray's generator uses these but they don't resolve to anything in our context.
+    content = content.replace("{{{global_filters}}}", "")
+    content = content.replace("{{global_filters}}", "")
+
+    # Fix double braces left over from Python string formatting:
+    # e.g. {{SessionName}} → {SessionName}  (valid PromQL label matcher)
+    # but preserve Grafana template variables like {{model_type}} in legendFormat
+    # by only fixing double braces that contain PromQL-like content (=~ or = or !~).
+    # We do this by replacing {{ only when followed by a label-matcher pattern,
+    # and }} only when preceded by one.
+    content = re.sub(r"\{\{(\w+[=~!])", r"{\1", content)
+    content = re.sub(r"([\"'][=~!])\}\}", r"\1}", content)
+    # Also handle cases like {{variable}} that are NOT PromQL — leave those alone.
+
     # Fix Prometheus parse error: unexpected left brace '{'
     # Ray's dashboard generator produces `label_values(metric{}, label)` which
     # is rejected by modern Grafana versions. We strip the empty braces.
     content = re.sub(r"label_values\(([^,]+?)\{\}\s*,", r"label_values(\1,", content)
 
+    # Also strip empty {} in other contexts (e.g. query_result(func(metric{}))).
+    # But be careful not to strip {{ }} Grafana template syntax.
+    # Match: word char followed by {}  but NOT {{ }}
+    content = re.sub(r"(?<!\{)(\w+)\{\s*\}(?!\})", r"\1", content)
+
+    # Fix trailing commas inside label selectors: {job="ray",} → {job="ray"}
+    content = re.sub(r",\s*\}", "}", content)
+
+    # Fix single-quoted string matchers in PromQL: resource='GPU' → resource="GPU"
+    content = re.sub(r"(\w+)='([^']*)'", r'\1="\2"', content)
+
+    # Fix spaces before =~ and !~ operators: foo =~"bar" → foo=~"bar"
+    content = re.sub(r"(\w+)\s*(=~|!~)", r"\1\2", content)
+
+    # --- JSON-level structural patches ---
     data = json.loads(content)
 
     patchers = {
@@ -218,6 +358,13 @@ def apply_patches(name: str, output_dir: str) -> None:
     if patcher:
         data = patcher(data)
 
+    # For ALL dashboards: fix template variables and panel targets that
+    # weren't covered by a specific patcher.
+    if name not in patchers:
+        # Still fix PromQL formatting issues in template vars and panels
+        _patch_template_vars(data.get("templating", {}), [])
+        _fix_panel_targets(data)
+
     with open(output_path, "w") as f:
         json.dump(data, f, indent=4)
     print(f"Patched {output_path}")
@@ -226,132 +373,228 @@ def apply_patches(name: str, output_dir: str) -> None:
 def generate_ml_metrics_dashboard():
     """Generate a custom dashboard for Sentimentizer ML metrics."""
     data = {
+        "__inputs": [
+            {
+                "name": "DS_PROMETHEUS",
+                "label": "Prometheus",
+                "description": "",
+                "type": "datasource",
+                "pluginId": "prometheus",
+                "pluginName": "Prometheus",
+            }
+        ],
+        "__requires": [
+            {"type": "grafana", "id": "grafana", "name": "Grafana", "version": "9.0.0"},
+            {
+                "type": "datasource",
+                "id": "prometheus",
+                "name": "Prometheus",
+                "version": "1.0.0",
+            },
+            {
+                "type": "panel",
+                "id": "graph",
+                "name": "Graph (Old)",
+                "version": "",
+            },
+            {
+                "type": "panel",
+                "id": "table",
+                "name": "Table",
+                "version": "",
+            },
+        ],
+        "annotations": {
+            "list": [
+                {
+                    "builtIn": 1,
+                    "datasource": {"type": "grafana", "uid": "-- Grafana --"},
+                    "enable": True,
+                    "hide": True,
+                    "iconColor": "rgba(0, 211, 255, 1)",
+                    "name": "Annotations & Alerts",
+                    "type": "dashboard",
+                }
+            ]
+        },
         "title": "Sentimentizer ML Metrics",
         "uid": "sentimentizerMLMetrics",
         "version": 1,
         "schemaVersion": 27,
         "style": "dark",
         "refresh": "5s",
+        "time": {"from": "now-1h", "to": "now"},
+        "timepicker": {
+            "refresh_intervals": ["5s", "10s", "30s", "1m", "5m", "15m", "1h"],
+        },
+        "templating": {
+            "list": [
+                {
+                    "current": {},
+                    "hide": 0,
+                    "includeAll": False,
+                    "label": "Datasource",
+                    "multi": False,
+                    "name": "datasource",
+                    "options": [],
+                    "query": "prometheus",
+                    "queryValue": "",
+                    "refresh": 1,
+                    "regex": "",
+                    "skipUrlSync": False,
+                    "type": "datasource",
+                },
+                {
+                    "allValue": ".*",
+                    "current": {"selected": True, "text": "All", "value": "$__all"},
+                    "datasource": "${datasource}",
+                    "definition": "label_values(sentimentizer_training_train_loss, model_type)",
+                    "hide": 0,
+                    "includeAll": True,
+                    "label": "Model Type",
+                    "multi": True,
+                    "name": "model_type",
+                    "options": [],
+                    "query": {
+                        "qryType": 1,
+                        "query": "label_values(sentimentizer_training_train_loss, model_type)",
+                        "refId": "VariableQuery",
+                    },
+                    "refresh": 2,
+                    "regex": "",
+                    "skipUrlSync": False,
+                    "sort": 1,
+                    "type": "query",
+                },
+            ]
+        },
         "panels": [
             {
                 "title": "Loss (Train vs Val)",
-                "type": "graph",
-                "datasource": "Prometheus",
+                "type": "timeseries",
+                "datasource": {"type": "prometheus", "uid": "${datasource}"},
                 "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
                 "targets": [
                     {
-                        "expr": "sentimentizer_training_train_loss",
+                        "expr": 'sentimentizer_training_train_loss{model_type=~"$model_type"}',
                         "legendFormat": "Train Loss ({{model_type}})",
                         "refId": "A",
                     },
                     {
-                        "expr": "sentimentizer_training_val_loss",
+                        "expr": 'sentimentizer_training_val_loss{model_type=~"$model_type"}',
                         "legendFormat": "Val Loss ({{model_type}})",
                         "refId": "B",
                     },
                 ],
-                "lines": True,
-                "linewidth": 2,
-                "nullPointMode": "connected",
-                "fill": 0,
+                "fieldConfig": {
+                    "defaults": {
+                        "custom": {"drawStyle": "line", "lineWidth": 2},
+                        "unit": "none",
+                    },
+                    "overrides": [],
+                },
             },
             {
                 "title": "Validation Core Metrics",
-                "type": "graph",
-                "datasource": "Prometheus",
+                "type": "timeseries",
+                "datasource": {"type": "prometheus", "uid": "${datasource}"},
                 "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
                 "targets": [
                     {
-                        "expr": "sentimentizer_training_val_accuracy",
+                        "expr": 'sentimentizer_training_val_accuracy{model_type=~"$model_type"}',
                         "legendFormat": "Accuracy ({{model_type}})",
                         "refId": "A",
                     },
                     {
-                        "expr": "sentimentizer_training_val_f1",
+                        "expr": 'sentimentizer_training_val_f1{model_type=~"$model_type"}',
                         "legendFormat": "F1 Score ({{model_type}})",
                         "refId": "B",
                     },
                     {
-                        "expr": "sentimentizer_training_val_precision",
+                        "expr": 'sentimentizer_training_val_precision{model_type=~"$model_type"}',
                         "legendFormat": "Precision ({{model_type}})",
                         "refId": "C",
                     },
                     {
-                        "expr": "sentimentizer_training_val_recall",
+                        "expr": 'sentimentizer_training_val_recall{model_type=~"$model_type"}',
                         "legendFormat": "Recall ({{model_type}})",
                         "refId": "D",
                     },
                 ],
-                "lines": True,
-                "linewidth": 2,
-                "nullPointMode": "connected",
-                "fill": 0,
-                "yaxes": [{"min": 0, "max": 1, "show": True}, {"show": True}],
+                "fieldConfig": {
+                    "defaults": {
+                        "custom": {"drawStyle": "line", "lineWidth": 2},
+                        "unit": "none",
+                        "min": 0,
+                        "max": 1,
+                    },
+                    "overrides": [],
+                },
             },
             {
                 "title": "Current Epoch & Metrics Table",
                 "type": "table",
-                "datasource": "Prometheus",
+                "datasource": {"type": "prometheus", "uid": "${datasource}"},
                 "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8},
                 "targets": [
                     {
-                        "expr": "sentimentizer_training_epoch",
+                        "expr": 'sentimentizer_training_epoch{model_type=~"$model_type"}',
                         "format": "table",
                         "instant": True,
                         "legendFormat": "Epoch",
                         "refId": "A",
                     },
                     {
-                        "expr": "sentimentizer_training_train_loss",
+                        "expr": 'sentimentizer_training_train_loss{model_type=~"$model_type"}',
                         "format": "table",
                         "instant": True,
                         "legendFormat": "Train Loss",
                         "refId": "B",
                     },
                     {
-                        "expr": "sentimentizer_training_val_loss",
+                        "expr": 'sentimentizer_training_val_loss{model_type=~"$model_type"}',
                         "format": "table",
                         "instant": True,
                         "legendFormat": "Val Loss",
                         "refId": "C",
                     },
                     {
-                        "expr": "sentimentizer_training_val_cohen_kappa",
+                        "expr": 'sentimentizer_training_val_cohen_kappa{model_type=~"$model_type"}',
                         "format": "table",
                         "instant": True,
                         "legendFormat": "Kappa",
                         "refId": "D",
                     },
                     {
-                        "expr": "sentimentizer_training_val_precision",
+                        "expr": 'sentimentizer_training_val_precision{model_type=~"$model_type"}',
                         "format": "table",
                         "instant": True,
                         "legendFormat": "Precision",
                         "refId": "E",
                     },
                     {
-                        "expr": "sentimentizer_training_val_recall",
+                        "expr": 'sentimentizer_training_val_recall{model_type=~"$model_type"}',
                         "format": "table",
                         "instant": True,
                         "legendFormat": "Recall",
                         "refId": "F",
                     },
                     {
-                        "expr": "sentimentizer_training_val_f1",
+                        "expr": 'sentimentizer_training_val_f1{model_type=~"$model_type"}',
                         "format": "table",
                         "instant": True,
                         "legendFormat": "F1",
                         "refId": "G",
                     },
                     {
-                        "expr": "sentimentizer_training_val_positive_accuracy",
+                        "expr": 'sentimentizer_training_val_positive_accuracy{model_type=~"$model_type"}',
                         "format": "table",
                         "instant": True,
                         "legendFormat": "Pos Acc",
                         "refId": "H",
                     },
                     {
-                        "expr": "sentimentizer_training_val_negative_accuracy",
+                        "expr": 'sentimentizer_training_val_negative_accuracy{model_type=~"$model_type"}',
                         "format": "table",
                         "instant": True,
                         "legendFormat": "Neg Acc",
@@ -384,7 +627,10 @@ def generate_ml_metrics_dashboard():
                     },
                 ],
                 "fieldConfig": {
-                    "defaults": {"custom": {"align": "auto", "displayMode": "auto"}, "decimals": 4}
+                    "defaults": {
+                        "custom": {"align": "auto", "displayMode": "auto"},
+                        "decimals": 4,
+                    }
                 },
             },
         ],
