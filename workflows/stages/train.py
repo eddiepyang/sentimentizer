@@ -46,7 +46,7 @@ def _reset_stale_metrics(model_type: str) -> None:
         "positive_accuracy": 0.0,
         "negative_accuracy": 0.0,
         "epoch": 0,
-        "lr": None,
+        "lr": 0.0,
     }
 
     # --- 1. Persisted JSON file ---
@@ -519,7 +519,7 @@ def _persist_metrics_to_file(metrics: dict, model_type: str) -> None:
             "positive_accuracy": 0.0,
             "negative_accuracy": 0.0,
             "epoch": 0,
-            "lr": None,
+            "lr": 0.0,
         },
         "encoder": {
             "train_loss": 0.0,
@@ -533,7 +533,7 @@ def _persist_metrics_to_file(metrics: dict, model_type: str) -> None:
             "positive_accuracy": 0.0,
             "negative_accuracy": 0.0,
             "epoch": 0,
-            "lr": None,
+            "lr": 0.0,
         },
         "decoder": {
             "train_loss": 0.0,
@@ -547,7 +547,7 @@ def _persist_metrics_to_file(metrics: dict, model_type: str) -> None:
             "positive_accuracy": 0.0,
             "negative_accuracy": 0.0,
             "epoch": 0,
-            "lr": None,
+            "lr": 0.0,
         },
     }
     data[model_type] = {
@@ -562,7 +562,7 @@ def _persist_metrics_to_file(metrics: dict, model_type: str) -> None:
         "positive_accuracy": float(metrics.get("pos_acc", metrics.get("positive_accuracy", 0))),
         "negative_accuracy": float(metrics.get("neg_acc", metrics.get("negative_accuracy", 0))),
         "epoch": int(metrics.get("epoch", 0)),
-        "lr": float(metrics.get("lr", 0)) if metrics.get("lr") is not None else None,
+        "lr": float(metrics.get("lr", 0.0)),
     }
 
     path.write_text(json.dumps(data, indent=2))
