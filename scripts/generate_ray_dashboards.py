@@ -57,35 +57,47 @@ def save_dashboard(name, generator, output_dir):
 # ---------------------------------------------------------------------------
 
 
-def _fix_promql_text(text: str) -> str:
-    """Fix common PromQL and label_values() formatting issues in dashboard text.
+def _fix_promql_expr(expr: str) -> str:
+    """Fix common PromQL formatting issues in a single expression string.
+
+    This operates on parsed JSON string values (not raw JSON text), so it's
+    safe to replace quotes and other characters that would break JSON syntax.
 
     Applies the following fixes:
     1. Remove empty braces after metric names: metric{} → metric
-       (Grafana rejects label_values(metric{}, label) and query_result(func(metric{})).
     2. Remove trailing commas inside label selectors: {foo="bar",} → {foo="bar"}
-       (PromQL does not allow trailing commas in label matchers.)
     3. Replace single-quoted string matchers with double quotes: resource='GPU' → resource="GPU"
-       (PromQL requires double-quoted strings; single quotes are invalid.)
     4. Remove spaces before =~ and !~ operators: foo =~"bar" → foo=~"bar"
-       (While some parsers tolerate the space, it's non-standard and can cause issues.)
+    5. Convert double braces {{ }} to single braces { } in PromQL label matchers
+       (e.g. {{SessionName=~"$SessionName"}} → {SessionName=~"$SessionName"})
+       while preserving Grafana template variables like {{model_type}}.
     """
-    # 1. Remove empty braces after metric names (but NOT inside legendFormat or other
-    #    Grafana template syntax which uses {{ }}).
-    #    Match patterns like: metric_name{}, metric_name{ } but NOT {{ variable }}
-    text = re.sub(r"(\w+)\{\s*\}", r"\1", text)
+    # 5. Fix double braces that are PromQL label matchers (not Grafana template vars).
+    #    PromQL: {{label=~"value"}} → {label=~"value"}
+    #    Grafana template: {{variable}} → keep as-is
+    #    Strategy: {{ followed by \w+= or \w+!~ or \w+=~ is a PromQL matcher start.
+    #    }} preceded by " is a PromQL matcher end.
+    expr = re.sub(r"\{\{(\w+[=~!])", r"{\1", expr)
+    expr = re.sub(r'"\}\}', '"}', expr)
+
+    # 1. Remove empty braces after metric names: metric{} → metric
+    #    But do NOT touch {{variable}} Grafana template syntax.
+    expr = re.sub(r"(\w+)\{\s*\}", r"\1", expr)
 
     # 2. Remove trailing commas inside label selectors: {foo="bar",} → {foo="bar"}
-    text = re.sub(r",\s*\}", "}", text)
+    expr = re.sub(r",\s*\}", "}", expr)
 
     # 3. Replace single-quoted string matchers with double quotes in PromQL
     #    e.g. resource='GPU' → resource="GPU"
-    text = re.sub(r"([a-zA-Z_]\w*)='([^']*)'", r'\1="\2"', text)
+    #    This is safe here because we're operating on parsed JSON string values,
+    #    not raw JSON text. The double quotes don't need JSON escaping at this level
+    #    because json.dump() will handle the escaping when writing the file.
+    expr = re.sub(r"([a-zA-Z_]\w*)='([^']*)'", r'\1="\2"', expr)
 
     # 4. Remove spaces before =~ and !~ operators
-    text = re.sub(r"([a-zA-Z_]\w*)\s*(=~|!~)", r"\1\2", text)
+    expr = re.sub(r"([a-zA-Z_]\w*)\s*(=~|!~)", r"\1\2", expr)
 
-    return text
+    return expr
 
 
 def _patch_template_vars(templating: dict, fallback_metrics: list[str]) -> dict:
@@ -98,7 +110,7 @@ def _patch_template_vars(templating: dict, fallback_metrics: list[str]) -> dict:
     the dropdowns are populated as long as *some* Ray metric is present.
 
     This function also fixes formatting issues in the generated expressions:
-    - Strips empty {} after metric names (e.g. label_values(metric{}, label) → label_values(metric, label))
+    - Strips empty {} after metric names
     - Removes trailing commas inside label selectors
     - Fixes single-quoted strings and spacing issues
     """
@@ -130,7 +142,7 @@ def _patch_template_vars(templating: dict, fallback_metrics: list[str]) -> dict:
                 continue
 
             # First, fix any formatting issues in the original value
-            fixed_val = _fix_promql_text(old_val)
+            fixed_val = _fix_promql_expr(old_val)
 
             # Build a chain of OR fallback alternatives using label_values()
             parts = [fixed_val.strip()]
@@ -174,18 +186,45 @@ def _fix_panel_targets(data: dict) -> dict:
     """Fix PromQL expressions in all panel targets recursively.
 
     Handles both top-level panels and nested panels (rows containing sub-panels).
-    Applies _fix_promql_text to each expr value.
+    Applies _fix_promql_expr to each expr value, but NOT to legendFormat or
+    other Grafana template syntax fields.
     """
     def _fix_panels(panels):
         for panel in panels:
             for target in panel.get("targets", []):
                 if "expr" in target:
-                    target["expr"] = _fix_promql_text(target["expr"])
+                    target["expr"] = _fix_promql_expr(target["expr"])
             # Recurse into row panels that contain sub-panels
             _fix_panels(panel.get("panels", []))
 
     _fix_panels(data.get("panels", []))
     return data
+
+
+def _fix_templating_exprs(templating: dict) -> dict:
+    """Fix PromQL expressions in template variable definitions (no fallbacks).
+
+    Applies _fix_promql_expr to definition and query fields of query-type
+    template variables. This is used for dashboards that don't need fallback
+    metrics but still need formatting fixes.
+    """
+    for var in templating.get("list", []):
+        if var.get("type") != "query":
+            continue
+
+        definition = var.get("definition", "")
+        if definition:
+            var["definition"] = _fix_promql_expr(definition)
+
+        query_val = var.get("query", "")
+        if isinstance(query_val, str) and query_val:
+            var["query"] = _fix_promql_expr(query_val)
+        elif isinstance(query_val, dict):
+            inner_query = query_val.get("query", "")
+            if inner_query:
+                query_val["query"] = _fix_promql_expr(inner_query)
+
+    return templating
 
 
 def patch_default_dashboard(data: dict) -> dict:
@@ -292,16 +331,18 @@ def patch_train_dashboard(data: dict) -> dict:
 def apply_patches(name: str, output_dir: str) -> None:
     """Load a generated dashboard JSON, apply compatibility patches, and save.
 
-    Applies the following global text-level fixes before JSON parsing:
+    Applies the following text-level fixes BEFORE JSON parsing (safe operations
+    that only modify JSON string content, not JSON structure):
     1. Remove {{{global_filters}}} Jinja2-style placeholders → empty string.
-    2. Replace double braces {{ }} → single braces { } (PromQL label selectors).
-    3. Fix trailing commas inside label selectors: {foo="bar",} → {foo="bar"}.
-    4. Remove empty braces after metric names: metric{} → metric.
+    2. Remove empty braces after metric names in label_values() calls.
+    3. Remove trailing commas inside label selectors: {foo="bar",} → {foo="bar"}.
+
+    Then applies JSON-level patches AFTER parsing (where we can safely modify
+    PromQL expressions inside parsed string values without breaking JSON):
+    4. Fix double braces {{ }} in PromQL label matchers → single braces.
     5. Replace single-quoted string matchers: resource='GPU' → resource="GPU".
     6. Remove spaces before =~ and !~ operators.
-
-    Then applies per-dashboard structural patches (template variable fallbacks,
-    Node Count fallback targets, etc.).
+    7. Per-dashboard structural patches (template variable fallbacks, etc.).
     """
     output_path = os.path.join(output_dir, f"{name}.json")
     if not os.path.exists(output_path):
@@ -311,40 +352,27 @@ def apply_patches(name: str, output_dir: str) -> None:
         content = f.read()
 
     # --- Text-level fixes (applied before JSON parsing) ---
+    # These are safe because they only modify content inside JSON strings
+    # without changing the JSON structure itself (no quote conflicts).
 
     # Remove Jinja2-style {{{global_filters}}} / {{global_filters}} placeholders.
     # Ray's generator uses these but they don't resolve to anything in our context.
     content = content.replace("{{{global_filters}}}", "")
     content = content.replace("{{global_filters}}", "")
 
-    # Fix double braces left over from Python string formatting:
-    # e.g. {{SessionName}} → {SessionName}  (valid PromQL label matcher)
-    # but preserve Grafana template variables like {{model_type}} in legendFormat
-    # by only fixing double braces that contain PromQL-like content (=~ or = or !~).
-    # We do this by replacing {{ only when followed by a label-matcher pattern,
-    # and }} only when preceded by one.
-    content = re.sub(r"\{\{(\w+[=~!])", r"{\1", content)
-    content = re.sub(r"([\"'][=~!])\}\}", r"\1}", content)
-    # Also handle cases like {{variable}} that are NOT PromQL — leave those alone.
-
     # Fix Prometheus parse error: unexpected left brace '{'
     # Ray's dashboard generator produces `label_values(metric{}, label)` which
     # is rejected by modern Grafana versions. We strip the empty braces.
     content = re.sub(r"label_values\(([^,]+?)\{\}\s*,", r"label_values(\1,", content)
 
-    # Also strip empty {} in other contexts (e.g. query_result(func(metric{}))).
-    # But be careful not to strip {{ }} Grafana template syntax.
-    # Match: word char followed by {}  but NOT {{ }}
+    # Also strip empty {} in other PromQL contexts inside JSON strings.
+    # e.g. query_result(func(metric{})) → query_result(func(metric))
+    # Be careful not to strip {{ }} Grafana template syntax (used in legendFormat).
+    # Match: word char followed by {} but NOT preceded by { and NOT followed by }
     content = re.sub(r"(?<!\{)(\w+)\{\s*\}(?!\})", r"\1", content)
 
     # Fix trailing commas inside label selectors: {job="ray",} → {job="ray"}
     content = re.sub(r",\s*\}", "}", content)
-
-    # Fix single-quoted string matchers in PromQL: resource='GPU' → resource="GPU"
-    content = re.sub(r"(\w+)='([^']*)'", r'\1="\2"', content)
-
-    # Fix spaces before =~ and !~ operators: foo =~"bar" → foo=~"bar"
-    content = re.sub(r"(\w+)\s*(=~|!~)", r"\1\2", content)
 
     # --- JSON-level structural patches ---
     data = json.loads(content)
@@ -358,11 +386,11 @@ def apply_patches(name: str, output_dir: str) -> None:
     if patcher:
         data = patcher(data)
 
-    # For ALL dashboards: fix template variables and panel targets that
-    # weren't covered by a specific patcher.
+    # For ALL dashboards: fix PromQL formatting issues in template vars and
+    # panel targets. This handles single quotes, spacing, double braces, and
+    # empty {} that weren't caught by text-level fixes.
     if name not in patchers:
-        # Still fix PromQL formatting issues in template vars and panels
-        _patch_template_vars(data.get("templating", {}), [])
+        _fix_templating_exprs(data.get("templating", {}))
         _fix_panel_targets(data)
 
     with open(output_path, "w") as f:
