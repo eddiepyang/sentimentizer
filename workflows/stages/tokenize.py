@@ -29,9 +29,7 @@ def run_tokenize(state: State, *, resume: bool = False) -> None:
 
     if state.run_type == "new":
         if skip_data:
-            logger.info(
-                f"skipping data creation: {existing_rows} rows already exist (need {stop})"
-            )
+            logger.info(f"skipping data creation: {existing_rows} rows already exist (need {stop})")
         if is_ray_available():
             import ray
 

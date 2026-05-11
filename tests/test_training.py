@@ -19,10 +19,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from sentimentizer.config import (
-    EmbeddingsConfig,
-    TrainerConfig,
-)
+from sentimentizer.config import EmbeddingsConfig, TrainerConfig
 from sentimentizer.metrics import compute_classification_metrics
 from sentimentizer.trainer import (
     _get_opt_params,
@@ -441,9 +438,7 @@ class TestSchedulerCorrectness:
         If T_max < default_epochs, the LR decays to minimum before training
         finishes, leaving the model to train at eta_min for remaining epochs.
         """
-        from sentimentizer.config import (
-            default_epochs,
-        )
+        from sentimentizer.config import default_epochs
 
         for model_type in ("encoder", "decoder"):
             sched = _get_sched_params(model_type)

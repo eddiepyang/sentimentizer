@@ -833,8 +833,8 @@ def _train_func(config: dict) -> None:
 
         # Also push to standalone Prometheus exporter gauges from rank 0
         try:
-            from sentimentizer.exporter import (  # noqa: E402
-                TRAINING_EPOCH,
+            from sentimentizer.exporter import (
+                TRAINING_EPOCH,  # noqa: E402
                 TRAINING_LR,
                 TRAINING_TRAIN_LOSS,
                 TRAINING_VAL_ACCURACY,
