@@ -319,19 +319,6 @@ class Trainer:
             self.losses.append(loss_val)
             if i % (self.cfg.batch_size * 250) == 0:
                 current_loss = float(np.mean(self.losses[-120:]))
-                gauges = _get_ray_gauges(self.model_type)
-                if gauges is not None:
-                    gauges["train_loss"].set(current_loss)
-                    gauges["lr"].set(float(self.optimizer.param_groups[0]["lr"]))
-                try:
-                    from sentimentizer.exporter import TRAINING_LR, TRAINING_TRAIN_LOSS
-
-                    TRAINING_TRAIN_LOSS.labels(model_type=self.model_type).set(current_loss)
-                    TRAINING_LR.labels(model_type=self.model_type).set(
-                        float(self.optimizer.param_groups[0]["lr"])
-                    )
-                except ImportError:
-                    pass
                 logger.info(
                     f"[{self.model_type}] [epoch {epoch}] {i / n:.2f} of rows completed in "
                     f"{j + 1} cycles, current loss at {current_loss:.4f}"
@@ -748,7 +735,7 @@ def _train_func(config: dict) -> None:
         model.train()
         epoch_losses = []
 
-        for i, batch in enumerate(train_shard.iter_torch_batches(batch_size=batch_size)):
+        for _i, batch in enumerate(train_shard.iter_torch_batches(batch_size=batch_size)):
             loss_val = train_step(
                 model,
                 data=batch["data"].long().to(device),
@@ -757,23 +744,6 @@ def _train_func(config: dict) -> None:
                 loss_function=loss_function,
             )
             epoch_losses.append(loss_val)
-
-            # Update Ray custom metrics gauge from rank 0 to prevent worker collisions
-            if i % 250 == 0 and train.get_context().get_world_rank() == 0:
-                current_loss = float(np.mean(epoch_losses[-120:]))
-                gauges = _get_ray_gauges(model_type)
-                if gauges is not None:
-                    gauges["train_loss"].set(current_loss)
-                    gauges["lr"].set(float(optimizer.param_groups[0]["lr"]))
-                try:
-                    from sentimentizer.exporter import TRAINING_LR, TRAINING_TRAIN_LOSS
-
-                    TRAINING_TRAIN_LOSS.labels(model_type=model_type).set(current_loss)
-                    TRAINING_LR.labels(model_type=model_type).set(
-                        float(optimizer.param_groups[0]["lr"])
-                    )
-                except ImportError:
-                    pass
 
         if scheduler:
             scheduler.step()
