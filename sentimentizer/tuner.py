@@ -516,8 +516,8 @@ def _build_model_config(model_type: str, config: dict) -> Any:
             d_model=config.get("d_model", 256),
             n_heads=config.get("n_heads", 4),
             n_encoder_layers=config.get("n_encoder_layers", 2),
-            n_decoder_layers=config.get("n_decoder_layers", 4),
-            dropout=config.get("dropout", 0.2),
+            n_decoder_layers=config.get("n_decoder_layers", 2),
+            dropout=config.get("dropout", 0.3),
             ff_multiplier=config.get("ff_multiplier", 4),
         )
     else:

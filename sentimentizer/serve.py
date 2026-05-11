@@ -60,7 +60,7 @@ MODEL_REGISTRY: dict[str, dict[str, Any]] = {
         "d_model": 256,
         "n_heads": 4,
         "n_encoder_layers": 2,
-        "n_decoder_layers": 4,
+        "n_decoder_layers": 2,
     },
 }
 

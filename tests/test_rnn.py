@@ -437,7 +437,8 @@ class TestModelConfigs:
         assert cfg.d_model == 256
         assert cfg.n_heads == 4
         assert cfg.n_encoder_layers == 2
-        assert cfg.n_decoder_layers == 4
+        assert cfg.n_decoder_layers == 2
+        assert cfg.dropout == 0.3
         assert cfg.ff_multiplier == 4
 
     def test_decoder_custom_config(self):
