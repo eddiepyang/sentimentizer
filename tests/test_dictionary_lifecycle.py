@@ -18,11 +18,7 @@ ray = pytest.importorskip("ray")
 from gensim import corpora
 
 from sentimentizer.config import DriverConfig, TokenizerConfig
-from sentimentizer.tokenizer import (
-    Tokenizer,
-    _build_dictionary_distributed,
-    _count_vocab_batch,
-)
+from sentimentizer.tokenizer import Tokenizer, _build_dictionary_distributed, _count_vocab_batch
 
 
 @pytest.fixture(scope="module")

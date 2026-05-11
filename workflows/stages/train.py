@@ -141,11 +141,7 @@ def run_train(
     # so the dashboard doesn't show residual data from other model types.
     _reset_stale_metrics(state.model)
 
-    from sentimentizer.config import (
-        DriverConfig,
-        default_epochs,
-        weights_path_for,
-    )
+    from sentimentizer.config import DriverConfig, default_epochs, weights_path_for
 
     # Handle --pull-from-hub before training (preserves old behavior)
     if pull_from_hub:
@@ -231,11 +227,7 @@ def _run_fit_single(
     """Single-node training using the existing Trainer class."""
     import torch
 
-    from sentimentizer.config import (
-        DriverConfig,
-        default_dataloader_workers,
-        weights_path_for,
-    )
+    from sentimentizer.config import DriverConfig, default_dataloader_workers, weights_path_for
     from sentimentizer.loader import compute_pos_weight, load_train_val_corpus_datasets
     from sentimentizer.trainer import new_trainer
 
@@ -336,10 +328,7 @@ def _run_fit_distributed(
     """
     import torch
 
-    from sentimentizer.config import (
-        DriverConfig,
-        weights_path_for,
-    )
+    from sentimentizer.config import DriverConfig, weights_path_for
     from sentimentizer.loader import compute_pos_weight, load_train_val_ray_datasets
     from sentimentizer.trainer import new_ray_trainer
 

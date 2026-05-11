@@ -381,12 +381,7 @@ def _trainable_wrapper(config: dict, train_dataset: Any = None, val_dataset: Any
     - 'embeddings_emb_length': int
     - 'input_len': int
     """
-    from sentimentizer.config import (
-        DriverConfig,
-        EmbeddingsConfig,
-        TrainerConfig,
-        default_epochs,
-    )
+    from sentimentizer.config import DriverConfig, EmbeddingsConfig, TrainerConfig, default_epochs
     from sentimentizer.trainer import _new_loaders, new_trainer
 
     model_type = config["model_type"]

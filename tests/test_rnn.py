@@ -9,23 +9,13 @@ import pytest
 ray = pytest.importorskip("ray")
 import torch
 
-from sentimentizer.config import (
-    DecoderConfig,
-    EncoderConfig,
-    RNNConfig,
-    TrainerConfig,
-)
+from sentimentizer.config import DecoderConfig, EncoderConfig, RNNConfig, TrainerConfig
 from sentimentizer.extractor import extract_data_ray
 from sentimentizer.loader import CorpusDataset, load_train_val_ray_datasets
 from sentimentizer.models.decoder import Decoder
 from sentimentizer.models.encoder import Encoder
 from sentimentizer.models.rnn import RNN, get_trained_model
-from sentimentizer.tokenizer import (
-    Tokenizer,
-    convert_rating,
-    get_trained_tokenizer,
-    regex_tokenize,
-)
+from sentimentizer.tokenizer import Tokenizer, convert_rating, get_trained_tokenizer, regex_tokenize
 from sentimentizer.trainer import new_ray_trainer, new_trainer
 
 

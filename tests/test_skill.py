@@ -24,11 +24,7 @@ from sentimentizer.agent.skill import (
     TuningRunResult,
     _build_model_config,
 )
-from sentimentizer.config import (
-    DecoderConfig,
-    EncoderConfig,
-    RNNConfig,
-)
+from sentimentizer.config import DecoderConfig, EncoderConfig, RNNConfig
 
 # ─── TuningRunConfig Tests ──────────────────────────────────────────
 

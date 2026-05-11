@@ -10,10 +10,7 @@ import sys
 import pytest
 from click.testing import CliRunner
 
-from workflows.driver import (
-    State,
-    cli,
-)
+from workflows.driver import State, cli
 
 # ──────────────────────────────────────────────
 # Lazy-loading: --help must not import ML stack
