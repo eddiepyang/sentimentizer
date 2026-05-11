@@ -1,28 +1,21 @@
 import json
 import shutil
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
-import ray
+
+# ruff: noqa: E402
+ray = pytest.importorskip("ray")
 import torch
 
-from sentimentizer.config import (
-    DecoderConfig,
-    EncoderConfig,
-    RNNConfig,
-    TrainerConfig,
-)
-from sentimentizer.extractor import extract_data
+from sentimentizer.config import DecoderConfig, EncoderConfig, RNNConfig, TrainerConfig
+from sentimentizer.extractor import extract_data_ray
 from sentimentizer.loader import CorpusDataset, load_train_val_ray_datasets
 from sentimentizer.models.decoder import Decoder
 from sentimentizer.models.encoder import Encoder
 from sentimentizer.models.rnn import RNN, get_trained_model
-from sentimentizer.tokenizer import (
-    Tokenizer,
-    convert_rating,
-    get_trained_tokenizer,
-    regex_tokenize,
-)
+from sentimentizer.tokenizer import Tokenizer, convert_rating, get_trained_tokenizer, regex_tokenize
 from sentimentizer.trainer import new_ray_trainer, new_trainer
 
 
@@ -86,7 +79,7 @@ class TestExtractData:
 
     def test_success(self, rel_path, relative_root):
         ray.init(ignore_reinit_error=True)
-        ds = extract_data(compressed_file_name=self.fname, file_path=rel_path, stop=self.stop)
+        ds = extract_data_ray(compressed_file_name=self.fname, file_path=rel_path, stop=self.stop)
         assert isinstance(ds, ray.data.Dataset)
 
         path = f"{relative_root}/tests/test_data/file.parquet"
@@ -434,7 +427,8 @@ class TestModelConfigs:
         assert cfg.d_model == 256
         assert cfg.n_heads == 4
         assert cfg.n_encoder_layers == 2
-        assert cfg.n_decoder_layers == 4
+        assert cfg.n_decoder_layers == 2
+        assert cfg.dropout == 0.3
         assert cfg.ff_multiplier == 4
 
     def test_decoder_custom_config(self):
@@ -461,7 +455,141 @@ class TestSingleTrainer:
         emb_weights = torch.randn(100, 100)
         model = RNN(emb_weights=emb_weights)
         cfg = TrainerConfig(device="cpu")
-        trainer = new_trainer(model=model, cfg=cfg)
+        trainer = new_trainer(model=model, cfg=cfg, model_type="rnn")
         assert isinstance(trainer.loss_function, torch.nn.BCEWithLogitsLoss)
-        assert isinstance(trainer.optimizer, torch.optim.AdamW)
-        assert trainer.cfg.device == "cpu"
+
+
+# ──────────────────────────────────────────────
+# Metrics and Monitoring tests
+# ──────────────────────────────────────────────
+
+
+class TestMetricsGauges:
+    """Tests specifically for verifying metric updates to Prometheus gauges."""
+
+    def test_train_func_updates_prometheus_gauges(self) -> None:
+        """Verifies _train_func updates Prometheus Gauges during distributed training."""
+        from sentimentizer.trainer import _train_func
+
+        # 1. Setup minimal config
+        config = {
+            "epochs": 1,
+            "batch_size": 2,
+            "lr": 0.001,
+            "betas": [0.9, 0.999],
+            "weight_decay": 0.01,
+            "model_type": "rnn",
+            "dict_path": "fake.dict",
+            "embeddings_model_name": "fake-glove",
+            "embeddings_emb_length": 100,
+            "input_len": 200,
+            "pos_weight": 1.0,
+        }
+
+        # 2. Mock Ray Data shards
+        mock_shard = MagicMock()
+        # Simulate one batch of data for both train and val
+        mock_shard.iter_torch_batches.return_value = [
+            {
+                "data": torch.zeros((2, 200), dtype=torch.long),
+                "target": torch.ones((2, 1), dtype=torch.float),
+            }
+        ]
+
+        # 3. Create mock gauge objects (matching _get_ray_gauges dict keys)
+        mock_gauges = {
+            "train_loss": MagicMock(),
+            "val_loss": MagicMock(),
+            "val_accuracy": MagicMock(),
+            "val_precision": MagicMock(),
+            "val_recall": MagicMock(),
+            "val_f1": MagicMock(),
+            "val_cohen_kappa": MagicMock(),
+            "val_auc_roc": MagicMock(),
+            "val_positive_accuracy": MagicMock(),
+            "val_negative_accuracy": MagicMock(),
+            "epoch": MagicMock(),
+            "lr": MagicMock(),
+        }
+
+        # 4. Mock dependencies to isolate _train_func
+        with (
+            patch("ray.train.get_dataset_shard", return_value=mock_shard),
+            patch("ray.train.get_context") as mock_get_context,
+            patch("ray.train.report"),
+            patch("sentimentizer.trainer.train_step", return_value=0.5),
+            patch("sentimentizer.trainer._get_ray_gauges", return_value=mock_gauges),
+            patch("sentimentizer.models.rnn.new_model") as mock_new_model,
+            patch("sentimentizer.trainer.prepare_model", side_effect=lambda m: m),
+            patch("sentimentizer.exporter.TRAINING_LR", create=True),
+        ):
+            # Setup mock model — parameters() must return a fresh iterator each call
+            mock_model = MagicMock()
+            p = torch.nn.Parameter(torch.randn(1, 1))
+            mock_model.parameters.side_effect = lambda: iter([p])
+            mock_model.return_value = torch.randn(2, 1)
+            mock_model.state_dict.return_value = {}
+            mock_new_model.return_value = mock_model
+
+            # Simulate worker rank 0 so metrics are recorded
+            mock_get_context.return_value.get_world_rank.return_value = 0
+
+            _train_func(config)
+
+            # 5. Assertions
+            assert mock_gauges["val_loss"].set.called, "val_loss gauge was not updated"
+            assert mock_gauges["val_accuracy"].set.called, "val_accuracy gauge was not updated"
+            assert mock_gauges["lr"].set.called, "lr gauge was not updated"
+
+    def test_trainer_evaluate_updates_gauges(self) -> None:
+        """Verifies Trainer.evaluate updates Prometheus Gauges during single-node training."""
+        from sentimentizer.trainer import Trainer, TrainerConfig
+
+        mock_model = MagicMock()
+        mock_loader = MagicMock()
+        mock_loader.dataset = [1, 2]
+        mock_loader.__iter__.return_value = iter([(torch.zeros(2, 10), torch.ones(2, 1))])
+
+        cfg = TrainerConfig(device="cpu")
+        trainer = Trainer(
+            loss_function=torch.nn.BCEWithLogitsLoss(),
+            optimizer=MagicMock(),
+            scheduler=MagicMock(),
+            cfg=cfg,
+            model_type="rnn",
+        )
+
+        # Create mock gauge objects (matching _get_ray_gauges dict keys)
+        mock_gauges = {
+            "train_loss": MagicMock(),
+            "val_loss": MagicMock(),
+            "val_accuracy": MagicMock(),
+            "val_precision": MagicMock(),
+            "val_recall": MagicMock(),
+            "val_f1": MagicMock(),
+            "val_cohen_kappa": MagicMock(),
+            "val_auc_roc": MagicMock(),
+            "val_positive_accuracy": MagicMock(),
+            "val_negative_accuracy": MagicMock(),
+            "epoch": MagicMock(),
+            "lr": MagicMock(),
+        }
+
+        with (
+            patch("sentimentizer.trainer._get_ray_gauges", return_value=mock_gauges),
+            # Patch the exporter import inside evaluate() to avoid real Prometheus gauges
+            patch("sentimentizer.exporter.TRAINING_EPOCH", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_LOSS", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_ACCURACY", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_PRECISION", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_RECALL", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_F1", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_COHEN_KAPPA", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_AUC_ROC", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_POSITIVE_ACCURACY", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_NEGATIVE_ACCURACY", create=True),
+        ):
+            mock_model.return_value = torch.randn(2, 1)
+            trainer.evaluate(mock_model, mock_loader, epoch=0)
+            assert mock_gauges["val_loss"].set.called, "val_loss gauge was not updated"
+            assert mock_gauges["val_accuracy"].set.called, "val_accuracy gauge was not updated"

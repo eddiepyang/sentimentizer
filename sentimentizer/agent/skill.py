@@ -47,10 +47,10 @@ from sentimentizer.config import (
     DriverConfig,
     EmbeddingsConfig,
     TrainerConfig,
-    auto_detect_device,
     default_epochs,
     weights_path_for,
 )
+from sentimentizer.device import resolve_device
 from sentimentizer.tuner import TunerConfig, tune_model
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
@@ -217,7 +217,7 @@ class TuningRun:
     def _resolve_device(self) -> None:
         """Resolve 'auto' device to the best available."""
         if self.config.device == "auto":
-            self.config.device = auto_detect_device()
+            self.config.device = resolve_device("auto")
         logger.info("device_resolved", device=self.config.device)
 
     def _load_configs(self) -> tuple[AgentConfig, TunerConfig]:
@@ -772,7 +772,7 @@ class TuningRun:
 # ---------------------------------------------------------------------------
 
 
-def diagnose_training_issues(model_type: str = "rnn") -> dict[str, Any]:
+def diagnose_training_issues(model_type: str) -> dict[str, Any]:
     """Run diagnostic checks to detect common training issues.
 
     Checks for problems that cause incorrect or "whacky" predictions,
@@ -1158,8 +1158,8 @@ def _build_model_config(model_type: str, config: dict[str, Any]) -> Any:
             d_model=config.get("d_model", 256),
             n_heads=config.get("n_heads", 4),
             n_encoder_layers=config.get("n_encoder_layers", 2),
-            n_decoder_layers=config.get("n_decoder_layers", 4),
-            dropout=config.get("dropout", 0.2),
+            n_decoder_layers=config.get("n_decoder_layers", 2),
+            dropout=config.get("dropout", 0.3),
             ff_multiplier=config.get("ff_multiplier", 4),
         )
     else:

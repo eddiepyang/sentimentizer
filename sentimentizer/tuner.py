@@ -15,10 +15,16 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from ray import tune
-from ray.tune import CLIReporter, RunConfig
-from ray.tune.schedulers import ASHAScheduler, HyperBandScheduler, MedianStoppingRule
-from ray.tune.search.optuna import OptunaSearch
+
+try:
+    from ray import tune
+    from ray.tune import CLIReporter, RunConfig
+    from ray.tune.schedulers import ASHAScheduler, HyperBandScheduler, MedianStoppingRule
+    from ray.tune.search.optuna import OptunaSearch
+
+    TuneCallback = tune.callback.Callback
+except ImportError:
+    TuneCallback = object
 
 from sentimentizer import new_logger
 from sentimentizer.config import DEFAULT_LOG_LEVEL
@@ -31,7 +37,7 @@ logger = new_logger(DEFAULT_LOG_LEVEL)
 # ---------------------------------------------------------------------------
 
 
-class TunePrometheusCallback(tune.callback.Callback):
+class TunePrometheusCallback(TuneCallback):
     """Ray Tune callback that pushes trial metrics to Prometheus gauges.
 
     This callback updates the ``sentimentizer_tune_*`` Prometheus gauges
@@ -153,8 +159,15 @@ class TunePrometheusCallback(tune.callback.Callback):
         result: dict,
         **kwargs: Any,
     ) -> None:
-        """Called after each trial reports intermediate results."""
-        trial_id = trial if isinstance(trial, str) else str(trial)
+        """Called after each trial reports intermediate results.
+
+        In Ray 2.55+, the ``trial`` parameter is a ``Trial`` object with a
+        ``trial_id`` attribute — it is no longer a plain string.
+        """
+        # Ray 2.55+ passes a Trial object with .trial_id; fall back for older versions
+        trial_id: str = getattr(trial, "trial_id", None) or (
+            trial if isinstance(trial, str) else str(trial)
+        )
         self._update_trial_gauges(trial_id, result)
 
     def on_trial_complete(self, iteration: int, trials: list, trial: Any, **kwargs: Any) -> None:
@@ -368,12 +381,7 @@ def _trainable_wrapper(config: dict, train_dataset: Any = None, val_dataset: Any
     - 'embeddings_emb_length': int
     - 'input_len': int
     """
-    from sentimentizer.config import (
-        DriverConfig,
-        EmbeddingsConfig,
-        TrainerConfig,
-        default_epochs,
-    )
+    from sentimentizer.config import DriverConfig, EmbeddingsConfig, TrainerConfig, default_epochs
     from sentimentizer.trainer import _new_loaders, new_trainer
 
     model_type = config["model_type"]
@@ -448,7 +456,7 @@ def _trainable_wrapper(config: dict, train_dataset: Any = None, val_dataset: Any
     epochs = config.get("epochs", default_epochs(model_type))
     best_val_loss = float("inf")
 
-    for epoch in range(epochs):
+    for epoch in range(1, epochs + 1):
         trainer._train_epoch(model, train_loader, epoch)  # noqa: SLF001
         trainer.evaluate(model, val_loader, epoch)
 
@@ -503,8 +511,8 @@ def _build_model_config(model_type: str, config: dict) -> Any:
             d_model=config.get("d_model", 256),
             n_heads=config.get("n_heads", 4),
             n_encoder_layers=config.get("n_encoder_layers", 2),
-            n_decoder_layers=config.get("n_decoder_layers", 4),
-            dropout=config.get("dropout", 0.2),
+            n_decoder_layers=config.get("n_decoder_layers", 2),
+            dropout=config.get("dropout", 0.3),
             ff_multiplier=config.get("ff_multiplier", 4),
         )
     else:
@@ -649,7 +657,8 @@ def tune_model(
         mode=tuner_config.mode,
     )
     best_config = best_result.config
-    best_metrics = best_result.metrics
+    # Result.metrics is Optional[Dict] in Ray 2.55+ — guard against None
+    best_metrics = best_result.metrics or {}
 
     internal_keys = {
         "model_type",
@@ -663,11 +672,14 @@ def tune_model(
     }
     clean_config = {k: v for k, v in best_config.items() if k not in internal_keys}
 
+    # ResultGrid is NOT directly iterable in Ray 2.55+.
+    # Use index-based iteration with len() instead of ``for x in result:``.
     all_results = []
-    for trial_result in result:
+    for i in range(len(result)):
+        trial_result = result[i]
         trial_config = {k: v for k, v in trial_result.config.items() if k not in internal_keys}
         all_results.append(
-            {"config": trial_config, "metrics": trial_result.metrics},
+            {"config": trial_config, "metrics": trial_result.metrics or {}},
         )
 
     output = {

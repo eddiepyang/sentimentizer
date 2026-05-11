@@ -11,17 +11,36 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
+import json
 import logging
 import os
 import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 
 import psutil
 from prometheus_client import Gauge, Info, start_http_server
 
 logger = logging.getLogger(__name__)
+
+# ──────────────────────────────────────────────
+# Persisted metrics directory (per-model-type files)
+# ──────────────────────────────────────────────
+
+_METRICS_DIR = Path("/tmp/sentimentizer_metrics")
+
+
+def get_training_metrics_path(model_type: str) -> Path:
+    """Return the per-model-type path for persisted training metrics.
+
+    Each model type (rnn, encoder, decoder) writes to its own JSON file to
+    eliminate race conditions when multiple training processes run concurrently.
+    """
+    return _METRICS_DIR / f"{model_type}_metrics.json"
+
 
 # ──────────────────────────────────────────────
 # System metrics
@@ -190,6 +209,82 @@ TUNE_TRIAL_COMPLETED_COUNT = Gauge(
 )
 
 # ──────────────────────────────────────────────
+# Training model performance metrics
+# ──────────────────────────────────────────────
+
+TRAINING_TRAIN_LOSS = Gauge(
+    "sentimentizer_training_train_loss",
+    "Training loss from the current training run",
+    ["model_type"],
+)
+
+TRAINING_VAL_LOSS = Gauge(
+    "sentimentizer_training_val_loss",
+    "Validation loss from the current training run",
+    ["model_type"],
+)
+
+TRAINING_VAL_ACCURACY = Gauge(
+    "sentimentizer_training_val_accuracy",
+    "Validation accuracy from the current training run",
+    ["model_type"],
+)
+
+TRAINING_VAL_PRECISION = Gauge(
+    "sentimentizer_training_val_precision",
+    "Validation precision (positive class) from the current training run",
+    ["model_type"],
+)
+
+TRAINING_VAL_RECALL = Gauge(
+    "sentimentizer_training_val_recall",
+    "Validation recall (positive class) from the current training run",
+    ["model_type"],
+)
+
+TRAINING_VAL_F1 = Gauge(
+    "sentimentizer_training_val_f1",
+    "Validation F1 score from the current training run",
+    ["model_type"],
+)
+
+TRAINING_VAL_COHEN_KAPPA = Gauge(
+    "sentimentizer_training_val_cohen_kappa",
+    "Validation Cohen's kappa from the current training run",
+    ["model_type"],
+)
+
+TRAINING_VAL_AUC_ROC = Gauge(
+    "sentimentizer_training_val_auc_roc",
+    "Validation AUC-ROC from the current training run",
+    ["model_type"],
+)
+
+TRAINING_VAL_POSITIVE_ACCURACY = Gauge(
+    "sentimentizer_training_val_positive_accuracy",
+    "Validation positive-class accuracy from the current training run",
+    ["model_type"],
+)
+
+TRAINING_VAL_NEGATIVE_ACCURACY = Gauge(
+    "sentimentizer_training_val_negative_accuracy",
+    "Validation negative-class accuracy from the current training run",
+    ["model_type"],
+)
+
+TRAINING_EPOCH = Gauge(
+    "sentimentizer_training_epoch",
+    "Current training epoch number",
+    ["model_type"],
+)
+
+TRAINING_LR = Gauge(
+    "sentimentizer_training_lr",
+    "Current learning rate",
+    ["model_type"],
+)
+
+# ──────────────────────────────────────────────
 # Ray health metrics
 # ──────────────────────────────────────────────
 
@@ -206,6 +301,16 @@ RAY_NODE_COUNT = Gauge(
 RAY_METRIC_COUNT = Gauge(
     "sentimentizer_ray_metric_count",
     "Number of Ray metric series found",
+)
+
+RAY_CONTROLLER_STATE = Gauge(
+    "sentimentizer_ray_controller_state",
+    "Ray controller state",
+)
+
+RAY_CONTROLLER_OPERATION_TIME = Gauge(
+    "sentimentizer_ray_controller_operation_time_s",
+    "Ray controller operation time",
 )
 
 
@@ -290,11 +395,98 @@ def _update_ray_metrics(ray_url: str) -> None:
                     start = line.index('instance="') + len('instance="')
                     end = line.index('"', start)
                     node_instances.add(line[start:end])
+                elif line.startswith(
+                    (
+                        "ray_serve_controller_state",
+                        "ray_controller_state",
+                    )
+                ):
+                    with contextlib.suppress(ValueError):
+                        RAY_CONTROLLER_STATE.set(float(line.split()[-1]))
+                elif line.startswith(
+                    (
+                        "ray_serve_controller_operation_time",
+                        "ray_controller_operation_time",
+                    )
+                ):
+                    with contextlib.suppress(ValueError):
+                        RAY_CONTROLLER_OPERATION_TIME.set(float(line.split()[-1]))
             RAY_NODE_COUNT.set(len(node_instances))
     except (urllib.error.URLError, OSError):
         RAY_AVAILABLE.set(0)
         RAY_NODE_COUNT.set(0)
         RAY_METRIC_COUNT.set(0)
+        RAY_CONTROLLER_STATE.set(0)
+        RAY_CONTROLLER_OPERATION_TIME.set(0)
+
+
+def _update_training_metrics() -> None:
+    """Read persisted training metrics from per-model JSON files and update gauges.
+
+    Each model type (rnn, encoder, decoder) writes to its own JSON file in
+    ``/tmp/sentimentizer_metrics/{model_type}_metrics.json`` to eliminate
+    race conditions when multiple training processes run concurrently.  The
+    exporter discovers all three files and zeroes out Prometheus gauges for
+    any model type whose file is missing or stale.
+    """
+    try:
+        _METRICS_DIR.mkdir(parents=True, exist_ok=True)
+        for model_type in ("rnn", "encoder", "decoder"):
+            path = get_training_metrics_path(model_type)
+            lbl = {"model_type": model_type}
+
+            if not path.exists():
+                # File absent → zero out gauges so stale values are cleared
+                TRAINING_TRAIN_LOSS.labels(**lbl).set(0)
+                TRAINING_VAL_LOSS.labels(**lbl).set(0)
+                TRAINING_VAL_ACCURACY.labels(**lbl).set(0)
+                TRAINING_VAL_PRECISION.labels(**lbl).set(0)
+                TRAINING_VAL_RECALL.labels(**lbl).set(0)
+                TRAINING_VAL_F1.labels(**lbl).set(0)
+                TRAINING_VAL_COHEN_KAPPA.labels(**lbl).set(0)
+                TRAINING_VAL_AUC_ROC.labels(**lbl).set(0)
+                TRAINING_VAL_POSITIVE_ACCURACY.labels(**lbl).set(0)
+                TRAINING_VAL_NEGATIVE_ACCURACY.labels(**lbl).set(0)
+                TRAINING_EPOCH.labels(**lbl).set(0)
+                TRAINING_LR.labels(**lbl).set(0)
+                continue
+
+            data = json.loads(path.read_text())
+            if not isinstance(data, dict):
+                continue
+
+            # Sanity check — the file name should match _written_by trace field
+            written_by = data.get("_written_by", model_type)
+            if written_by != model_type:
+                logger.warning(
+                    "metrics file mismatch: expected %s but found _written_by=%s",
+                    model_type,
+                    written_by,
+                )
+
+            TRAINING_TRAIN_LOSS.labels(**lbl).set(float(data.get("train_loss", 0)))
+            TRAINING_VAL_LOSS.labels(**lbl).set(float(data.get("val_loss", 0)))
+            TRAINING_VAL_ACCURACY.labels(**lbl).set(float(data.get("accuracy", 0)))
+            TRAINING_VAL_PRECISION.labels(**lbl).set(float(data.get("precision", 0)))
+            TRAINING_VAL_RECALL.labels(**lbl).set(float(data.get("recall", 0)))
+            TRAINING_VAL_F1.labels(**lbl).set(float(data.get("f1", 0)))
+            TRAINING_VAL_COHEN_KAPPA.labels(**lbl).set(float(data.get("cohen_kappa", 0)))
+            auc_roc = data.get("auc_roc")
+            if auc_roc is not None:
+                TRAINING_VAL_AUC_ROC.labels(**lbl).set(float(auc_roc))
+            else:
+                TRAINING_VAL_AUC_ROC.labels(**lbl).set(0)
+            TRAINING_VAL_POSITIVE_ACCURACY.labels(**lbl).set(
+                float(data.get("positive_accuracy", 0))
+            )
+            TRAINING_VAL_NEGATIVE_ACCURACY.labels(**lbl).set(
+                float(data.get("negative_accuracy", 0))
+            )
+            TRAINING_EPOCH.labels(**lbl).set(int(data.get("epoch", 0)))
+            lr = data.get("lr")
+            TRAINING_LR.labels(**lbl).set(0.0 if lr is None else float(lr))
+    except Exception as e:
+        logger.warning("Error updating training metrics from file: %s", e)
 
 
 def _metrics_loop(interval: int, ray_url: str) -> None:
@@ -312,6 +504,10 @@ def _metrics_loop(interval: int, ray_url: str) -> None:
             _update_ray_metrics(ray_url)
         except Exception as e:
             logger.warning("Error updating Ray metrics: %s", e)
+        try:
+            _update_training_metrics()
+        except Exception as e:
+            logger.warning("Error updating training metrics: %s", e)
         time.sleep(interval)
 
 
@@ -319,6 +515,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Sentimentizer Prometheus metrics exporter")
     parser.add_argument(
         "--port", type=int, default=8081, help="Port to serve metrics on (default: 8081)"
+    )
+    parser.add_argument(
+        "--addr",
+        default="127.0.0.1",
+        help="Address to serve metrics on (default: 127.0.0.1)",
     )
     parser.add_argument(
         "--interval",
@@ -351,6 +552,7 @@ def main() -> None:
     _update_system_metrics()
     _update_gpu_metrics()
     _update_ray_metrics(args.ray_url)
+    _update_training_metrics()
 
     # Start background collection thread
     collector = threading.Thread(
@@ -361,7 +563,7 @@ def main() -> None:
     collector.start()
 
     # Start Prometheus HTTP server
-    start_http_server(args.port)
+    start_http_server(args.port, addr=args.addr)
     logger.info("Sentimentizer metrics exporter started on port %d", args.port)
     logger.info("Collecting metrics every %d seconds", args.interval)
     logger.info("Ray metrics URL: %s", args.ray_url)

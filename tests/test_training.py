@@ -12,20 +12,19 @@ Tests cover:
 import json
 import os
 import tempfile
+from pathlib import Path
 
 import numpy as np
 import pytest
 import torch
 import torch.nn as nn
 
-from sentimentizer.config import (
-    EmbeddingsConfig,
-    TrainerConfig,
-)
+from sentimentizer.config import EmbeddingsConfig, TrainerConfig
 from sentimentizer.metrics import compute_classification_metrics
 from sentimentizer.trainer import (
     _get_opt_params,
     _get_sched_params,
+    _LinearWarmupCosineScheduler,
     train_step,
     val_step,
 )
@@ -323,7 +322,8 @@ class TestOptAndSchedParams:
 
     def test_decoder_opt_params(self) -> None:
         opt = _get_opt_params("decoder")
-        assert opt.lr == 0.0005
+        assert opt.lr == 0.0003
+        assert opt.weight_decay == 0.02
 
     def test_rnn_sched_params(self) -> None:
         sched = _get_sched_params("rnn")
@@ -332,10 +332,122 @@ class TestOptAndSchedParams:
     def test_encoder_sched_params(self) -> None:
         sched = _get_sched_params("encoder")
         assert sched.warmup_epochs == 1
+        assert sched.T_max == 8
 
     def test_decoder_sched_params(self) -> None:
         sched = _get_sched_params("decoder")
-        assert sched.warmup_epochs == 1
+        assert sched.warmup_epochs == 2
+        assert sched.T_max == 8
+
+
+# ─── Scheduler Correctness ────────────────────────────────────────
+
+
+class TestSchedulerCorrectness:
+    """Test that learning rate schedules produce correct values."""
+
+    def test_warmup_cosine_no_zero_lr(self) -> None:
+        """_LinearWarmupCosineScheduler must not produce zero LR.
+
+        The old implementation used `step / warmup_steps` which returns
+        0.0 at step=0, making the entire first epoch train with zero LR.
+        The fix uses `(step + 1) / warmup_steps` so the first step gets
+        a non-zero LR multiplier.
+        """
+        from sentimentizer.config import default_epochs
+
+        base_lr = 0.0005
+        warmup_steps = 1
+        total_steps = default_epochs("encoder")  # 8
+        model = TinyModel()
+        optimizer = torch.optim.AdamW(model.parameters(), lr=base_lr)
+        scheduler = _LinearWarmupCosineScheduler(
+            optimizer, warmup_steps=warmup_steps, total_steps=total_steps, eta_min=1e-6
+        )
+
+        lrs = [optimizer.param_groups[0]["lr"]]
+        for _ in range(total_steps):
+            # Simulate optimizer.step() so PyTorch doesn't warn
+            optimizer.zero_grad()
+            loss = model(torch.randn(2, 10)).sum()
+            loss.backward()
+            optimizer.step()
+            scheduler.step()
+            lrs.append(optimizer.param_groups[0]["lr"])
+
+        # First LR (before any step) must be non-zero
+        assert lrs[0] > 0, f"Initial LR must be > 0, got {lrs[0]}"
+        # After warmup step (step 0 -> step 1), LR should be base_lr or close
+        assert lrs[1] > 0, f"LR after warmup step must be > 0, got {lrs[1]}"
+        # LR should decrease after warmup phase
+        assert lrs[-1] < lrs[1], "LR should decay after warmup"
+
+    def test_warmup_cosine_lr_starts_at_half_base(self) -> None:
+        """With warmup_steps=1, the initial LR multiplier should be 1/2.
+
+        lr_lambda(0) = (0 + 1) / 1 = 1.0 after the LambdaLR init, but
+        LambdaLR with last_epoch=-1 starts at lr_lambda(0) * base_lr.
+        Wait — LambdaLR actually starts at lr_lambda(0), so:
+        initial multiplier = (0 + 1) / warmup_steps = 1/1 = 1.0 * base_lr? No.
+
+        LambdaLR initial LR = base_lr * lr_lambda(0).
+        With the fix: lr_lambda(0) = (0 + 1) / 1 = 1.0.
+        But with warmup_steps=1 and total_steps=8:
+        step 0: lr_lambda = 1.0 (warmup complete)
+        step 1: lr_lambda = cosine decay starts
+
+        For warmup_steps=2: step 0: (0+1)/2 = 0.5, step 1: (1+1)/2 = 1.0
+        """
+        base_lr = 0.001
+        model = TinyModel()
+        optimizer = torch.optim.AdamW(model.parameters(), lr=base_lr)
+        _LinearWarmupCosineScheduler(optimizer, warmup_steps=2, total_steps=8, eta_min=1e-6)
+
+        # LambdaLR with last_epoch=-1 starts at lr_lambda(0)
+        initial_lr = optimizer.param_groups[0]["lr"]
+        expected_multiplier = 1.0 / 2  # (0+1)/warmup_steps = 0.5
+        assert (
+            abs(initial_lr - base_lr * expected_multiplier) < 1e-8
+        ), f"Expected initial LR={base_lr * expected_multiplier}, got {initial_lr}"
+
+    def test_cosine_annealing_lr_decay(self) -> None:
+        """CosineAnnealingLR should decay LR over the configured T_max."""
+        base_lr = 0.001
+        model = TinyModel()
+        optimizer = torch.optim.AdamW(model.parameters(), lr=base_lr)
+        T_max = 4
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=T_max, eta_min=1e-6)
+
+        lrs = [optimizer.param_groups[0]["lr"]]
+        for _ in range(T_max):
+            optimizer.zero_grad()
+            loss = model(torch.randn(2, 10)).sum()
+            loss.backward()
+            optimizer.step()
+            scheduler.step()
+            lrs.append(optimizer.param_groups[0]["lr"])
+
+        # LR should be highest at step 0 and decrease
+        assert lrs[0] == base_lr
+        # Final LR should be close to eta_min
+        assert lrs[-1] < lrs[0], f"LR should decrease: {lrs}"
+
+    def test_scheduler_t_max_matches_default_epochs(self) -> None:
+        """Encoder/decoder T_max should match their default epoch counts.
+
+        If T_max < default_epochs, the LR decays to minimum before training
+        finishes, leaving the model to train at eta_min for remaining epochs.
+        """
+        from sentimentizer.config import default_epochs
+
+        for model_type in ("encoder", "decoder"):
+            sched = _get_sched_params(model_type)
+            epochs = default_epochs(model_type)
+            assert sched.T_max == epochs, (
+                f"{model_type}: T_max={sched.T_max} != default_epochs={epochs}. "
+                f"LR would bottom out after {sched.T_max} epochs but training "
+                f"continues for {epochs} epochs."
+            )
 
 
 # ─── Checkpoint with DDP Model ───────────────────────────────────
@@ -396,6 +508,7 @@ class TestCheckpointWithDDP:
         This mirrors the exact pattern used in _train_func for saving
         and in driver.py for loading checkpoints.
         """
+        pytest.importorskip("ray")
         import ray.cloudpickle as pickle
         from ray.train import Checkpoint
 
@@ -514,12 +627,14 @@ class TestDistributedConfig:
         The correct API is: train.get_dataset_shard("train")
         NOT: train.get_context().get_dataset_shard("train")
         """
+        pytest.importorskip("ray")
         from ray import train
 
         assert callable(train.get_dataset_shard)
 
     def test_get_context_outside_worker_raises(self) -> None:
         """train.get_context() must raise RuntimeError outside a worker."""
+        pytest.importorskip("ray")
         from ray import train
 
         with pytest.raises(RuntimeError, match="cannot be used outside"):
@@ -543,6 +658,140 @@ class TestDistributedConfig:
 
 
 # ─── Metrics Integration ────────────────────────────────────────
+
+
+class TestResetStaleMetrics:
+    """Test _reset_stale_metrics zeroes ALL model types' metrics."""
+
+    def test_zeroes_all_model_type_files(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """_reset_stale_metrics writes zeroed JSON files for ALL model types."""
+        from workflows.stages.train import _reset_stale_metrics
+
+        monkeypatch.setattr("workflows.stages.train._METRICS_DIR", tmp_path)
+
+        _reset_stale_metrics("encoder")
+
+        for mt in ("rnn", "encoder", "decoder"):
+            metrics_file = tmp_path / f"{mt}_metrics.json"
+            assert metrics_file.exists(), f"{mt}_metrics.json should exist"
+            result = json.loads(metrics_file.read_text())
+            assert result["train_loss"] == 0.0
+            assert result["epoch"] == 0
+            assert "_trace" in result
+            assert result["_trace"]["reset_by"] == "encoder"
+
+    def test_creates_per_model_files_when_missing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """_reset_stale_metrics creates JSON files for ALL model types if missing."""
+        from workflows.stages.train import _reset_stale_metrics
+
+        monkeypatch.setattr("workflows.stages.train._METRICS_DIR", tmp_path)
+
+        _reset_stale_metrics("decoder")
+
+        for mt in ("rnn", "encoder", "decoder"):
+            metrics_file = tmp_path / f"{mt}_metrics.json"
+            assert metrics_file.exists()
+            result = json.loads(metrics_file.read_text())
+            assert result["epoch"] == 0
+            assert "_trace" in result
+            assert result["_trace"]["reset_by"] == "decoder"
+
+    def test_overwrites_corrupt_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """_reset_stale_metrics overwrites corrupt per-model files."""
+        from workflows.stages.train import _reset_stale_metrics
+
+        monkeypatch.setattr("workflows.stages.train._METRICS_DIR", tmp_path)
+
+        encoder_file = tmp_path / "encoder_metrics.json"
+        encoder_file.write_text("{invalid json")
+
+        _reset_stale_metrics("encoder")
+
+        assert encoder_file.exists()
+        result = json.loads(encoder_file.read_text())
+        assert "encoder" not in result  # per-model file, not nested
+        assert result["train_loss"] == 0.0
+
+    def test_overwrites_stale_metrics_from_other_model_types(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """_reset_stale_metrics zeroes files from ALL model types, not just the current one."""
+        from workflows.stages.train import _reset_stale_metrics
+
+        monkeypatch.setattr("workflows.stages.train._METRICS_DIR", tmp_path)
+
+        # Pre-populate rnn_metrics.json with realistic stale data
+        rnn_file = tmp_path / "rnn_metrics.json"
+        rnn_file.write_text(
+            json.dumps(
+                {
+                    "train_loss": 0.5,
+                    "val_loss": 0.6,
+                    "accuracy": 0.75,
+                    "epoch": 5,
+                    "_trace": {"reset_by": "rnn", "reset_at": 12345.0},
+                }
+            )
+        )
+
+        _reset_stale_metrics("encoder")
+
+        # RNN file should now be zeroed (no stale data lingering)
+        rnn_data = json.loads(rnn_file.read_text())
+        assert rnn_data["train_loss"] == 0.0
+        assert rnn_data["accuracy"] == 0.0
+        assert rnn_data["epoch"] == 0
+        assert rnn_data["_trace"]["reset_by"] == "encoder"
+
+    def test_resets_prometheus_gauges_all_model_types(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """_reset_stale_metrics resets prometheus_client gauges for ALL model types to 0."""
+        from workflows.stages.train import _reset_stale_metrics
+
+        monkeypatch.setattr("workflows.stages.train._METRICS_DIR", tmp_path)
+
+        from prometheus_client import REGISTRY
+
+        from sentimentizer.exporter import TRAINING_VAL_ACCURACY
+
+        # Set gauges for both encoder and rnn
+        TRAINING_VAL_ACCURACY.labels(model_type="encoder").set(0.99)
+        TRAINING_VAL_ACCURACY.labels(model_type="rnn").set(0.88)
+
+        _reset_stale_metrics("encoder")
+
+        # Both should be zeroed — not just encoder
+        for mt in ("encoder", "rnn", "decoder"):
+            value = REGISTRY.get_sample_value(
+                "sentimentizer_training_val_accuracy",
+                {"model_type": mt},
+            )
+            assert value == 0.0, f"{mt} accuracy gauge should be 0"
+
+    def test_clears_ray_gauges_cache_all_model_types(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """_reset_stale_metrics clears the _RAY_GAUGES cache entirely."""
+        from workflows.stages.train import _reset_stale_metrics
+
+        monkeypatch.setattr("workflows.stages.train._METRICS_DIR", tmp_path)
+
+        from sentimentizer.trainer import _RAY_GAUGES
+
+        _RAY_GAUGES["test_model"] = {"dummy": True}
+        _RAY_GAUGES["rnn"] = {"dummy": True}
+        assert "test_model" in _RAY_GAUGES
+        assert "rnn" in _RAY_GAUGES
+
+        _reset_stale_metrics("encoder")
+
+        # Entire cache should be cleared
+        assert len(_RAY_GAUGES) == 0
 
 
 class TestMetricsIntegration:

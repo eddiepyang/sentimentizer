@@ -24,11 +24,7 @@ from sentimentizer.agent.skill import (
     TuningRunResult,
     _build_model_config,
 )
-from sentimentizer.config import (
-    DecoderConfig,
-    EncoderConfig,
-    RNNConfig,
-)
+from sentimentizer.config import DecoderConfig, EncoderConfig, RNNConfig
 
 # ─── TuningRunConfig Tests ──────────────────────────────────────────
 
@@ -422,70 +418,72 @@ class TestCreateTuningRun:
 
     def test_creates_config_with_defaults(self) -> None:
         """create_tuning_run should create a TuningRunConfig with defaults."""
-        # We can't actually execute the run without Ray/data, but we can
-        # verify the config creation
-        config = TuningRunConfig()
-        assert config.model_type == "rnn"
-        assert config.mode == "agent"
-        assert config.validate_predictions is True
+        from sentimentizer.agent.skill import create_tuning_run
+
+        with patch("sentimentizer.agent.skill.TuningRun") as mock_run:
+            create_tuning_run()
+
+            config = mock_run.call_args.args[0]
+            assert config.model_type == "rnn"
+            assert config.mode == "agent"
+            assert config.validate_predictions is True
 
     def test_creates_config_with_custom_values(self) -> None:
         """create_tuning_run should accept custom parameters."""
-        config = TuningRunConfig(
-            model_type="encoder",
-            mode="standalone",
-            num_samples=50,
-            validation_threshold=0.9,
-        )
-        assert config.model_type == "encoder"
-        assert config.mode == "standalone"
-        assert config.num_samples == 50
-        assert config.validation_threshold == 0.9
+        from sentimentizer.agent.skill import create_tuning_run
+
+        with patch("sentimentizer.agent.skill.TuningRun") as mock_run:
+            create_tuning_run(
+                model_type="encoder",
+                mode="standalone",
+                num_samples=50,
+                validation_threshold=0.9,
+            )
+
+            config = mock_run.call_args.args[0]
+            assert config.model_type == "encoder"
+            assert config.mode == "standalone"
+            assert config.num_samples == 50
+            assert config.validation_threshold == 0.9
 
 
 # ─── Driver CLI Tests ────────────────────────────────────────────────
 
 
 class TestDriverTuneArgs:
-    """Test that the driver CLI supports --tune arguments."""
+    """Test that the driver CLI supports the tune subcommand and arguments."""
 
-    def test_tune_flag_in_parser(self) -> None:
-        """The --tune flag should be parseable."""
-        # Import here to avoid Ray initialization issues
-        import sys
+    def test_tune_command_exists(self) -> None:
+        """The tune command should be parseable."""
+        from click.testing import CliRunner
 
-        original_argv = sys.argv
-        try:
-            sys.argv = ["driver.py", "--tune", "--model", "rnn", "--type", "new"]
-            # We can't call new_parser() directly because it calls parse_args
-            # which will fail in test context. Instead, verify the argument
-            # definition exists in the parser.
-            import argparse
+        from workflows.cli import cli
 
-            parser = argparse.ArgumentParser()
-            parser.add_argument("--tune", action="store_true", default=False)
-            args = parser.parse_args(["--tune"])
-            assert args.tune is True
-        finally:
-            sys.argv = original_argv
+        result = CliRunner().invoke(cli, ["tune", "--help"])
+        assert result.exit_code == 0
+        assert "--mode" in result.output
 
     def test_tune_mode_choices(self) -> None:
-        """--tune-mode should accept 'agent' or 'standalone'."""
-        import argparse
+        """--mode should accept 'agent' or 'standalone'."""
+        from click.testing import CliRunner
 
-        parser = argparse.ArgumentParser()
-        parser.add_argument("--tune-mode", default="agent", choices=["agent", "standalone"])
-        args = parser.parse_args(["--tune-mode", "standalone"])
-        assert args.tune_mode == "standalone"
+        from workflows.cli import cli
 
-        args = parser.parse_args(["--tune-mode", "agent"])
-        assert args.tune_mode == "agent"
+        with patch("workflows.stages.tune.run_tune") as mock_run:
+            result = CliRunner().invoke(cli, ["tune", "--mode", "standalone"])
+            assert result.exit_code == 0
+            assert mock_run.call_args.kwargs["mode"] == "standalone"
+
+            result = CliRunner().invoke(cli, ["tune", "--mode", "agent"])
+            assert result.exit_code == 0
+            assert mock_run.call_args.kwargs["mode"] == "agent"
 
     def test_tune_mode_invalid_raises(self) -> None:
-        """--tune-mode with invalid choice should raise SystemExit."""
-        import argparse
+        """--mode with invalid choice should fail."""
+        from click.testing import CliRunner
 
-        parser = argparse.ArgumentParser()
-        parser.add_argument("--tune-mode", default="agent", choices=["agent", "standalone"])
-        with pytest.raises(SystemExit):
-            parser.parse_args(["--tune-mode", "invalid"])
+        from workflows.cli import cli
+
+        result = CliRunner().invoke(cli, ["tune", "--mode", "invalid"])
+        assert result.exit_code != 0
+        assert "Invalid value for '--mode'" in result.output

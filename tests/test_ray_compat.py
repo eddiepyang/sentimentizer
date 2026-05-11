@@ -16,7 +16,9 @@ import os
 import tempfile
 
 import pytest
-import ray
+
+# ruff: noqa: E402
+ray = pytest.importorskip("ray")
 from ray.train import Checkpoint  # noqa: I001 — grouped with ray imports
 
 # ─── Ray Version ───────────────────────────────────────────────────
@@ -432,3 +434,141 @@ class TestTuneGetBestResult:
         assert "result.get_best_result(" in source
         assert "metric=tuner_config.metric" in source
         assert "mode=tuner_config.mode" in source
+
+
+# ─── ResultGrid and Result API Guards ────────────────────────────────
+
+
+class TestResultGridAPI:
+    """Guard against incorrect ResultGrid and Result API usage.
+
+    Ray 2.55+ changed the ResultGrid iteration and Result.metrics APIs.
+    """
+
+    def test_result_grid_not_directly_iterable(self) -> None:
+        """ResultGrid does NOT implement __iter__ in Ray 2.55+.
+
+        Iterating over a ResultGrid with ``for result in result_grid:`` will
+        raise TypeError. Use index-based iteration:
+        ``for i in range(len(result_grid)): result_grid[i]``
+        """
+        from ray.tune import ResultGrid
+
+        assert not hasattr(ResultGrid, "__iter__"), (
+            "ResultGrid should NOT have __iter__. "
+            "Use index-based iteration: for i in range(len(result_grid)): ..."
+        )
+
+    def test_result_grid_supports_len_and_getitem(self) -> None:
+        """ResultGrid supports len() and index-based access in Ray 2.55+."""
+        from ray.tune import ResultGrid
+
+        assert hasattr(ResultGrid, "__len__"), "ResultGrid must support len()"
+        assert hasattr(ResultGrid, "__getitem__"), "ResultGrid must support index access"
+
+    def test_result_metrics_is_optional_dict(self) -> None:
+        """Result.metrics is Optional[Dict] in Ray 2.55+ — it can be None.
+
+        Always guard with ``result.metrics or {}`` when accessing metrics.
+        """
+        import dataclasses
+
+        from ray.tune import Result
+
+        fields = {f.name: f.type for f in dataclasses.fields(Result)}
+        assert "metrics" in fields, "Result must have a 'metrics' field"
+        # The type annotation allows None — code must handle this
+        assert "Optional" in str(fields["metrics"]) or "None" in str(fields["metrics"]), (
+            "Result.metrics should be Optional[Dict[str, Any]] in Ray 2.55+. "
+            "Always guard with `result.metrics or {}`."
+        )
+
+    def test_result_has_config_property(self) -> None:
+        """Result must have a 'config' property for accessing trial config."""
+        from ray.tune import Result
+
+        assert hasattr(Result, "config"), "Result must have a 'config' property"
+
+    def test_result_object_has_no_collection_methods(self) -> None:
+        """TorchTrainer.fit() returns a single Result, not a ResultGrid.
+
+        This guards against treating the output of TorchTrainer.fit() as a
+        collection (e.g., calling len()) or calling get_best_result() on it.
+        """
+        from ray.train import Result
+
+        assert not hasattr(Result, "__len__"), "Result object must not have __len__"
+        assert not hasattr(Result, "get_best_result"), (
+            "Result object must not have get_best_result. "
+            "TorchTrainer.fit() returns a single Result, not a ResultGrid."
+        )
+
+
+class TestTuneCallbackAPI:
+    """Guard against incorrect TunePrometheusCallback API usage.
+
+    Ray 2.55+ passes Trial objects to callback methods, not strings.
+    """
+
+    def test_callback_uses_trial_id_attribute(self) -> None:
+        """TunePrometheusCallback must extract trial_id from Trial objects.
+
+        In Ray 2.55+, the trial parameter in on_trial_result/on_trial_complete/
+        on_trial_start is a Trial object with a trial_id attribute, NOT a string.
+        The callback must use getattr(trial, 'trial_id') instead of str(trial).
+        """
+        import inspect
+
+        from sentimentizer.tuner import TunePrometheusCallback
+
+        source = inspect.getsource(TunePrometheusCallback.on_trial_result)
+        # Must use getattr(trial, 'trial_id') to extract the ID from Trial objects
+        assert "trial_id" in source, "on_trial_result must extract trial_id from trial object"
+        assert "getattr" in source, (
+            "on_trial_result must use getattr(trial, 'trial_id') to handle Trial objects. "
+            "Ray 2.55+ passes Trial objects, not strings."
+        )
+
+    def test_tuner_result_grid_index_iteration(self) -> None:
+        """tune_model must use index-based iteration over ResultGrid.
+
+        ``for trial_result in result:`` does NOT work in Ray 2.55+
+        because ResultGrid does not implement __iter__.
+        Use ``for i in range(len(result)): trial_result = result[i]`` instead.
+        """
+        import inspect
+
+        from sentimentizer.tuner import tune_model
+
+        source = inspect.getsource(tune_model)
+        # Should NOT have "for trial_result in result:"
+        assert "for trial_result in result" not in source, (
+            "ResultGrid is not directly iterable in Ray 2.55+. "
+            "Use index-based iteration: for i in range(len(result)): ..."
+        )
+        # Should use index-based iteration
+        assert "for i in range(len(result))" in source, (
+            "tune_model must iterate over ResultGrid using index access. "
+            "Use: for i in range(len(result)): trial_result = result[i]"
+        )
+
+    def test_tuner_metrics_guarded_against_none(self) -> None:
+        """tune_model must guard Result.metrics against None.
+
+        Result.metrics is Optional[Dict] in Ray 2.55+. It can be None
+        for trials that were errored or didn't report metrics.
+        """
+        import inspect
+
+        from sentimentizer.tuner import tune_model
+
+        source = inspect.getsource(tune_model)
+        # best_metrics should use "or {}" guard
+        assert "best_result.metrics or {}" in source, (
+            "best_result.metrics can be None in Ray 2.55+. "
+            "Use: best_metrics = best_result.metrics or {}"
+        )
+        # trial_result.metrics should also be guarded
+        assert "trial_result.metrics or {}" in source, (
+            "trial_result.metrics can be None in Ray 2.55+. " "Use: trial_result.metrics or {}"
+        )

@@ -4,16 +4,20 @@ requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
     "python_full_version >= '3.14' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version >= '3.14' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version >= '3.14' and sys_platform == 'darwin'",
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
     "python_full_version == '3.12.*' and sys_platform == 'win32'",
     "python_full_version < '3.12' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
     "python_full_version < '3.12' and sys_platform == 'emscripten'",
-    "python_full_version == '3.13.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.13.*' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.13.*' and sys_platform == 'darwin'",
+    "python_full_version == '3.12.*' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'darwin'",
+    "python_full_version < '3.12' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.12' and sys_platform == 'darwin'",
 ]
 
 [[package]]
@@ -248,7 +252,7 @@ name = "build"
 version = "1.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "os_name == 'nt'" },
+    { name = "colorama", marker = "os_name == 'nt' and sys_platform != 'darwin'" },
     { name = "packaging" },
     { name = "pyproject-hooks" },
 ]
@@ -653,7 +657,7 @@ name = "cuda-bindings"
 version = "13.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cuda-pathfinder", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "cuda-pathfinder", marker = "sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e0/a9/3a8241c6e19483ac1f1dcf5c10238205dcb8a6e9d0d4d4709240dff28ff4/cuda_bindings-13.2.0-cp311-cp311-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:721104c603f059780d287969be3d194a18d0cc3b713ed9049065a1107706759d", size = 5730273, upload-time = "2026-03-11T00:12:37.18Z" },
@@ -1172,7 +1176,7 @@ wheels = [
 
 [[package]]
 name = "huggingface-hub"
-version = "1.13.0"
+version = "1.14.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "filelock" },
@@ -1185,9 +1189,9 @@ dependencies = [
     { name = "typer" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/89/ff/ec7ed2eb43bd7ce8bb2233d109cc235c3e807ffe5e469dc09db261fac05e/huggingface_hub-1.13.0.tar.gz", hash = "sha256:f6df2dac5abe82ce2fe05873d10d5ff47bc677d616a2f521f4ee26db9415d9d0", size = 781788, upload-time = "2026-04-30T11:57:33.858Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/39/40/43109e943fd718b0ccd0cd61eb4f1c347df22bf81f5874c6f22adf44bcff/huggingface_hub-1.14.0.tar.gz", hash = "sha256:d6d2c9cd6be1d02ae9ec6672d5587d10a427f377db688e82528f426a041622c2", size = 782365, upload-time = "2026-05-06T14:14:34.278Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/93/db/4b1cdae9460ae1f3ca020cd767f013430ce23eb1d9c890ae3a0609b38d26/huggingface_hub-1.13.0-py3-none-any.whl", hash = "sha256:e942cb50d6a08dd5306688b1ac05bda157fd2fcc88b63dae405f7bd0d3234005", size = 660643, upload-time = "2026-04-30T11:57:31.802Z" },
+    { url = "https://files.pythonhosted.org/packages/89/a5/33b49ba7bea7c41bb37f74ec0f8beea0831e052330196633fe2c77516ea6/huggingface_hub-1.14.0-py3-none-any.whl", hash = "sha256:efe075535c62e130b30e836b138e13785f6f043d1f0539e0a39aa411a99e90b8", size = 661479, upload-time = "2026-05-06T14:14:32.029Z" },
 ]
 
 [[package]]
@@ -1938,7 +1942,7 @@ name = "nvidia-cudnn-cu13"
 version = "9.19.0.56"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "nvidia-cublas", marker = "sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f1/84/26025437c1e6b61a707442184fa0c03d083b661adf3a3eecfd6d21677740/nvidia_cudnn_cu13-9.19.0.56-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:6ed29ffaee1176c612daf442e4dd6cfeb6a0caa43ddcbeb59da94953030b1be4", size = 433781201, upload-time = "2026-02-03T20:40:53.805Z" },
@@ -1950,7 +1954,7 @@ name = "nvidia-cufft"
 version = "12.0.0.61"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "nvidia-nvjitlink", marker = "sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8b/ae/f417a75c0259e85c1d2f83ca4e960289a5f814ed0cea74d18c353d3e989d/nvidia_cufft-12.0.0.61-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:2708c852ef8cd89d1d2068bdbece0aa188813a0c934db3779b9b1faa8442e5f5", size = 214053554, upload-time = "2025-09-04T08:31:38.196Z" },
@@ -1980,9 +1984,9 @@ name = "nvidia-cusolver"
 version = "12.0.4.66"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
-    { name = "nvidia-cusparse", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
-    { name = "nvidia-nvjitlink", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "nvidia-cublas", marker = "sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "nvidia-cusparse", marker = "sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "nvidia-nvjitlink", marker = "sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c8/c3/b30c9e935fc01e3da443ec0116ed1b2a009bb867f5324d3f2d7e533e776b/nvidia_cusolver-12.0.4.66-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:02c2457eaa9e39de20f880f4bd8820e6a1cfb9f9a34f820eb12a155aa5bc92d2", size = 223467760, upload-time = "2025-09-04T08:33:04.222Z" },
@@ -1994,7 +1998,7 @@ name = "nvidia-cusparse"
 version = "12.6.3.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "nvidia-nvjitlink", marker = "sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f8/94/5c26f33738ae35276672f12615a64bd008ed5be6d1ebcb23579285d960a9/nvidia_cusparse-12.6.3.3-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:80bcc4662f23f1054ee334a15c72b8940402975e0eab63178fc7e670aa59472c", size = 162155568, upload-time = "2025-09-04T08:33:42.864Z" },
@@ -2685,7 +2689,7 @@ wheels = [
 
 [[package]]
 name = "pydantic-ai-slim"
-version = "1.89.1"
+version = "1.93.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "genai-prices" },
@@ -2696,9 +2700,9 @@ dependencies = [
     { name = "pydantic-graph" },
     { name = "typing-inspection" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/23/91/b2134056eb5debb7cb28e4efe7ca19fc5c7b2935e55b299a30ddad0d7746/pydantic_ai_slim-1.89.1.tar.gz", hash = "sha256:3ed967bff8dec992a907c1d1dabab2034a5f4aee75289de22e88b2ef9def8da6", size = 614728, upload-time = "2026-05-01T19:09:38.551Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/bb/44/438dd99c7d044094037e767dab969d704232aab73e4fffd9f9a1f69bded9/pydantic_ai_slim-1.93.0.tar.gz", hash = "sha256:977364ecd3b6a2201e25d917f4efe80895210e44e66cb6983e1fc0477c78910b", size = 639585, upload-time = "2026-05-09T00:23:25.604Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/95/14/d0f7c8f828c460a517531e0df7cfe9e20f4315da8357a9068caaf0193bbb/pydantic_ai_slim-1.89.1-py3-none-any.whl", hash = "sha256:9e7d615a0a3e48993d067901e596e85708e9c8d1f6bef96c20c340385028d465", size = 780314, upload-time = "2026-05-01T19:09:28.843Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/67/bbfa2eda2493de6027e3322bccc676c8a7062dc5fe89d68cacf9e50889ce/pydantic_ai_slim-1.93.0-py3-none-any.whl", hash = "sha256:6733e3f19c83f4121fb9fe42aee918bd8f402ce670a519ecc898f108378fadb7", size = 804814, upload-time = "2026-05-09T00:23:17.122Z" },
 ]
 
 [package.optional-dependencies]
@@ -2811,7 +2815,7 @@ wheels = [
 
 [[package]]
 name = "pydantic-graph"
-version = "1.89.1"
+version = "1.93.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -2819,9 +2823,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "typing-inspection" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ea/64/f26c4d17568ab06ae576af0771ad83753cc2661bf9ca5a5698d01404ee20/pydantic_graph-1.89.1.tar.gz", hash = "sha256:99b8ae10fd10400208ee469355969e2dc253a600c3f667a5e790874064846e85", size = 59257, upload-time = "2026-05-01T19:09:40.998Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/63/40/4addcd3c9d06fbdf6c0776026d8a5b87e7ebb17c9896ac2452e714bb17c6/pydantic_graph-1.93.0.tar.gz", hash = "sha256:17effd900200aa7b72ec0509a79f36d3e161c2a6ef02dda6285a381e867ab195", size = 59250, upload-time = "2026-05-09T00:23:28.081Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7e/52/9070e11f52424fe34e2ca96ae122902cab7c4325e2a90b33d44a410843b1/pydantic_graph-1.89.1-py3-none-any.whl", hash = "sha256:2ebce28573e81de9924c2ff68f90f949ccd96bbc2e8dc6cf4bb96208b34fbec0", size = 73065, upload-time = "2026-05-01T19:09:32.912Z" },
+    { url = "https://files.pythonhosted.org/packages/2b/bc/5f9eb611c6b9315fb0c6ae58bb82a63d9d9f17340b6c8778319261593fbb/pydantic_graph-1.93.0-py3-none-any.whl", hash = "sha256:ef1b0dcd55a6b5a3544de53a9594216ee8f51ac26bf4be79f7ef310747be598a", size = 73066, upload-time = "2026-05-09T00:23:20.847Z" },
 ]
 
 [[package]]
@@ -3484,22 +3488,22 @@ wheels = [
 
 [[package]]
 name = "sentimentizer"
-version = "0.101.1"
+version = "0.210.1"
 source = { editable = "." }
 dependencies = [
+    { name = "click" },
     { name = "gensim" },
     { name = "huggingface-hub" },
     { name = "langgraph" },
     { name = "numpy" },
-    { name = "optuna" },
     { name = "orjson" },
     { name = "pandas" },
     { name = "prometheus-client" },
     { name = "psutil" },
     { name = "pyarrow" },
     { name = "pydantic-ai-slim", extra = ["openai"] },
+    { name = "python-dotenv" },
     { name = "pyyaml" },
-    { name = "ray", extra = ["data", "serve", "train", "tune"] },
     { name = "rich" },
     { name = "scikit-learn" },
     { name = "smart-open" },
@@ -3517,6 +3521,10 @@ dev = [
     { name = "pytest-cov" },
     { name = "ruff" },
 ]
+ray = [
+    { name = "optuna" },
+    { name = "ray", extra = ["data", "serve", "train", "tune"] },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -3531,46 +3539,48 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "black", marker = "extra == 'dev'" },
-    { name = "bumpver", marker = "extra == 'dev'" },
-    { name = "gensim", specifier = ">=4.3.3" },
-    { name = "huggingface-hub" },
-    { name = "isort", marker = "extra == 'dev'" },
-    { name = "langgraph", specifier = ">=0.2" },
-    { name = "numpy", specifier = ">=1.23.0" },
-    { name = "optuna", specifier = ">=3.5" },
-    { name = "orjson", specifier = ">=3.8.5" },
-    { name = "pandas", specifier = ">=1.5.2" },
+    { name = "black", marker = "extra == 'dev'", specifier = ">=26.3.0" },
+    { name = "bumpver", marker = "extra == 'dev'", specifier = ">=2025.1131" },
+    { name = "click", specifier = ">=8.3.0" },
+    { name = "gensim", specifier = ">=4.4.0" },
+    { name = "huggingface-hub", specifier = ">=1.14.0" },
+    { name = "isort", marker = "extra == 'dev'", specifier = ">=8.0.0" },
+    { name = "langgraph", specifier = ">=1.1.10" },
+    { name = "numpy", specifier = ">=2.4.0" },
+    { name = "optuna", marker = "extra == 'ray'", specifier = ">=4.8.0" },
+    { name = "orjson", specifier = ">=3.11.0" },
+    { name = "pandas", specifier = ">=3.0.0" },
     { name = "pip-tools", marker = "extra == 'dev'" },
-    { name = "prometheus-client", specifier = ">=0.14.0" },
-    { name = "psutil" },
-    { name = "pyarrow", specifier = ">=11.0.0" },
-    { name = "pydantic-ai-slim", extras = ["openai"], specifier = ">=0.0.36" },
-    { name = "pytest", marker = "extra == 'dev'" },
-    { name = "pytest-cov", marker = "extra == 'dev'" },
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "ray", extras = ["data"], specifier = ">=2.5.0" },
-    { name = "ray", extras = ["serve"], specifier = ">=2.5.0" },
-    { name = "ray", extras = ["train"], specifier = ">=2.5.0" },
-    { name = "ray", extras = ["tune"], specifier = ">=2.5.0" },
-    { name = "rich", specifier = ">=13.0.0" },
-    { name = "ruff", marker = "extra == 'dev'" },
-    { name = "scikit-learn" },
-    { name = "smart-open", specifier = ">=7.0.1" },
-    { name = "structlog" },
-    { name = "torch", specifier = ">=2.10" },
+    { name = "prometheus-client", specifier = ">=0.25.0" },
+    { name = "psutil", specifier = ">=7.2.0" },
+    { name = "pyarrow", specifier = ">=24.0.0" },
+    { name = "pydantic-ai-slim", extras = ["openai"], specifier = ">=1.93.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=7.1.0" },
+    { name = "python-dotenv", specifier = ">=1.2.0" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
+    { name = "ray", extras = ["data"], marker = "extra == 'ray'", specifier = ">=2.55.1,<2.56.0" },
+    { name = "ray", extras = ["serve"], marker = "extra == 'ray'", specifier = ">=2.55.1,<2.56.0" },
+    { name = "ray", extras = ["train"], marker = "extra == 'ray'", specifier = ">=2.55.1,<2.56.0" },
+    { name = "ray", extras = ["tune"], marker = "extra == 'ray'", specifier = ">=2.55.1,<2.56.0" },
+    { name = "rich", specifier = ">=15.0.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15.0" },
+    { name = "scikit-learn", specifier = ">=1.8.0" },
+    { name = "smart-open", specifier = ">=7.6.0" },
+    { name = "structlog", specifier = ">=25.5.0" },
+    { name = "torch", specifier = ">=2.11.0" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["ray", "dev"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "black" },
-    { name = "bumpver" },
-    { name = "isort" },
+    { name = "black", specifier = ">=26.3.0" },
+    { name = "bumpver", specifier = ">=2025.1131" },
+    { name = "isort", specifier = ">=8.0.0" },
     { name = "pip-tools" },
-    { name = "pytest" },
-    { name = "pytest-cov" },
-    { name = "ruff" },
+    { name = "pytest", specifier = ">=9.0.0" },
+    { name = "pytest-cov", specifier = ">=7.1.0" },
+    { name = "ruff", specifier = ">=0.15.0" },
 ]
 
 [[package]]

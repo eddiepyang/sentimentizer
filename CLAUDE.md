@@ -14,16 +14,19 @@ If the change affects Ray Train or distributed training specifically, also run:
 uv run pytest tests/ -v -k "Ray"
 ```
 
-## Dependency management
+## Alwa## Dependency management
 
 This project uses **uv** for dependency management. Key commands:
 
 ```bash
-# Install all dependencies
+# Install dependencies (local-only mode)
 uv sync
 
+# Install with Ray distributed features
+uv sync --extra ray
+
 # Install with dev dependencies (includes ruff, black, pytest)
-uv sync --extra dev
+uv sync --extra dev --extra ray
 
 # Add a new dependency
 uv add <package>
@@ -70,6 +73,7 @@ Both ruff and black are run in CI — PRs must pass lint and format checks befor
 - Config classes live in `sentimentizer/config.py` — use dataclasses
 - Keep `ray.init(ignore_reinit_error=True)` in tests to avoid re-init errors
 - The project requires Python 3.11+ (pinned in `.python-version`)
+- **Stale metrics cleanup**: `_reset_stale_metrics(model_type)` in `workflows/stages/train.py` is called at the start of every training run. It writes a zeroed-out per-model JSON file to `/tmp/sentimentizer_metrics/{model_type}_metrics.json` (with `_trace.reset_by` + `_trace.reset_at` trace fields for easy debugging), resets the `sentimentizer_training_*` Prometheus gauges for that model type to 0, and invalidates the `_RAY_GAUGES` cache entry. Per-model files eliminate race conditions between concurrent training processes. The standalone exporter discovers all three files and zeroes gauges for any model type whose file is missing or stale.
 
 ## Ray 2.55 API conventions
 
@@ -151,6 +155,21 @@ Always verify against the installed source in `.venv/lib/python3.11/site-package
   Use `train.get_dataset_shard("train")`, NOT `train.get_context().get_dataset_shard("train")`.
 - **`random_sample(fraction)` returns a single `Dataset`, not a tuple.**
   Do not unpack it like `keep, _ = ds.random_sample(0.5)`.
+- **Never create `ray.util.metrics.Gauge`/`Counter`/`Histogram` at module import time.**
+  In Ray 2.55+, custom metric objects created in the driver process are never
+  exported — they must be created inside a Ray worker context (task, actor, or
+  train function) to be registered with that worker's metrics agent and pushed
+  to Prometheus. Use lazy initialization instead (create on first use inside
+  the worker). See `_get_ray_gauges()` in `sentimentizer/trainer.py` for the
+  canonical pattern: a module-level cache dict + factory function that creates
+  gauges on demand and stores them per tag key.
+- **Ray session temp files accumulate in `/tmp/ray/` (5+ GB each).**
+  Each `ray.init()` creates a session directory that is only cleaned up by
+  `ray.shutdown()`. If the process crashes or is killed, the directory persists.
+  The driver (`workflows/driver.py`) cleans up stale sessions (>1 hour old)
+  at startup via `_cleanup_stale_ray_sessions()` and shuts down Ray at exit
+  via `_ray_cleanup()` (registered with `atexit`). Always call `ray.shutdown()`
+  in tests and scripts when done.
 
 ## Code quality principles
 

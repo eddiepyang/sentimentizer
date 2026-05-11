@@ -1,9 +1,9 @@
-.PHONY: setup setup-dev download-data train train-rnn train-encoder train-decoder \
+.PHONY: setup setup-ci setup-dev download-data train train-rnn train-encoder train-decoder \
        train-distributed train-quick serve test lint format check clean docker-build docker-run \
 	   gpu-reset tune tune-rnn tune-encoder tune-decoder tune-standalone \
 	   start-metrics stop-metrics setup-dashboards start-exporter stop-exporter stop-ray \
 	   upload-rnn upload-encoder upload-decoder download-rnn download-encoder download-decoder \
-	   push-hub pull-hub
+	   push-hub pull-hub diagnose diagnose-env diagnose-pipeline
 
 # Default device: use auto-detect (cuda > mps > cpu)
 DEVICE ?= auto
@@ -12,16 +12,27 @@ MODEL ?= rnn
 # Default number of lines to load
 STOP ?= 300000
 # Default run type (new or update)
-TYPE ?= new
+RUN_TYPE ?= new
 # Checkpoint directory (empty = no checkpointing)
 CHECKPOINT_DIR ?=
+# Default metrics exporter port
+EXPORTER_PORT ?= 8081
 
 # ──────────────────────────────────────────────
 # Setup
 # ──────────────────────────────────────────────
 
-## Install dependencies (production only)
+## Install dependencies with CUDA-enabled PyTorch (for local GPU development)
 setup:
+	uv sync --extra ray
+
+## Install dependencies with CPU-only PyTorch (for CI or machines without GPU)
+## Installs the CPU-only torch wheel from PyTorch's index, then syncs the rest.
+setup-ci:
+	uv pip install --index-url https://download.pytorch.org/whl/cpu torch
+	uv sync --extra ray
+
+setup-mps:
 	uv sync
 
 ## Install dependencies with dev tools (pytest, ruff, black, etc.)
@@ -42,84 +53,96 @@ download-data:
 
 ## Train a model (defaults: --model rnn --device auto --stop 10000)
 train:
-	uv run python workflows/driver.py --device $(DEVICE) --model $(MODEL) --type $(TYPE) --stop $(STOP) --save
+	uv run sentimentizer --model $(MODEL) --device $(DEVICE) --run-type $(RUN_TYPE) run --stop $(STOP) --save
 
 ## Train RNN model
 train-rnn:
-	uv run python workflows/driver.py --device $(DEVICE) --model rnn --type $(TYPE) --stop $(STOP) --save
+	uv run sentimentizer --model rnn --device $(DEVICE) --run-type $(RUN_TYPE) run --stop $(STOP) --save
 
 ## Train Transformer Encoder model (recommended)
 train-encoder:
-	uv run python workflows/driver.py --device $(DEVICE) --model encoder --type $(TYPE) --stop $(STOP) --save
+	uv run sentimentizer --model encoder --device $(DEVICE) --run-type $(RUN_TYPE) run --stop $(STOP) --save
 
 ## Train Transformer Decoder model
 train-decoder:
-	uv run python workflows/driver.py --device $(DEVICE) --model decoder --type $(TYPE) --stop $(STOP) --save
+	uv run sentimentizer --model decoder --device $(DEVICE) --run-type $(RUN_TYPE) run --stop $(STOP) --save
 
 ## Quick training run with fewer rows for iteration
 train-quick:
-	uv run python workflows/driver.py --device $(DEVICE) --model $(MODEL) --type $(TYPE) --stop 5000 --save
+	uv run sentimentizer --model $(MODEL) --device $(DEVICE) --run-type $(RUN_TYPE) run --stop 5000 --save
 
 ## Train with checkpointing enabled (saves to CHECKPOINT_DIR, defaults to checkpoints/)
 train-checkpoint:
-	uv run python workflows/driver.py --device $(DEVICE) --model $(MODEL) --type $(TYPE) --stop $(STOP) \
+	uv run sentimentizer --model $(MODEL) --device $(DEVICE) --run-type $(RUN_TYPE) run --stop $(STOP) \
 		--checkpoint-dir $(or $(CHECKPOINT_DIR),checkpoints/) --checkpoint-every 1 --save
 
 ## Resume training from the latest checkpoint
 train-resume:
-	uv run python workflows/driver.py --device $(DEVICE) --model $(MODEL) --type $(TYPE) --stop $(STOP) \
-		--checkpoint-dir $(or $(CHECKPOINT_DIR),checkpoints/) --resume --save
+	uv run sentimentizer --model $(MODEL) --device $(DEVICE) --run-type $(RUN_TYPE) run --stop $(STOP) \
+		--checkpoint-dir $(or $(CHECKPOINT_DIR),checkpoints/) --resume-train --save
 
 ## Distributed training with Ray Train (2 workers by default)
 train-distributed:
-	uv run python workflows/driver.py --device $(DEVICE) --model $(MODEL) --type $(TYPE) --stop $(STOP) \
+	uv run sentimentizer --model $(MODEL) --device $(DEVICE) --run-type $(RUN_TYPE) run --stop $(STOP) \
 		--distributed --save
 
 ## Distributed training with custom worker count (usage: make train-dist-workers WORKERS=4)
 train-dist-workers:
-	uv run python workflows/driver.py --device $(DEVICE) --model $(MODEL) --type $(TYPE) --stop $(STOP) \
+	uv run sentimentizer --model $(MODEL) --device $(DEVICE) --run-type $(RUN_TYPE) run --stop $(STOP) \
 		--distributed --num-workers $(WORKERS) --save
 
-## Agent-guided hyperparameter tuning (requires Ollama with glm5.1)
-train-agent:
-	uv run python workflows/driver.py --model $(MODEL) --agent-tune --save
+# ──────────────────────────────────────────────
+# Individual pipeline stages
+# ──────────────────────────────────────────────
+
+## Extract raw reviews into parquet
+extract:
+	uv run sentimentizer --model $(MODEL) --run-type $(RUN_TYPE) extract --stop $(STOP)
+
+## Tokenize: build/update dictionary and write processed parquet
+tokenize:
+	uv run sentimentizer --model $(MODEL) --run-type $(RUN_TYPE) tokenize
+
+## Train only (no extract/tokenize)
+train-only:
+	uv run sentimentizer --model $(MODEL) --device $(DEVICE) --run-type $(RUN_TYPE) train --save
 
 # ──────────────────────────────────────────────
-# Tuning Skill (tune + validate until good model)
+# Tuning
 # ──────────────────────────────────────────────
 
 ## Run tuning skill with agent-guided loop and model validation
 tune:
-	uv run python workflows/driver.py --model $(MODEL) --tune --save
+	uv run sentimentizer --model $(MODEL) tune --save
 
 ## Run tuning skill for RNN
 tune-rnn:
-	uv run python workflows/driver.py --model rnn --tune --save
+	uv run sentimentizer --model rnn tune --save
 
 ## Run tuning skill for Encoder
 tune-encoder:
-	uv run python workflows/driver.py --model encoder --tune --save
+	uv run sentimentizer --model encoder tune --save
 
 ## Run tuning skill for Decoder
 tune-decoder:
-	uv run python workflows/driver.py --model decoder --tune --save
+	uv run sentimentizer --model decoder tune --save
 
 ## Run tuning skill in standalone mode (no LLM agent, single Ray Tune sweep)
 tune-standalone:
-	uv run python workflows/driver.py --model $(MODEL) --tune --tune-mode standalone --save
+	uv run sentimentizer --model $(MODEL) tune --mode standalone --save
 
 ## Quick tuning test with tiny dataset and few trials
 ## Usage: make tune-test MODEL=rnn STOP=100 SAMPLES=2
 tune-test:
-	uv run python workflows/driver.py --model $(MODEL) --tune --tune-mode standalone --stop $(STOP) --tune-samples $(SAMPLES) --no-validate --save
+	uv run sentimentizer --model $(MODEL) tune --mode standalone --samples $(SAMPLES) --no-validate --save
 
 ## Run tuning skill with custom samples and iterations (usage: make tune-custom SAMPLES=50 ITERATIONS=10)
 tune-custom:
-	uv run python workflows/driver.py --model $(MODEL) --tune --tune-samples $(SAMPLES) --tune-max-iterations $(ITERATIONS) --save
+	uv run sentimentizer --model $(MODEL) tune --samples $(SAMPLES) --max-iterations $(ITERATIONS) --save
 
 ## Run tuning skill without model validation
 tune-no-validate:
-	uv run python workflows/driver.py --model $(MODEL) --tune --no-validate --save
+	uv run sentimentizer --model $(MODEL) tune --no-validate --save
 
 # ──────────────────────────────────────────────
 # Hugging Face Hub (push/pull per model)
@@ -127,33 +150,49 @@ tune-no-validate:
 
 ## Upload RNN weights + dictionary + model card to Hugging Face Hub
 upload-rnn:
-	uv run python -c "from sentimentizer.config import DriverConfig; from sentimentizer.hf import push_model_to_hub; push_model_to_hub('sentimentizer/data/rnn_weights.pth', 'rnn', dict_path=DriverConfig.files.dictionary_file_path)"
+	uv run sentimentizer --model rnn hf push
 
 ## Upload Encoder weights + dictionary + model card to Hugging Face Hub
 upload-encoder:
-	uv run python -c "from sentimentizer.config import DriverConfig; from sentimentizer.hf import push_model_to_hub; push_model_to_hub('sentimentizer/data/encoder_weights.pth', 'encoder', dict_path=DriverConfig.files.dictionary_file_path)"
+	uv run sentimentizer --model encoder hf push
 
 ## Upload Decoder weights + dictionary + model card to Hugging Face Hub
 upload-decoder:
-	uv run python -c "from sentimentizer.config import DriverConfig; from sentimentizer.hf import push_model_to_hub; push_model_to_hub('sentimentizer/data/decoder_weights.pth', 'decoder', dict_path=DriverConfig.files.dictionary_file_path)"
+	uv run sentimentizer --model decoder hf push
 
 ## Upload all models to Hugging Face Hub
 push-hub: upload-rnn upload-encoder upload-decoder
 
 ## Download RNN weights + dictionary from Hugging Face Hub
 download-rnn:
-	uv run python -c "from sentimentizer.config import DriverConfig; from sentimentizer.hf import download_weights; download_weights('rnn', 'sentimentizer/data/rnn_weights.pth', dict_path=DriverConfig.files.dictionary_file_path)"
+	uv run sentimentizer --model rnn hf pull
 
 ## Download Encoder weights + dictionary from Hugging Face Hub
 download-encoder:
-	uv run python -c "from sentimentizer.config import DriverConfig; from sentimentizer.hf import download_weights; download_weights('encoder', 'sentimentizer/data/encoder_weights.pth', dict_path=DriverConfig.files.dictionary_file_path)"
+	uv run sentimentizer --model encoder hf pull
 
 ## Download Decoder weights + dictionary from Hugging Face Hub
 download-decoder:
-	uv run python -c "from sentimentizer.config import DriverConfig; from sentimentizer.hf import download_weights; download_weights('decoder', 'sentimentizer/data/decoder_weights.pth', dict_path=DriverConfig.files.dictionary_file_path)"
+	uv run sentimentizer --model decoder hf pull
 
 ## Download all models from Hugging Face Hub
 pull-hub: download-rnn download-encoder download-decoder
+
+# ──────────────────────────────────────────────
+# Diagnostics
+# ──────────────────────────────────────────────
+
+## Fast environment check (no torch/ray imports)
+diagnose-env:
+	uv run sentimentizer diagnose env
+
+## Full pipeline diagnostics (imports ML stack)
+diagnose-pipeline:
+	uv run sentimentizer --model $(MODEL) diagnose pipeline
+
+## Run diagnostics (defaults to pipeline)
+diagnose:
+	uv run sentimentizer --model $(MODEL) diagnose pipeline
 
 # ──────────────────────────────────────────────
 # Serving
@@ -218,24 +257,31 @@ setup-dashboards:
 
 ## Start the Sentimentizer Prometheus metrics exporter (system, GPU, Ray health)
 start-exporter:
-	uv run python sentimentizer/exporter.py &
+	@bash -c '( nohup uv run python sentimentizer/exporter.py --addr 0.0.0.0 >/dev/null 2>&1 & disown )'
 
 ## Stop the Sentimentizer metrics exporter
 stop-exporter:
-	@pkill -f "sentimentizer/exporter.py" 2>/dev/null || true
+	@pgrep -f "[s]entimentizer/exporter.py" | xargs -r kill 2>/dev/null || true
 
 ## Start Prometheus, Grafana, and metrics exporter for dashboard metrics
 start-metrics: setup-dashboards
-	cd metrics && docker compose up -d
+	@cd metrics && docker compose up -d
+	@echo "Restarting Grafana to load newly generated dashboards..."
+	@cd metrics && docker compose restart grafana
+	@echo "Stopping old metrics exporter if running..."
+	@pgrep -f "[s]entimentizer/exporter.py" | xargs -r kill 2>/dev/null || true
 	@echo "Starting metrics exporter (port 8081)..."
-	uv run python sentimentizer/exporter.py &
+	@bash -c '( nohup uv run python sentimentizer/exporter.py --addr 0.0.0.0 >/dev/null 2>&1 & disown )'
 	@sleep 2
 	@echo "All metrics services running. Grafana: http://localhost:3000 (admin/admin)"
 
 ## Stop Prometheus, Grafana, and metrics exporter
 stop-metrics:
-	@pkill -f "sentimentizer/exporter.py" 2>/dev/null || true
-	cd metrics && docker compose down
+	@echo "Stopping exporter..."
+	@pgrep -f "[s]entimentizer/exporter.py" | xargs -r kill 2>/dev/null || true
+	@echo "Stopping Docker containers (this may take a few seconds)..."
+	@cd metrics && docker compose down -t 10 || true
+	@echo "Metrics stopped."
 
 # ──────────────────────────────────────────────
 # Cleanup
@@ -245,8 +291,9 @@ stop-metrics:
 stop-ray:
 	uv run ray stop --force
 
-## Remove generated data files, checkpoints, and Python caches
-clean: stop-ray
+## Remove generated data files, checkpoints, Python caches, and ALL metrics state
+clean: stop-metrics stop-ray
+	@echo "==> Cleaning generated data files..."
 	rm -rf sentimentizer/data/review_data.parquet
 	rm -rf sentimentizer/data/review_data_raw.parquet
 	rm -rf sentimentizer/data/weights.pth
@@ -260,6 +307,12 @@ clean: stop-ray
 	rm -rf /tmp/ray/*
 	@echo "==> Cleaning Ray Tune results..."
 	rm -rf ~/ray_results/*
+	@echo "==> Cleaning persisted training metrics..."
+	rm -f /tmp/sentimentizer_metrics/*_metrics.json
+	@echo "==> Cleaning Prometheus TSDB data..."
+	@docker volume rm metrics_prometheus-data 2>/dev/null || true
+	@docker volume prune -f 2>/dev/null || true
+	@echo "Clean complete. Run 'make start-metrics' to start fresh."
 
 ## Clean only Ray-related files and logs
 clean-ray: stop-ray
