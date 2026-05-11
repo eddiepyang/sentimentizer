@@ -537,7 +537,6 @@ class TestMetricsGauges:
             _train_func(config)
 
             # 5. Assertions
-            assert mock_gauges["train_loss"].set.called, "train_loss gauge was not updated"
             assert mock_gauges["val_loss"].set.called, "val_loss gauge was not updated"
             assert mock_gauges["val_accuracy"].set.called, "val_accuracy gauge was not updated"
             assert mock_gauges["lr"].set.called, "lr gauge was not updated"

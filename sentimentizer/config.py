@@ -29,7 +29,7 @@ def default_epochs(model_type: str) -> int:
     """
     if model_type in ("encoder", "decoder"):
         return 8
-    return 1
+    return 4
 
 
 def default_dataloader_workers(device: str) -> int:

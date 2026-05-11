@@ -456,7 +456,7 @@ def _trainable_wrapper(config: dict, train_dataset: Any = None, val_dataset: Any
     epochs = config.get("epochs", default_epochs(model_type))
     best_val_loss = float("inf")
 
-    for epoch in range(epochs):
+    for epoch in range(1, epochs + 1):
         trainer._train_epoch(model, train_loader, epoch)  # noqa: SLF001
         trainer.evaluate(model, val_loader, epoch)
 

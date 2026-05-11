@@ -570,9 +570,8 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
                 "datasource": _DS,
                 "gridPos": {"h": 8, "w": 4, "x": 0, "y": 0},
                 "targets": [
-                    _target(
+                    _table_target(
                         "sentimentizer_training_epoch",
-                        "ray_sentimentizer_live_epoch",
                         "Epoch ({{model_type}})",
                         "A",
                     )

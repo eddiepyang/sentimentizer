@@ -1176,7 +1176,7 @@ wheels = [
 
 [[package]]
 name = "huggingface-hub"
-version = "1.13.0"
+version = "1.14.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "filelock" },
@@ -1189,9 +1189,9 @@ dependencies = [
     { name = "typer" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/89/ff/ec7ed2eb43bd7ce8bb2233d109cc235c3e807ffe5e469dc09db261fac05e/huggingface_hub-1.13.0.tar.gz", hash = "sha256:f6df2dac5abe82ce2fe05873d10d5ff47bc677d616a2f521f4ee26db9415d9d0", size = 781788, upload-time = "2026-04-30T11:57:33.858Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/39/40/43109e943fd718b0ccd0cd61eb4f1c347df22bf81f5874c6f22adf44bcff/huggingface_hub-1.14.0.tar.gz", hash = "sha256:d6d2c9cd6be1d02ae9ec6672d5587d10a427f377db688e82528f426a041622c2", size = 782365, upload-time = "2026-05-06T14:14:34.278Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/93/db/4b1cdae9460ae1f3ca020cd767f013430ce23eb1d9c890ae3a0609b38d26/huggingface_hub-1.13.0-py3-none-any.whl", hash = "sha256:e942cb50d6a08dd5306688b1ac05bda157fd2fcc88b63dae405f7bd0d3234005", size = 660643, upload-time = "2026-04-30T11:57:31.802Z" },
+    { url = "https://files.pythonhosted.org/packages/89/a5/33b49ba7bea7c41bb37f74ec0f8beea0831e052330196633fe2c77516ea6/huggingface_hub-1.14.0-py3-none-any.whl", hash = "sha256:efe075535c62e130b30e836b138e13785f6f043d1f0539e0a39aa411a99e90b8", size = 661479, upload-time = "2026-05-06T14:14:32.029Z" },
 ]
 
 [[package]]
@@ -3488,7 +3488,7 @@ wheels = [
 
 [[package]]
 name = "sentimentizer"
-version = "0.110.0"
+version = "0.210.0"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
@@ -3539,48 +3539,48 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "black", marker = "extra == 'dev'" },
-    { name = "bumpver", marker = "extra == 'dev'" },
-    { name = "click", specifier = ">=8.1.0" },
-    { name = "gensim", specifier = ">=4.3.3" },
-    { name = "huggingface-hub" },
-    { name = "isort", marker = "extra == 'dev'" },
+    { name = "black", marker = "extra == 'dev'", specifier = ">=26.3.0" },
+    { name = "bumpver", marker = "extra == 'dev'", specifier = ">=2025.1131" },
+    { name = "click", specifier = ">=8.3.0" },
+    { name = "gensim", specifier = ">=4.4.0" },
+    { name = "huggingface-hub", specifier = ">=1.14.0" },
+    { name = "isort", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "langgraph", specifier = ">=1.1.10" },
-    { name = "numpy", specifier = ">=1.23.0" },
-    { name = "optuna", marker = "extra == 'ray'", specifier = ">=3.5" },
-    { name = "orjson", specifier = ">=3.8.5" },
-    { name = "pandas", specifier = ">=1.5.2" },
+    { name = "numpy", specifier = ">=2.4.0" },
+    { name = "optuna", marker = "extra == 'ray'", specifier = ">=4.8.0" },
+    { name = "orjson", specifier = ">=3.11.0" },
+    { name = "pandas", specifier = ">=3.0.0" },
     { name = "pip-tools", marker = "extra == 'dev'" },
-    { name = "prometheus-client", specifier = ">=0.14.0" },
-    { name = "psutil" },
-    { name = "pyarrow", specifier = ">=11.0.0" },
+    { name = "prometheus-client", specifier = ">=0.25.0" },
+    { name = "psutil", specifier = ">=7.2.0" },
+    { name = "pyarrow", specifier = ">=24.0.0" },
     { name = "pydantic-ai-slim", extras = ["openai"], specifier = ">=1.93.0" },
-    { name = "pytest", marker = "extra == 'dev'" },
-    { name = "pytest-cov", marker = "extra == 'dev'" },
-    { name = "python-dotenv", specifier = ">=1.0.0" },
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "ray", extras = ["data"], marker = "extra == 'ray'", specifier = ">=2.55.0,<2.56.0" },
-    { name = "ray", extras = ["serve"], marker = "extra == 'ray'", specifier = ">=2.55.0,<2.56.0" },
-    { name = "ray", extras = ["train"], marker = "extra == 'ray'", specifier = ">=2.55.0,<2.56.0" },
-    { name = "ray", extras = ["tune"], marker = "extra == 'ray'", specifier = ">=2.55.0,<2.56.0" },
-    { name = "rich", specifier = ">=13.0.0" },
-    { name = "ruff", marker = "extra == 'dev'" },
-    { name = "scikit-learn" },
-    { name = "smart-open", specifier = ">=7.0.1" },
-    { name = "structlog" },
-    { name = "torch", specifier = ">=2.10" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=7.1.0" },
+    { name = "python-dotenv", specifier = ">=1.2.0" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
+    { name = "ray", extras = ["data"], marker = "extra == 'ray'", specifier = ">=2.55.1,<2.56.0" },
+    { name = "ray", extras = ["serve"], marker = "extra == 'ray'", specifier = ">=2.55.1,<2.56.0" },
+    { name = "ray", extras = ["train"], marker = "extra == 'ray'", specifier = ">=2.55.1,<2.56.0" },
+    { name = "ray", extras = ["tune"], marker = "extra == 'ray'", specifier = ">=2.55.1,<2.56.0" },
+    { name = "rich", specifier = ">=15.0.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15.0" },
+    { name = "scikit-learn", specifier = ">=1.8.0" },
+    { name = "smart-open", specifier = ">=7.6.0" },
+    { name = "structlog", specifier = ">=25.5.0" },
+    { name = "torch", specifier = ">=2.11.0" },
 ]
 provides-extras = ["ray", "dev"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "black" },
-    { name = "bumpver" },
-    { name = "isort" },
+    { name = "black", specifier = ">=26.3.0" },
+    { name = "bumpver", specifier = ">=2025.1131" },
+    { name = "isort", specifier = ">=8.0.0" },
     { name = "pip-tools" },
-    { name = "pytest" },
-    { name = "pytest-cov" },
-    { name = "ruff" },
+    { name = "pytest", specifier = ">=9.0.0" },
+    { name = "pytest-cov", specifier = ">=7.1.0" },
+    { name = "ruff", specifier = ">=0.15.0" },
 ]
 
 [[package]]
