@@ -10,10 +10,7 @@ import sys
 import pytest
 from click.testing import CliRunner
 
-from workflows.driver import (
-    State,
-    cli,
-)
+from workflows.driver import State, cli
 
 # ──────────────────────────────────────────────
 # Lazy-loading: --help must not import ML stack
@@ -177,9 +174,13 @@ def test_diagnose_bare_shows_help() -> None:
 
 def test_run_chains_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
-    monkeypatch.setattr("workflows.driver.run_extract", lambda *a, **kw: calls.append("extract"))
-    monkeypatch.setattr("workflows.driver.run_tokenize", lambda *a, **kw: calls.append("tokenize"))
-    monkeypatch.setattr("workflows.driver.run_train", lambda *a, **kw: calls.append("train"))
+    monkeypatch.setattr(
+        "workflows.stages.extract.run_extract", lambda *a, **kw: calls.append("extract")
+    )
+    monkeypatch.setattr(
+        "workflows.stages.tokenize.run_tokenize", lambda *a, **kw: calls.append("tokenize")
+    )
+    monkeypatch.setattr("workflows.stages.train.run_train", lambda *a, **kw: calls.append("train"))
     result = CliRunner().invoke(cli, ["run", "--stop", "10"])
     assert result.exit_code == 0, result.output
     assert calls == ["extract", "tokenize", "train"]
@@ -196,9 +197,9 @@ def test_run_passes_resume_flags(monkeypatch: pytest.MonkeyPatch) -> None:
     def mock_train(state: State, **kwargs: object) -> None:
         train_kwargs.update(kwargs)
 
-    monkeypatch.setattr("workflows.driver.run_extract", lambda *a, **kw: None)
-    monkeypatch.setattr("workflows.driver.run_tokenize", mock_tokenize)
-    monkeypatch.setattr("workflows.driver.run_train", mock_train)
+    monkeypatch.setattr("workflows.stages.extract.run_extract", lambda *a, **kw: None)
+    monkeypatch.setattr("workflows.stages.tokenize.run_tokenize", mock_tokenize)
+    monkeypatch.setattr("workflows.stages.train.run_train", mock_train)
 
     result = CliRunner().invoke(cli, ["run", "--stop", "10", "--resume-tokenize", "--resume-train"])
     assert result.exit_code == 0, result.output
@@ -208,7 +209,9 @@ def test_run_passes_resume_flags(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_extract_command(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
-    monkeypatch.setattr("workflows.driver.run_extract", lambda *a, **kw: calls.append("extract"))
+    monkeypatch.setattr(
+        "workflows.stages.extract.run_extract", lambda *a, **kw: calls.append("extract")
+    )
     result = CliRunner().invoke(cli, ["extract", "--stop", "5000"])
     assert result.exit_code == 0, result.output
     assert calls == ["extract"]
@@ -216,7 +219,9 @@ def test_extract_command(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_tokenize_command(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
-    monkeypatch.setattr("workflows.driver.run_tokenize", lambda *a, **kw: calls.append("tokenize"))
+    monkeypatch.setattr(
+        "workflows.stages.tokenize.run_tokenize", lambda *a, **kw: calls.append("tokenize")
+    )
     result = CliRunner().invoke(cli, ["tokenize"])
     assert result.exit_code == 0, result.output
     assert calls == ["tokenize"]
@@ -224,7 +229,7 @@ def test_tokenize_command(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_train_command(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
-    monkeypatch.setattr("workflows.driver.run_train", lambda *a, **kw: calls.append("train"))
+    monkeypatch.setattr("workflows.stages.train.run_train", lambda *a, **kw: calls.append("train"))
     result = CliRunner().invoke(cli, ["train", "--save"])
     assert result.exit_code == 0, result.output
     assert calls == ["train"]
@@ -232,7 +237,7 @@ def test_train_command(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_tune_command(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
-    monkeypatch.setattr("workflows.driver.run_tune", lambda *a, **kw: calls.append("tune"))
+    monkeypatch.setattr("workflows.stages.tune.run_tune", lambda *a, **kw: calls.append("tune"))
     result = CliRunner().invoke(cli, ["tune", "--mode", "standalone"])
     assert result.exit_code == 0, result.output
     assert calls == ["tune"]
@@ -241,7 +246,7 @@ def test_tune_command(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_diagn_pipeline_command(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
     monkeypatch.setattr(
-        "workflows.driver.run_diagnose_pipeline", lambda *a, **kw: calls.append("pipeline")
+        "workflows.stages.diagnose.run_diagnose_pipeline", lambda *a, **kw: calls.append("pipeline")
     )
     result = CliRunner().invoke(cli, ["diagnose", "pipeline"])
     assert result.exit_code == 0, result.output
@@ -250,7 +255,9 @@ def test_diagn_pipeline_command(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_diagn_env_command(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
-    monkeypatch.setattr("workflows.driver.run_diagnose_env", lambda *a, **kw: calls.append("env"))
+    monkeypatch.setattr(
+        "workflows.stages.diagnose.run_diagnose_env", lambda *a, **kw: calls.append("env")
+    )
     result = CliRunner().invoke(cli, ["diagnose", "env"])
     assert result.exit_code == 0, result.output
     assert calls == ["env"]
@@ -258,7 +265,7 @@ def test_diagn_env_command(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_hf_push_command(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
-    monkeypatch.setattr("workflows.driver.run_hf_push", lambda *a, **kw: calls.append("push"))
+    monkeypatch.setattr("workflows.stages.hf.run_hf_push", lambda *a, **kw: calls.append("push"))
     result = CliRunner().invoke(cli, ["hf", "push"])
     assert result.exit_code == 0, result.output
     assert calls == ["push"]
@@ -266,7 +273,7 @@ def test_hf_push_command(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_hf_pull_command(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
-    monkeypatch.setattr("workflows.driver.run_hf_pull", lambda *a, **kw: calls.append("pull"))
+    monkeypatch.setattr("workflows.stages.hf.run_hf_pull", lambda *a, **kw: calls.append("pull"))
     result = CliRunner().invoke(cli, ["hf", "pull"])
     assert result.exit_code == 0, result.output
     assert calls == ["pull"]
@@ -299,6 +306,167 @@ def test_resolve_device() -> None:
     assert resolve_device("mps") == "mps"
     # auto resolves to one of the valid devices
     assert resolve_device("auto") in ("cpu", "cuda", "mps")
+
+
+def test_resolve_device_warns_on_cpu_torch_with_nvidia_libs(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """resolve_device should warn when torch is CPU-only but NVIDIA libs exist."""
+    import torch
+
+    # Skip if torch actually has CUDA (no warning expected)
+    if torch.cuda.is_available():
+        return
+
+    from sentimentizer import device as device_mod
+
+    # Simulate CPU-only torch (+cpu suffix) with NVIDIA libs present
+    monkeypatch.setattr(torch, "__version__", "2.11.0+cpu")
+    monkeypatch.setattr(device_mod, "_has_nvidia_libs", lambda: True)
+
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        result = device_mod.resolve_device("auto")
+
+    assert result == "cpu"
+    assert any("CPU-only" in rec.message for rec in caplog.records)
+
+
+def test_resolve_device_no_warning_when_no_nvidia_libs(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """resolve_device should NOT warn when CPU-only torch and no NVIDIA libs."""
+    import torch
+
+    if torch.cuda.is_available():
+        return
+
+    from sentimentizer import device as device_mod
+
+    monkeypatch.setattr(torch, "__version__", "2.11.0+cpu")
+    monkeypatch.setattr(device_mod, "_has_nvidia_libs", lambda: False)
+
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        result = device_mod.resolve_device("auto")
+
+    assert result == "cpu"
+    assert not any("CPU-only" in rec.message for rec in caplog.records)
+
+
+def test_run_tokenize_new_skips_data_when_rows_exist(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: str
+) -> None:
+    """run_type='new' should create dictionary but skip data when parquet has enough rows."""
+    import pandas as pd
+
+    from sentimentizer.config import DriverConfig
+    from workflows.driver import State
+
+    processed_path = str(tmp_path / "review_data.parquet")
+    raw_path = str(tmp_path / "raw_reviews.parquet")
+
+    monkeypatch.setattr(DriverConfig.files, "processed_reviews_file_path", processed_path)
+    monkeypatch.setattr(DriverConfig.files, "raw_reviews_file_path", raw_path)
+
+    monkeypatch.setattr("workflows.stages.tokenize._parquet_row_count", lambda p: 20000)
+    monkeypatch.setattr("workflows.lifecycle._ensure_ray_initialized", lambda: None)
+    monkeypatch.setattr("workflows.lifecycle.is_ray_available", lambda: False)
+
+    calls: list[str] = []
+
+    class FakeTokenizer:
+        @classmethod
+        def from_data(cls, data):
+            calls.append("from_data")
+            return cls()
+
+        def transform_dataframe(self, data):
+            calls.append("transform_dataframe")
+
+    monkeypatch.setattr("sentimentizer.tokenizer.Tokenizer", FakeTokenizer)
+
+    fake_raw_df = pd.DataFrame({"tokens": ["hello world"] * 50, "stars": [5] * 50})
+    monkeypatch.setattr(pd, "read_parquet", lambda p: fake_raw_df)
+
+    from workflows.stages.tokenize import run_tokenize
+
+    state = State(model="rnn", device="cpu", run_type="new")
+    run_tokenize(state)
+
+    assert "from_data" in calls, "Dictionary should have been created"
+    assert "transform_dataframe" not in calls, "Data should not have been transformed"
+
+
+def test_run_tokenize_new_creates_data_when_rows_insufficient(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: str
+) -> None:
+    """run_type='new' should create both dictionary and data when rows are insufficient."""
+    import pandas as pd
+
+    from sentimentizer.config import DriverConfig
+    from workflows.driver import State
+
+    processed_path = str(tmp_path / "review_data.parquet")
+    raw_path = str(tmp_path / "raw_reviews.parquet")
+
+    monkeypatch.setattr(DriverConfig.files, "processed_reviews_file_path", processed_path)
+    monkeypatch.setattr(DriverConfig.files, "raw_reviews_file_path", raw_path)
+
+    monkeypatch.setattr("workflows.stages.tokenize._parquet_row_count", lambda p: 0)
+    monkeypatch.setattr("workflows.lifecycle._ensure_ray_initialized", lambda: None)
+    monkeypatch.setattr("workflows.lifecycle.is_ray_available", lambda: False)
+
+    calls: list[str] = []
+
+    class FakeTokenizer:
+        @classmethod
+        def from_data(cls, data):
+            calls.append("from_data")
+            return cls()
+
+        def transform_dataframe(self, data):
+            calls.append("transform_dataframe")
+            return pd.DataFrame()
+
+    monkeypatch.setattr("sentimentizer.tokenizer.Tokenizer", FakeTokenizer)
+
+    fake_raw_df = pd.DataFrame({"tokens": ["hello world"] * 50, "stars": [5] * 50})
+    monkeypatch.setattr(pd, "read_parquet", lambda p: fake_raw_df)
+
+    from workflows.stages.tokenize import run_tokenize
+
+    state = State(model="rnn", device="cpu", run_type="new")
+    run_tokenize(state)
+
+    assert "from_data" in calls, "Dictionary should have been created"
+    assert "transform_dataframe" in calls, "Data should have been transformed"
+
+
+def test_run_tokenize_update_skips_when_rows_exist(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: str
+) -> None:
+    """run_type='update' should skip entirely when parquet already has enough rows."""
+    from sentimentizer.config import DriverConfig
+    from workflows.driver import State
+
+    processed_path = str(tmp_path / "review_data.parquet")
+
+    monkeypatch.setattr(DriverConfig.files, "processed_reviews_file_path", processed_path)
+
+    monkeypatch.setattr("workflows.stages.tokenize._parquet_row_count", lambda p: 20000)
+    monkeypatch.setattr("workflows.lifecycle._ensure_ray_initialized", lambda: None)
+    monkeypatch.setattr("workflows.lifecycle.is_ray_available", lambda: False)
+
+    from workflows.stages.tokenize import run_tokenize
+
+    state = State(model="rnn", device="cpu", run_type="update")
+    # If skip doesn't work, the function tries pd.read_parquet/gensim which
+    # aren't patched in this test — so a passing test means the early return
+    # kicked in
+    run_tokenize(state)
 
 
 def test_config_reexport() -> None:

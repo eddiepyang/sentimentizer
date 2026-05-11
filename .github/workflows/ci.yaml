@@ -26,27 +26,8 @@ jobs:
       with:
         enable-cache: true
 
-    - name: install dependencies (CPU-only torch)
-      run: |
-        uv sync --extra dev \
-          --no-install-package nvidia-cublas \
-          --no-install-package nvidia-cuda-cupti \
-          --no-install-package nvidia-cuda-nvrtc \
-          --no-install-package nvidia-cuda-runtime \
-          --no-install-package nvidia-cudnn-cu13 \
-          --no-install-package nvidia-cufft \
-          --no-install-package nvidia-cufile \
-          --no-install-package nvidia-curand \
-          --no-install-package nvidia-cusolver \
-          --no-install-package nvidia-cusparse \
-          --no-install-package nvidia-cusparselt-cu13 \
-          --no-install-package nvidia-nccl-cu13 \
-          --no-install-package nvidia-nvjitlink \
-          --no-install-package nvidia-nvshmem-cu13 \
-          --no-install-package nvidia-nvtx
-      env:
-        UV_INDEX_URL: https://download.pytorch.org/whl/cpu
-        UV_EXTRA_INDEX_URL: https://pypi.org/simple
+    - name: install dev dependencies
+      run: uv sync --extra dev
 
     - name: ruff lint
       run: uv run ruff check .
@@ -54,8 +35,8 @@ jobs:
     - name: black format check
       run: uv run black --check .
 
-  build:
-    name: run python tests
+  test:
+    name: run tests
     runs-on: ubuntu-latest
     needs: lint
 
@@ -78,91 +59,14 @@ jobs:
       with:
         enable-cache: true
 
-    - name: install dependencies (CPU-only torch)
-      run: |
-        uv sync --extra dev \
-          --no-install-package nvidia-cublas \
-          --no-install-package nvidia-cuda-cupti \
-          --no-install-package nvidia-cuda-nvrtc \
-          --no-install-package nvidia-cuda-runtime \
-          --no-install-package nvidia-cudnn-cu13 \
-          --no-install-package nvidia-cufft \
-          --no-install-package nvidia-cufile \
-          --no-install-package nvidia-curand \
-          --no-install-package nvidia-cusolver \
-          --no-install-package nvidia-cusparse \
-          --no-install-package nvidia-cusparselt-cu13 \
-          --no-install-package nvidia-nccl-cu13 \
-          --no-install-package nvidia-nvjitlink \
-          --no-install-package nvidia-nvshmem-cu13 \
-          --no-install-package nvidia-nvtx
-      env:
-        UV_INDEX_URL: https://download.pytorch.org/whl/cpu
-        UV_EXTRA_INDEX_URL: https://pypi.org/simple
-
-    - name: list directory
-      run: |
-        pwd
-        ls
+    - name: install dependencies (CPU-only torch + ray)
+      run: uv sync --extra dev,ray
 
     - name: test with pytest
       run: |
         uv run pytest --exitfirst --verbose --failed-first \
-        --cov=. --cov-report html
-      working-directory: .
-      env:
-        RAY_DISABLE_IMPORT_WARNING: "1"
-
-  distributed:
-    name: run distributed training tests
-    runs-on: ubuntu-latest
-    needs: lint
-
-    steps:
-
-    - uses: actions/checkout@v4
-
-    - name: setup timezone
-      uses: zcong1993/setup-timezone@master
-      with:
-        timezone: UTC
-
-    - name: set up Python 3.11
-      uses: actions/setup-python@v5
-      with:
-        python-version: "3.11"
-
-    - name: install uv
-      uses: astral-sh/setup-uv@v4
-      with:
-        enable-cache: true
-
-    - name: install dependencies (CPU-only torch)
-      run: |
-        uv sync --extra dev \
-          --no-install-package nvidia-cublas \
-          --no-install-package nvidia-cuda-cupti \
-          --no-install-package nvidia-cuda-nvrtc \
-          --no-install-package nvidia-cuda-runtime \
-          --no-install-package nvidia-cudnn-cu13 \
-          --no-install-package nvidia-cufft \
-          --no-install-package nvidia-cufile \
-          --no-install-package nvidia-curand \
-          --no-install-package nvidia-cusolver \
-          --no-install-package nvidia-cusparse \
-          --no-install-package nvidia-cusparselt-cu13 \
-          --no-install-package nvidia-nccl-cu13 \
-          --no-install-package nvidia-nvjitlink \
-          --no-install-package nvidia-nvshmem-cu13 \
-          --no-install-package nvidia-nvtx
-      env:
-        UV_INDEX_URL: https://download.pytorch.org/whl/cpu
-        UV_EXTRA_INDEX_URL: https://pypi.org/simple
-
-    - name: run ray train tests
-      run: |
-        uv run pytest tests/test_rnn.py -v -k "Ray" \
-        --cov=sentimentizer.trainer --cov-report=term-missing
+          --cov=sentimentizer --cov=workflows \
+          --cov-report=term-missing --cov-report=html
       working-directory: .
       env:
         RAY_DISABLE_IMPORT_WARNING: "1"

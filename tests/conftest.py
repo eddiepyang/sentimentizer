@@ -13,6 +13,10 @@ os.environ.setdefault("RAY_DEFAULT_OBJECT_STORE_MEMORY_PROPORTION", "0.5")
 os.environ.setdefault("RAY_DATA_ENABLE_RICH_PROGRESS_BARS", "1")
 os.environ.setdefault("RAY_TQDM", "0")
 
+# Prevent Ray from attempting to bundle the uv environment as a runtime_env
+# This causes tests to hang when executed via `uv run pytest`.
+os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
+
 file_root = Path(__file__).parent.absolute()
 root = Path(".").resolve()
 

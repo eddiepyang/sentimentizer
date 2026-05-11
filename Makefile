@@ -1,4 +1,4 @@
-.PHONY: setup setup-dev download-data train train-rnn train-encoder train-decoder \
+.PHONY: setup setup-ci setup-dev download-data train train-rnn train-encoder train-decoder \
        train-distributed train-quick serve test lint format check clean docker-build docker-run \
 	   gpu-reset tune tune-rnn tune-encoder tune-decoder tune-standalone \
 	   start-metrics stop-metrics setup-dashboards start-exporter stop-exporter stop-ray \
@@ -15,13 +15,24 @@ STOP ?= 300000
 RUN_TYPE ?= new
 # Checkpoint directory (empty = no checkpointing)
 CHECKPOINT_DIR ?=
+# Default metrics exporter port
+EXPORTER_PORT ?= 8081
 
 # ──────────────────────────────────────────────
 # Setup
 # ──────────────────────────────────────────────
 
-## Install dependencies (production only)
+## Install dependencies with CUDA-enabled PyTorch (for local GPU development)
 setup:
+	uv sync --extra ray
+
+## Install dependencies with CPU-only PyTorch (for CI or machines without GPU)
+## Installs the CPU-only torch wheel from PyTorch's index, then syncs the rest.
+setup-ci:
+	uv pip install --index-url https://download.pytorch.org/whl/cpu torch
+	uv sync --extra ray
+
+setup-mps:
 	uv sync
 
 ## Install dependencies with dev tools (pytest, ruff, black, etc.)
@@ -246,24 +257,31 @@ setup-dashboards:
 
 ## Start the Sentimentizer Prometheus metrics exporter (system, GPU, Ray health)
 start-exporter:
-	uv run python sentimentizer/exporter.py &
+	@bash -c '( nohup uv run python sentimentizer/exporter.py --addr 0.0.0.0 >/dev/null 2>&1 & disown )'
 
 ## Stop the Sentimentizer metrics exporter
 stop-exporter:
-	@pkill -f "sentimentizer/exporter.py" 2>/dev/null || true
+	@pgrep -f "[s]entimentizer/exporter.py" | xargs -r kill 2>/dev/null || true
 
 ## Start Prometheus, Grafana, and metrics exporter for dashboard metrics
 start-metrics: setup-dashboards
-	cd metrics && docker compose up -d
+	@cd metrics && docker compose up -d
+	@echo "Restarting Grafana to load newly generated dashboards..."
+	@cd metrics && docker compose restart grafana
+	@echo "Stopping old metrics exporter if running..."
+	@pgrep -f "[s]entimentizer/exporter.py" | xargs -r kill 2>/dev/null || true
 	@echo "Starting metrics exporter (port 8081)..."
-	uv run python sentimentizer/exporter.py &
+	@bash -c '( nohup uv run python sentimentizer/exporter.py --addr 0.0.0.0 >/dev/null 2>&1 & disown )'
 	@sleep 2
 	@echo "All metrics services running. Grafana: http://localhost:3000 (admin/admin)"
 
 ## Stop Prometheus, Grafana, and metrics exporter
 stop-metrics:
-	@pkill -f "sentimentizer/exporter.py" 2>/dev/null || true
-	cd metrics && docker compose down
+	@echo "Stopping exporter..."
+	@pgrep -f "[s]entimentizer/exporter.py" | xargs -r kill 2>/dev/null || true
+	@echo "Stopping Docker containers (this may take a few seconds)..."
+	@cd metrics && docker compose down -t 10 || true
+	@echo "Metrics stopped."
 
 # ──────────────────────────────────────────────
 # Cleanup
@@ -273,8 +291,9 @@ stop-metrics:
 stop-ray:
 	uv run ray stop --force
 
-## Remove generated data files, checkpoints, and Python caches
-clean: stop-ray
+## Remove generated data files, checkpoints, Python caches, and ALL metrics state
+clean: stop-metrics stop-ray
+	@echo "==> Cleaning generated data files..."
 	rm -rf sentimentizer/data/review_data.parquet
 	rm -rf sentimentizer/data/review_data_raw.parquet
 	rm -rf sentimentizer/data/weights.pth
@@ -288,6 +307,12 @@ clean: stop-ray
 	rm -rf /tmp/ray/*
 	@echo "==> Cleaning Ray Tune results..."
 	rm -rf ~/ray_results/*
+	@echo "==> Cleaning persisted training metrics..."
+	rm -f /tmp/sentimentizer_metrics/*_metrics.json
+	@echo "==> Cleaning Prometheus TSDB data..."
+	@docker volume rm metrics_prometheus-data 2>/dev/null || true
+	@docker volume prune -f 2>/dev/null || true
+	@echo "Clean complete. Run 'make start-metrics' to start fresh."
 
 ## Clean only Ray-related files and logs
 clean-ray: stop-ray

@@ -3,9 +3,22 @@ import time
 from typing import Any
 
 import torch
-from ray import serve
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+
+try:
+    from ray import serve
+
+    RAY_SERVE_AVAILABLE = True
+except ImportError:
+    RAY_SERVE_AVAILABLE = False
+
+    # Dummy serve decorator if ray is missing
+    class _DummyServe:
+        def deployment(self, *args: Any, **kwargs: Any) -> Any:
+            return lambda cls: cls
+
+    serve = _DummyServe()
 
 from sentimentizer import logger
 from sentimentizer.config import auto_detect_device
@@ -47,7 +60,7 @@ MODEL_REGISTRY: dict[str, dict[str, Any]] = {
         "d_model": 256,
         "n_heads": 4,
         "n_encoder_layers": 2,
-        "n_decoder_layers": 4,
+        "n_decoder_layers": 2,
     },
 }
 

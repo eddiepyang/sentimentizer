@@ -10,7 +10,11 @@ Lightweight PyTorch models for sentiment analysis. Small models can be pretty ef
 
 ## Install
 ```bash
-pip install sentimentizer
+# Install local-only version (no Ray dependency)
+uv add sentimentizer
+
+# Install with distributed training, tuning, and serving features
+uv add "sentimentizer[ray]"
 ```
 
 ## Quick Start
@@ -47,6 +51,8 @@ Each module exposes `get_trained_model(device, model_config=...)` to load pre-tr
 ## Serving
 
 ### Ray Serve (Python)
+
+> **Note:** Serving requires the `ray` extra: `uv add "sentimentizer[ray]"`
 
 The `sentimentizer/serve.py` entry point deploys a Ray Serve application that loads **all three models** (RNN, Encoder, Decoder) at startup. You can select which model to use per request via the `model` field.
 
@@ -171,6 +177,8 @@ python workflows/driver.py --device mps --type new --save --stop 5000
 
 ### Distributed training with Ray Train (multi-GPU or multi-machine only)
 
+> **Note:** Distributed training requires the `ray` extra: `uv add "sentimentizer[ray]"`
+
 ```bash
 # Run with 2 workers (default)
 python workflows/driver.py --device cuda --distributed --save
@@ -260,6 +268,8 @@ print(f"Resuming from epoch {checkpoint['epoch']}")
 ```
 
 ## Hyperparameter Tuning
+
+> **Note:** Tuning requires the `ray` extra: `uv add "sentimentizer[ray]"`
 
 Sentimentizer offers three ways to tune hyperparameters: **Standalone**, **Iterative Agent**, and **Tuning Skill**. These range from simple one-shot sweeps to LLM-guided iterative search loops with automatic model validation.
 
@@ -434,18 +444,31 @@ Kubernetes manifests are in the `k8s/` directory:
 
 ### With uv (recommended)
 
-This project uses [uv](https://docs.astral.sh/uv/) for dependency management:
+This project uses [uv](https://docs.astral.sh/uv/) for dependency management. PyTorch is configured to resolve from the CPU-only wheel index by default (no NVIDIA packages), which is what CI uses. For local GPU development, see the CUDA setup instructions below.
 
 ```bash
 # Install uv (if not already installed)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Install dependencies
+# Install dependencies (CPU-only PyTorch, no Ray)
 uv sync
 
+# Install with Ray distributed features
+uv sync --extra ray
+
 # Install with dev dependencies
-uv sync --extra dev
+uv sync --extra dev --extra ray
 ```
+
+#### Local CUDA / GPU development
+
+The committed lockfile resolves CPU-only PyTorch (no NVIDIA packages). To install CUDA-enabled PyTorch locally:
+
+```bash
+uv sync --no-sources-package torch
+```
+
+This ignores the CPU-only source override in `pyproject.toml` and resolves PyTorch from PyPI (with CUDA support and NVIDIA packages). Note that this will modify `uv.lock` — do not commit those changes.
 
 ### With conda
 
