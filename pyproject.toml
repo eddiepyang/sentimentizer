@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sentimentizer"
-version = "0.110.0"
+version = "0.210.0"
 description = "smole language models"
 readme = "README.md"
 authors = [{ name = "Edward Yang", email = "edwardpyang@gmail.com" }]
@@ -17,42 +17,42 @@ classifiers = [
 keywords = ["rnn", "pytorch", "nlp", "sentiment"]
 
 dependencies = [
-    "numpy>=1.23.0",
-    "pandas>=1.5.2",
-    "torch>=2.10",
-    "orjson>=3.8.5",
-    "pyarrow>=11.0.0",
-    "scikit-learn",
-    "gensim>=4.3.3",
-    "smart_open>=7.0.1",
-    "structlog",
-    "psutil",
-    "prometheus_client>=0.14.0",
-    "python-dotenv>=1.0.0",
-    "pyyaml>=6.0",
+    "numpy>=2.4.0",
+    "pandas>=3.0.0",
+    "torch>=2.11.0",
+    "orjson>=3.11.0",
+    "pyarrow>=24.0.0",
+    "scikit-learn>=1.8.0",
+    "gensim>=4.4.0",
+    "smart_open>=7.6.0",
+    "structlog>=25.5.0",
+    "psutil>=7.2.0",
+    "prometheus_client>=0.25.0",
+    "python-dotenv>=1.2.0",
+    "pyyaml>=6.0.3",
     "pydantic-ai-slim[openai]>=1.93.0",
     "langgraph>=1.1.10",
-    "rich>=13.0.0",
-    "huggingface_hub",
-    "click>=8.1.0",
+    "rich>=15.0.0",
+    "huggingface_hub>=1.14.0",
+    "click>=8.3.0",
 ]
 
 [project.optional-dependencies]
 ray = [
-    "ray[data]>=2.55.0,<2.56.0",
-    "ray[serve]>=2.55.0,<2.56.0",
-    "ray[train]>=2.55.0,<2.56.0",
-    "ray[tune]>=2.55.0,<2.56.0",
-    "optuna>=3.5",
+    "ray[data]>=2.55.1,<2.56.0",
+    "ray[serve]>=2.55.1,<2.56.0",
+    "ray[train]>=2.55.1,<2.56.0",
+    "ray[tune]>=2.55.1,<2.56.0",
+    "optuna>=4.8.0",
 ]
 dev = [
-    "black",
-    "bumpver",
-    "isort",
+    "black>=26.3.0",
+    "bumpver>=2025.1131",
+    "isort>=8.0.0",
     "pip-tools",
-    "pytest",
-    "pytest-cov",
-    "ruff",
+    "pytest>=9.0.0",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.15.0",
 ]
 
 [project.scripts]
@@ -63,13 +63,13 @@ packages = ["sentimentizer", "workflows"]
 
 [dependency-groups]
 dev = [
-    "black",
-    "bumpver",
-    "isort",
+    "black>=26.3.0",
+    "bumpver>=2025.1131",
+    "isort>=8.0.0",
     "pip-tools",
-    "pytest",
-    "pytest-cov",
-    "ruff",
+    "pytest>=9.0.0",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.15.0",
 ]
 
 [tool.ruff]
