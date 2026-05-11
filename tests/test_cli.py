@@ -416,6 +416,7 @@ def test_run_tokenize_new_creates_data_when_rows_insufficient(
     monkeypatch.setattr(DriverConfig.files, "raw_reviews_file_path", raw_path)
 
     monkeypatch.setattr("workflows.stages.tokenize._parquet_row_count", lambda p: 0)
+    monkeypatch.setattr("workflows.stages.tokenize._remove_path", lambda p: None)
     monkeypatch.setattr("workflows.lifecycle._ensure_ray_initialized", lambda: None)
     monkeypatch.setattr("workflows.lifecycle.is_ray_available", lambda: False)
 
@@ -435,6 +436,7 @@ def test_run_tokenize_new_creates_data_when_rows_insufficient(
 
     fake_raw_df = pd.DataFrame({"tokens": ["hello world"] * 50, "stars": [5] * 50})
     monkeypatch.setattr(pd, "read_parquet", lambda p: fake_raw_df)
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", lambda self, *a, **kw: None)
 
     from workflows.stages.tokenize import run_tokenize
 
