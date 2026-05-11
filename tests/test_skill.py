@@ -24,11 +24,7 @@ from sentimentizer.agent.skill import (
     TuningRunResult,
     _build_model_config,
 )
-from sentimentizer.config import (
-    DecoderConfig,
-    EncoderConfig,
-    RNNConfig,
-)
+from sentimentizer.config import DecoderConfig, EncoderConfig, RNNConfig
 
 # ─── TuningRunConfig Tests ──────────────────────────────────────────
 
@@ -461,7 +457,7 @@ class TestDriverTuneArgs:
         """The tune command should be parseable."""
         from click.testing import CliRunner
 
-        from workflows.driver import cli
+        from workflows.cli import cli
 
         result = CliRunner().invoke(cli, ["tune", "--help"])
         assert result.exit_code == 0
@@ -471,9 +467,9 @@ class TestDriverTuneArgs:
         """--mode should accept 'agent' or 'standalone'."""
         from click.testing import CliRunner
 
-        from workflows.driver import cli
+        from workflows.cli import cli
 
-        with patch("workflows.driver.run_tune") as mock_run:
+        with patch("workflows.stages.tune.run_tune") as mock_run:
             result = CliRunner().invoke(cli, ["tune", "--mode", "standalone"])
             assert result.exit_code == 0
             assert mock_run.call_args.kwargs["mode"] == "standalone"
@@ -486,7 +482,7 @@ class TestDriverTuneArgs:
         """--mode with invalid choice should fail."""
         from click.testing import CliRunner
 
-        from workflows.driver import cli
+        from workflows.cli import cli
 
         result = CliRunner().invoke(cli, ["tune", "--mode", "invalid"])
         assert result.exit_code != 0

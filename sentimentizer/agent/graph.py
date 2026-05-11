@@ -48,7 +48,7 @@ def should_continue(state: AgentState) -> str:
 
 
 def build_graph(
-    model_type: str = "rnn",
+    model_type: str,
     config_path: str | Path | None = None,
 ) -> StateGraph:
     """Build the LangGraph tuning agent graph.
@@ -94,7 +94,7 @@ def build_graph(
 
 
 def create_initial_state(
-    model_type: str = "rnn",
+    model_type: str,
     config_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Create the initial AgentState for a new tuning run.
@@ -120,7 +120,7 @@ def create_initial_state(
 
 
 async def run_agent_tuning(
-    model_type: str = "rnn",
+    model_type: str,
     config_path: str | Path | None = None,
 ) -> AgentRunResult:
     """Run the complete agent tuning loop.

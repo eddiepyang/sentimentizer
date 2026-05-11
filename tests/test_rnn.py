@@ -4,26 +4,18 @@ from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
-import ray
+
+# ruff: noqa: E402
+ray = pytest.importorskip("ray")
 import torch
 
-from sentimentizer.config import (
-    DecoderConfig,
-    EncoderConfig,
-    RNNConfig,
-    TrainerConfig,
-)
-from sentimentizer.extractor import extract_data
+from sentimentizer.config import DecoderConfig, EncoderConfig, RNNConfig, TrainerConfig
+from sentimentizer.extractor import extract_data_ray
 from sentimentizer.loader import CorpusDataset, load_train_val_ray_datasets
 from sentimentizer.models.decoder import Decoder
 from sentimentizer.models.encoder import Encoder
 from sentimentizer.models.rnn import RNN, get_trained_model
-from sentimentizer.tokenizer import (
-    Tokenizer,
-    convert_rating,
-    get_trained_tokenizer,
-    regex_tokenize,
-)
+from sentimentizer.tokenizer import Tokenizer, convert_rating, get_trained_tokenizer, regex_tokenize
 from sentimentizer.trainer import new_ray_trainer, new_trainer
 
 
@@ -87,7 +79,7 @@ class TestExtractData:
 
     def test_success(self, rel_path, relative_root):
         ray.init(ignore_reinit_error=True)
-        ds = extract_data(compressed_file_name=self.fname, file_path=rel_path, stop=self.stop)
+        ds = extract_data_ray(compressed_file_name=self.fname, file_path=rel_path, stop=self.stop)
         assert isinstance(ds, ray.data.Dataset)
 
         path = f"{relative_root}/tests/test_data/file.parquet"
@@ -435,7 +427,8 @@ class TestModelConfigs:
         assert cfg.d_model == 256
         assert cfg.n_heads == 4
         assert cfg.n_encoder_layers == 2
-        assert cfg.n_decoder_layers == 4
+        assert cfg.n_decoder_layers == 2
+        assert cfg.dropout == 0.3
         assert cfg.ff_multiplier == 4
 
     def test_decoder_custom_config(self):
@@ -462,7 +455,7 @@ class TestSingleTrainer:
         emb_weights = torch.randn(100, 100)
         model = RNN(emb_weights=emb_weights)
         cfg = TrainerConfig(device="cpu")
-        trainer = new_trainer(model=model, cfg=cfg)
+        trainer = new_trainer(model=model, cfg=cfg, model_type="rnn")
         assert isinstance(trainer.loss_function, torch.nn.BCEWithLogitsLoss)
 
 
@@ -516,6 +509,7 @@ class TestMetricsGauges:
             "val_positive_accuracy": MagicMock(),
             "val_negative_accuracy": MagicMock(),
             "epoch": MagicMock(),
+            "lr": MagicMock(),
         }
 
         # 4. Mock dependencies to isolate _train_func
@@ -527,6 +521,7 @@ class TestMetricsGauges:
             patch("sentimentizer.trainer._get_ray_gauges", return_value=mock_gauges),
             patch("sentimentizer.models.rnn.new_model") as mock_new_model,
             patch("sentimentizer.trainer.prepare_model", side_effect=lambda m: m),
+            patch("sentimentizer.exporter.TRAINING_LR", create=True),
         ):
             # Setup mock model — parameters() must return a fresh iterator each call
             mock_model = MagicMock()
@@ -545,6 +540,7 @@ class TestMetricsGauges:
             assert mock_gauges["train_loss"].set.called, "train_loss gauge was not updated"
             assert mock_gauges["val_loss"].set.called, "val_loss gauge was not updated"
             assert mock_gauges["val_accuracy"].set.called, "val_accuracy gauge was not updated"
+            assert mock_gauges["lr"].set.called, "lr gauge was not updated"
 
     def test_trainer_evaluate_updates_gauges(self) -> None:
         """Verifies Trainer.evaluate updates Prometheus Gauges during single-node training."""
@@ -577,6 +573,7 @@ class TestMetricsGauges:
             "val_positive_accuracy": MagicMock(),
             "val_negative_accuracy": MagicMock(),
             "epoch": MagicMock(),
+            "lr": MagicMock(),
         }
 
         with (

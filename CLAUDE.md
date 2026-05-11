@@ -19,11 +19,14 @@ uv run pytest tests/ -v -k "Ray"
 This project uses **uv** for dependency management. Key commands:
 
 ```bash
-# Install all dependencies
+# Install dependencies (local-only mode)
 uv sync
 
+# Install with Ray distributed features
+uv sync --extra ray
+
 # Install with dev dependencies (includes ruff, black, pytest)
-uv sync --extra dev
+uv sync --extra dev --extra ray
 
 # Add a new dependency
 uv add <package>
@@ -70,6 +73,7 @@ Both ruff and black are run in CI — PRs must pass lint and format checks befor
 - Config classes live in `sentimentizer/config.py` — use dataclasses
 - Keep `ray.init(ignore_reinit_error=True)` in tests to avoid re-init errors
 - The project requires Python 3.11+ (pinned in `.python-version`)
+- **Stale metrics cleanup**: `_reset_stale_metrics(model_type)` in `workflows/stages/train.py` is called at the start of every training run. It writes a zeroed-out per-model JSON file to `/tmp/sentimentizer_metrics/{model_type}_metrics.json` (with `_trace.reset_by` + `_trace.reset_at` trace fields for easy debugging), resets the `sentimentizer_training_*` Prometheus gauges for that model type to 0, and invalidates the `_RAY_GAUGES` cache entry. Per-model files eliminate race conditions between concurrent training processes. The standalone exporter discovers all three files and zeroes gauges for any model type whose file is missing or stale.
 
 ## Ray 2.55 API conventions
 

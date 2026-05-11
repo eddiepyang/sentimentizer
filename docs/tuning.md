@@ -1,5 +1,7 @@
 # Hyperparameter Tuning
 
+> **Note:** Hyperparameter tuning requires the `ray` extra: `uv add "sentimentizer[ray]"`
+
 Sentimentizer offers three ways to tune hyperparameters, each at a different level of automation:
 
 | | **Standalone** | **Iterative Agent** | **Tuning Skill (Fixed Workflow)** |

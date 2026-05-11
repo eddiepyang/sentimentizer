@@ -772,7 +772,7 @@ class TuningRun:
 # ---------------------------------------------------------------------------
 
 
-def diagnose_training_issues(model_type: str = "rnn") -> dict[str, Any]:
+def diagnose_training_issues(model_type: str) -> dict[str, Any]:
     """Run diagnostic checks to detect common training issues.
 
     Checks for problems that cause incorrect or "whacky" predictions,
@@ -1158,8 +1158,8 @@ def _build_model_config(model_type: str, config: dict[str, Any]) -> Any:
             d_model=config.get("d_model", 256),
             n_heads=config.get("n_heads", 4),
             n_encoder_layers=config.get("n_encoder_layers", 2),
-            n_decoder_layers=config.get("n_decoder_layers", 4),
-            dropout=config.get("dropout", 0.2),
+            n_decoder_layers=config.get("n_decoder_layers", 2),
+            dropout=config.get("dropout", 0.3),
             ff_multiplier=config.get("ff_multiplier", 4),
         )
     else:
