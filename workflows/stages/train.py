@@ -414,73 +414,28 @@ def _run_fit_distributed(
 
 
 def _publish_distributed_metrics(result: Any, model_type: str) -> None:
-    """Publish final distributed training metrics to the driver-level Prometheus gauges.
+    """Persist final distributed training metrics to the per-model JSON file.
 
-    During distributed training, ``_train_func`` runs inside Ray workers --
-    separate processes that set their own ``prometheus_client`` gauge objects.
-    Those worker-process gauges are NOT the same as the driver's gauges, so
-    the driver-level ``sentimentizer_training_*`` metrics never get updated.
+    During distributed training, ``_train_func`` runs inside Ray workers that
+    write per-epoch metrics to the JSON file via ``_write_epoch_metrics_to_file``
+    and push live gauges from the worker process.  After ``ray_trainer.fit()``
+    returns, the driver has the final metrics in ``result.metrics``.
 
-    After ``ray_trainer.fit()`` returns, the driver has the final metrics in
-    ``result.metrics``.  This function persists those values to a JSON file
-    that the standalone exporter (port 8081) reads periodically, so training
-    metrics remain visible in Grafana after the driver process exits.
-
-    The gauge-setting code is kept as a best-effort backup: if the driver
-    process happens to be scraped by Prometheus before exiting, the gauges
-    will reflect the final metrics.
+    The driver process does not run a Prometheus HTTP server, so setting
+    ``prometheus_client`` gauges here would have no effect — only the
+    standalone exporter (port 8081) serves those gauges, and it reads from
+    the JSON file.  We therefore persist the final metrics to JSON and log
+    a summary, but do not push to driver-level gauges.
     """
-    try:
-        from sentimentizer.exporter import (
-            TRAINING_EPOCH,
-            TRAINING_LR,
-            TRAINING_TRAIN_LOSS,
-            TRAINING_VAL_ACCURACY,
-            TRAINING_VAL_AUC_ROC,
-            TRAINING_VAL_COHEN_KAPPA,
-            TRAINING_VAL_F1,
-            TRAINING_VAL_LOSS,
-            TRAINING_VAL_NEGATIVE_ACCURACY,
-            TRAINING_VAL_POSITIVE_ACCURACY,
-            TRAINING_VAL_PRECISION,
-            TRAINING_VAL_RECALL,
-        )
+    metrics = result.metrics
+    logger.info(
+        "distributed_metrics_published",
+        model_type=model_type,
+        accuracy=round(metrics.get("accuracy", 0), 4),
+        val_loss=round(metrics.get("val_loss", 0), 4),
+        train_loss=round(metrics.get("train_loss", 0), 4),
+    )
 
-        metrics = result.metrics
-        lbl = {"model_type": model_type}
-
-        TRAINING_TRAIN_LOSS.labels(**lbl).set(float(metrics.get("train_loss", 0)))
-        TRAINING_VAL_LOSS.labels(**lbl).set(float(metrics.get("val_loss", 0)))
-        TRAINING_VAL_ACCURACY.labels(**lbl).set(float(metrics.get("accuracy", 0)))
-        TRAINING_VAL_PRECISION.labels(**lbl).set(float(metrics.get("precision", 0)))
-        TRAINING_VAL_RECALL.labels(**lbl).set(float(metrics.get("recall", 0)))
-        TRAINING_VAL_F1.labels(**lbl).set(float(metrics.get("f1", 0)))
-        TRAINING_VAL_COHEN_KAPPA.labels(**lbl).set(float(metrics.get("cohen_kappa", 0)))
-        auc_roc = metrics.get("auc_roc")
-        if auc_roc is not None:
-            TRAINING_VAL_AUC_ROC.labels(**lbl).set(float(auc_roc))
-        TRAINING_VAL_POSITIVE_ACCURACY.labels(**lbl).set(float(metrics.get("pos_acc", 0)))
-        TRAINING_VAL_NEGATIVE_ACCURACY.labels(**lbl).set(float(metrics.get("neg_acc", 0)))
-        TRAINING_EPOCH.labels(**lbl).set(int(metrics.get("epoch", 0)))
-        lr = metrics.get("lr")
-        if lr is not None:
-            TRAINING_LR.labels(**lbl).set(float(lr))
-
-        logger.info(
-            "distributed_metrics_published_to_prometheus",
-            model_type=model_type,
-            accuracy=round(metrics.get("accuracy", 0), 4),
-            val_loss=round(metrics.get("val_loss", 0), 4),
-            train_loss=round(metrics.get("train_loss", 0), 4),
-        )
-    except ImportError:
-        logger.warning(
-            "prometheus_client_not_available",
-            message="Cannot publish distributed training metrics to Prometheus gauges",
-        )
-
-    # Persist metrics to JSON so the standalone exporter can serve them
-    # after the driver process exits.
     _persist_metrics_to_file(result.metrics, model_type)
 
 

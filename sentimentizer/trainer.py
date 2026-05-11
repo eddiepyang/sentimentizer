@@ -317,20 +317,24 @@ class Trainer:
 
             i += len(target)
             self.losses.append(loss_val)
-            if i % (self.cfg.batch_size * 100) == 0:
-                current_loss = float(np.mean(self.losses[-60:]))
+            if i % (self.cfg.batch_size * 250) == 0:
+                current_loss = float(np.mean(self.losses[-120:]))
                 gauges = _get_ray_gauges(self.model_type)
                 if gauges is not None:
                     gauges["train_loss"].set(current_loss)
+                    gauges["lr"].set(float(self.optimizer.param_groups[0]["lr"]))
                 try:
-                    from sentimentizer.exporter import TRAINING_TRAIN_LOSS
+                    from sentimentizer.exporter import TRAINING_LR, TRAINING_TRAIN_LOSS
 
                     TRAINING_TRAIN_LOSS.labels(model_type=self.model_type).set(current_loss)
+                    TRAINING_LR.labels(model_type=self.model_type).set(
+                        float(self.optimizer.param_groups[0]["lr"])
+                    )
                 except ImportError:
                     pass
                 logger.info(
                     f"[{self.model_type}] [epoch {epoch}] {i / n:.2f} of rows completed in "
-                    f"{j + 1} cycles, current loss at {np.mean(self.losses[-60:]):.4f}"
+                    f"{j + 1} cycles, current loss at {current_loss:.4f}"
                 )
                 logger.info(
                     f"[{self.model_type}] [epoch {epoch}] current learning rate at {self.optimizer.param_groups[0]['lr']:.4f}"  # noqa: E501
@@ -367,7 +371,7 @@ class Trainer:
             Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
 
         try:
-            for epoch in range(epochs):
+            for epoch in range(1, epochs + 1):
                 self._train_epoch(model, train_loader, epoch)
                 self.evaluate(model, val_loader, epoch)
 
@@ -375,15 +379,15 @@ class Trainer:
                     self.scheduler.step()
 
                 # Save periodic checkpoint
-                if checkpoint_dir and checkpoint_every > 0 and (epoch + 1) % checkpoint_every == 0:
-                    ckpt_path = Path(checkpoint_dir) / f"checkpoint_epoch_{epoch + 1}.pth"
-                    save_checkpoint(model, self.optimizer, epoch + 1, ckpt_path)
+                if checkpoint_dir and checkpoint_every > 0 and epoch % checkpoint_every == 0:
+                    ckpt_path = Path(checkpoint_dir) / f"checkpoint_epoch_{epoch}.pth"
+                    save_checkpoint(model, self.optimizer, epoch, ckpt_path)
                     logger.info(f"[{self.model_type}] saved checkpoint: {ckpt_path}")
 
                 # Save best model checkpoint
                 if checkpoint_dir and checkpoint_best and self.val_loss < best_val_loss:
                     best_path = Path(checkpoint_dir) / "best_model.pth"
-                    save_checkpoint(model, self.optimizer, epoch + 1, best_path)
+                    save_checkpoint(model, self.optimizer, epoch, best_path)
                     logger.info(
                         f"[{self.model_type}] saved best model checkpoint "
                         f"(val_loss={self.val_loss:.4f}): {best_path}"
@@ -740,7 +744,7 @@ def _train_func(config: dict) -> None:
         f"use_warmup={use_warmup}, warmup_steps={warmup_steps}, total_steps={total_steps}"
     )
 
-    for epoch in range(epochs):
+    for epoch in range(1, epochs + 1):
         model.train()
         epoch_losses = []
 
@@ -755,15 +759,18 @@ def _train_func(config: dict) -> None:
             epoch_losses.append(loss_val)
 
             # Update Ray custom metrics gauge from rank 0 to prevent worker collisions
-            if i % 100 == 0 and train.get_context().get_world_rank() == 0:
+            if i % 250 == 0 and train.get_context().get_world_rank() == 0:
+                current_loss = float(np.mean(epoch_losses[-120:]))
                 gauges = _get_ray_gauges(model_type)
                 if gauges is not None:
-                    gauges["train_loss"].set(float(np.mean(epoch_losses[-60:])))
+                    gauges["train_loss"].set(current_loss)
+                    gauges["lr"].set(float(optimizer.param_groups[0]["lr"]))
                 try:
-                    from sentimentizer.exporter import TRAINING_TRAIN_LOSS
+                    from sentimentizer.exporter import TRAINING_LR, TRAINING_TRAIN_LOSS
 
-                    TRAINING_TRAIN_LOSS.labels(model_type=model_type).set(
-                        float(np.mean(epoch_losses[-60:]))
+                    TRAINING_TRAIN_LOSS.labels(model_type=model_type).set(current_loss)
+                    TRAINING_LR.labels(model_type=model_type).set(
+                        float(optimizer.param_groups[0]["lr"])
                     )
                 except ImportError:
                     pass
