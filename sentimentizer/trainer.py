@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -70,6 +71,7 @@ def _write_epoch_metrics_to_file(
     path = metrics_dir / f"{model_type}_metrics.json"
 
     auc_roc = metrics.auc_roc
+    avg_precision = metrics.avg_precision
     data = {
         "train_loss": float(train_loss),
         "val_loss": float(val_loss),
@@ -78,7 +80,11 @@ def _write_epoch_metrics_to_file(
         "recall": float(metrics.recall),
         "f1": float(metrics.f1),
         "cohen_kappa": float(metrics.cohen_kappa),
+        "mcc": float(metrics.mcc),
+        "npv": float(metrics.npv),
+        "macro_f1": float(metrics.macro_f1),
         "auc_roc": float(auc_roc) if auc_roc is not None else None,
+        "avg_precision": float(avg_precision) if avg_precision is not None else None,
         "positive_accuracy": float(metrics.positive_accuracy),
         "negative_accuracy": float(metrics.negative_accuracy),
         "epoch": int(epoch),
@@ -159,6 +165,21 @@ def _get_ray_gauges(model_type: str) -> dict[str, Any] | None:
             description="Live validation Cohen's kappa",
             tag_keys=("model_type",),
         ),
+        "val_mcc": Gauge(
+            "sentimentizer_live_val_mcc",
+            description="Live validation Matthews correlation coefficient",
+            tag_keys=("model_type",),
+        ),
+        "val_npv": Gauge(
+            "sentimentizer_live_val_npv",
+            description="Live validation negative predictive value",
+            tag_keys=("model_type",),
+        ),
+        "val_macro_f1": Gauge(
+            "sentimentizer_live_val_macro_f1",
+            description="Live validation macro-averaged F1 score",
+            tag_keys=("model_type",),
+        ),
         "val_auc_roc": Gauge(
             "sentimentizer_live_val_auc_roc",
             description="Live validation AUC-ROC",
@@ -172,6 +193,11 @@ def _get_ray_gauges(model_type: str) -> dict[str, Any] | None:
         "val_negative_accuracy": Gauge(
             "sentimentizer_live_val_negative_accuracy",
             description="Live validation negative-class accuracy",
+            tag_keys=("model_type",),
+        ),
+        "val_avg_precision": Gauge(
+            "sentimentizer_live_val_avg_precision",
+            description="Live validation average precision (PR-AUC)",
             tag_keys=("model_type",),
         ),
         "epoch": Gauge(
@@ -458,14 +484,20 @@ class Trainer:
         self.latest_metrics = metrics
         gauges = _get_ray_gauges(self.model_type)
         if gauges is not None:
+            gauges["train_loss"].set(self.latest_train_loss)
             gauges["val_loss"].set(self.val_loss)
             gauges["val_accuracy"].set(float(metrics.accuracy))
             gauges["val_precision"].set(float(metrics.precision))
             gauges["val_recall"].set(float(metrics.recall))
             gauges["val_f1"].set(float(metrics.f1))
             gauges["val_cohen_kappa"].set(float(metrics.cohen_kappa))
+            gauges["val_mcc"].set(float(metrics.mcc))
+            gauges["val_npv"].set(float(metrics.npv))
+            gauges["val_macro_f1"].set(float(metrics.macro_f1))
             if metrics.auc_roc is not None:
                 gauges["val_auc_roc"].set(float(metrics.auc_roc))
+            if metrics.avg_precision is not None:
+                gauges["val_avg_precision"].set(float(metrics.avg_precision))
             gauges["val_positive_accuracy"].set(float(metrics.positive_accuracy))
             gauges["val_negative_accuracy"].set(float(metrics.negative_accuracy))
             gauges["epoch"].set(epoch)
@@ -476,26 +508,37 @@ class Trainer:
             from sentimentizer.exporter import (
                 TRAINING_EPOCH,
                 TRAINING_LR,
+                TRAINING_TRAIN_LOSS,
                 TRAINING_VAL_ACCURACY,
                 TRAINING_VAL_AUC_ROC,
+                TRAINING_VAL_AVG_PRECISION,
                 TRAINING_VAL_COHEN_KAPPA,
                 TRAINING_VAL_F1,
                 TRAINING_VAL_LOSS,
+                TRAINING_VAL_MACRO_F1,
+                TRAINING_VAL_MCC,
                 TRAINING_VAL_NEGATIVE_ACCURACY,
+                TRAINING_VAL_NPV,
                 TRAINING_VAL_POSITIVE_ACCURACY,
                 TRAINING_VAL_PRECISION,
                 TRAINING_VAL_RECALL,
             )
 
             lbl = {"model_type": self.model_type}
+            TRAINING_TRAIN_LOSS.labels(**lbl).set(self.latest_train_loss)
             TRAINING_VAL_LOSS.labels(**lbl).set(self.val_loss)
             TRAINING_VAL_ACCURACY.labels(**lbl).set(float(metrics.accuracy))
             TRAINING_VAL_PRECISION.labels(**lbl).set(float(metrics.precision))
             TRAINING_VAL_RECALL.labels(**lbl).set(float(metrics.recall))
             TRAINING_VAL_F1.labels(**lbl).set(float(metrics.f1))
             TRAINING_VAL_COHEN_KAPPA.labels(**lbl).set(float(metrics.cohen_kappa))
+            TRAINING_VAL_MCC.labels(**lbl).set(float(metrics.mcc))
+            TRAINING_VAL_NPV.labels(**lbl).set(float(metrics.npv))
+            TRAINING_VAL_MACRO_F1.labels(**lbl).set(float(metrics.macro_f1))
             if metrics.auc_roc is not None:
                 TRAINING_VAL_AUC_ROC.labels(**lbl).set(float(metrics.auc_roc))
+            if metrics.avg_precision is not None:
+                TRAINING_VAL_AVG_PRECISION.labels(**lbl).set(float(metrics.avg_precision))
             TRAINING_VAL_POSITIVE_ACCURACY.labels(**lbl).set(float(metrics.positive_accuracy))
             TRAINING_VAL_NEGATIVE_ACCURACY.labels(**lbl).set(float(metrics.negative_accuracy))
             TRAINING_EPOCH.labels(**lbl).set(epoch)
@@ -523,7 +566,15 @@ class Trainer:
             recall=round(metrics.recall, 4),
             f1=round(metrics.f1, 4),
             cohen_kappa=round(metrics.cohen_kappa, 4),
-            auc_roc=round(metrics.auc_roc, 4) if metrics.auc_roc is not None else None,
+            mcc=round(metrics.mcc, 4),
+            npv=round(metrics.npv, 4),
+            macro_f1=round(metrics.macro_f1, 4),
+            auc_roc=(
+                round(metrics.auc_roc, 4) if metrics.auc_roc is not None else None
+            ),
+            avg_precision=(
+                round(metrics.avg_precision, 4) if metrics.avg_precision is not None else None
+            ),
             pos_acc=round(metrics.positive_accuracy, 4),
             neg_acc=round(metrics.negative_accuracy, 4),
         )
@@ -639,6 +690,9 @@ def _train_func(config: dict) -> None:
     and runs the training loop with dataset shards from Ray Data.
     Reports metrics and checkpoints back to Ray Train.
     """
+
+    # Suppress smart_open verbose docstring logging in Ray workers
+    os.environ.setdefault("SMART_OPEN_QUIET", "1")
 
     # Unpack training config (resolve -1 to model-specific default)
     epochs = config["epochs"]
@@ -795,14 +849,20 @@ def _train_func(config: dict) -> None:
         if train.get_context().get_world_rank() == 0:
             gauges = _get_ray_gauges(model_type)
             if gauges is not None:
+                gauges["train_loss"].set(float(train_loss))
                 gauges["val_loss"].set(float(val_loss))
                 gauges["val_accuracy"].set(float(metrics.accuracy))
                 gauges["val_precision"].set(float(metrics.precision))
                 gauges["val_recall"].set(float(metrics.recall))
                 gauges["val_f1"].set(float(metrics.f1))
                 gauges["val_cohen_kappa"].set(float(metrics.cohen_kappa))
+                gauges["val_mcc"].set(float(metrics.mcc))
+                gauges["val_npv"].set(float(metrics.npv))
+                gauges["val_macro_f1"].set(float(metrics.macro_f1))
                 if metrics.auc_roc is not None:
                     gauges["val_auc_roc"].set(float(metrics.auc_roc))
+                if metrics.avg_precision is not None:
+                    gauges["val_avg_precision"].set(float(metrics.avg_precision))
                 gauges["val_positive_accuracy"].set(float(metrics.positive_accuracy))
                 gauges["val_negative_accuracy"].set(float(metrics.negative_accuracy))
                 gauges["epoch"].set(epoch)
@@ -816,10 +876,14 @@ def _train_func(config: dict) -> None:
                 TRAINING_TRAIN_LOSS,
                 TRAINING_VAL_ACCURACY,
                 TRAINING_VAL_AUC_ROC,
+                TRAINING_VAL_AVG_PRECISION,
                 TRAINING_VAL_COHEN_KAPPA,
                 TRAINING_VAL_F1,
                 TRAINING_VAL_LOSS,
+                TRAINING_VAL_MACRO_F1,
+                TRAINING_VAL_MCC,
                 TRAINING_VAL_NEGATIVE_ACCURACY,
+                TRAINING_VAL_NPV,
                 TRAINING_VAL_POSITIVE_ACCURACY,
                 TRAINING_VAL_PRECISION,
                 TRAINING_VAL_RECALL,
@@ -834,25 +898,31 @@ def _train_func(config: dict) -> None:
                 TRAINING_VAL_RECALL.labels(**lbl).set(float(metrics.recall))
                 TRAINING_VAL_F1.labels(**lbl).set(float(metrics.f1))
                 TRAINING_VAL_COHEN_KAPPA.labels(**lbl).set(float(metrics.cohen_kappa))
+                TRAINING_VAL_MCC.labels(**lbl).set(float(metrics.mcc))
+                TRAINING_VAL_NPV.labels(**lbl).set(float(metrics.npv))
+                TRAINING_VAL_MACRO_F1.labels(**lbl).set(float(metrics.macro_f1))
                 if metrics.auc_roc is not None:
                     TRAINING_VAL_AUC_ROC.labels(**lbl).set(float(metrics.auc_roc))
+                if metrics.avg_precision is not None:
+                    TRAINING_VAL_AVG_PRECISION.labels(**lbl).set(float(metrics.avg_precision))
                 TRAINING_VAL_POSITIVE_ACCURACY.labels(**lbl).set(float(metrics.positive_accuracy))
                 TRAINING_VAL_NEGATIVE_ACCURACY.labels(**lbl).set(float(metrics.negative_accuracy))
                 TRAINING_EPOCH.labels(**lbl).set(epoch)
                 TRAINING_LR.labels(**lbl).set(float(optimizer.param_groups[0]["lr"]))
-
-                # Write current epoch metrics to the JSON file so the standalone
-                # exporter serves up-to-date data in the dashboard table panel.
-                _write_epoch_metrics_to_file(
-                    model_type=model_type,
-                    epoch=epoch,
-                    train_loss=float(train_loss),
-                    val_loss=float(val_loss),
-                    metrics=metrics,
-                    lr=optimizer.param_groups[0]["lr"],
-                )
         except ImportError:
             pass
+
+        # Persist metrics to JSON regardless of whether exporter module is
+        # available — the standalone exporter reads this file on port 8081.
+        if train.get_context().get_world_rank() == 0:
+            _write_epoch_metrics_to_file(
+                model_type=model_type,
+                epoch=epoch,
+                train_loss=float(train_loss),
+                val_loss=float(val_loss),
+                metrics=metrics,
+                lr=optimizer.param_groups[0]["lr"],
+            )
 
         logger.info(  # type: ignore[call-arg]
             f"[{model_type}] [epoch {epoch}] completed",
@@ -864,14 +934,21 @@ def _train_func(config: dict) -> None:
             recall=round(metrics.recall, 4),
             f1=round(metrics.f1, 4),
             cohen_kappa=round(metrics.cohen_kappa, 4),
-            auc_roc=round(metrics.auc_roc, 4) if metrics.auc_roc is not None else None,
+            mcc=round(metrics.mcc, 4),
+            npv=round(metrics.npv, 4),
+            macro_f1=round(metrics.macro_f1, 4),
+            auc_roc=(
+                round(metrics.auc_roc, 4) if metrics.auc_roc is not None else None
+            ),
+            avg_precision=(
+                round(metrics.avg_precision, 4) if metrics.avg_precision is not None else None
+            ),
             pos_acc=round(metrics.positive_accuracy, 4),
             neg_acc=round(metrics.negative_accuracy, 4),
         )
 
         # Report metrics and checkpoint to Ray Train
         # Ray 2.55+ requires directory-based checkpoints (from_dict removed)
-        import os
         import tempfile
 
         import ray.cloudpickle as pickle
@@ -900,7 +977,11 @@ def _train_func(config: dict) -> None:
                     "recall": metrics.recall,
                     "f1": metrics.f1,
                     "cohen_kappa": metrics.cohen_kappa,
+                    "mcc": metrics.mcc,
+                    "npv": metrics.npv,
+                    "macro_f1": metrics.macro_f1,
                     "auc_roc": metrics.auc_roc,
+                    "avg_precision": metrics.avg_precision,
                     "tp": metrics.tp,
                     "tn": metrics.tn,
                     "fp": metrics.fp,

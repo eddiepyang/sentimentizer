@@ -16,7 +16,7 @@ The following gaps were identified between this document and the current codebas
 
 5. ~~**Missing `sentimentizer_system_info` metric**~~ — Fixed: added to the system metrics section as an Info-type metric.
 
-6. ~~**Minor NaN handling imprecision**~~ — Fixed: updated to mention that `_auc_roc()` falls back to a manual trapezoidal implementation when sklearn is unavailable.
+6. ~~**Minor NaN handling imprecision**~~ — Fixed: NaN handling now uses `torchmetrics.BinaryAUROC` with explicit NaN→0.5 replacement before computation.
 
 ## Architecture
 
@@ -67,6 +67,55 @@ The following gaps were identified between this document and the current codebas
 | `sentimentizer-tune` | 8082 | Tuning process: Ray Tune trial metrics (active during tuning only) |
 | `ray` | 8080 | Ray cluster metrics including `ray_sentimentizer_live_*` gauges from distributed workers |
 
+## Metric Definitions
+
+### Core Classification Metrics
+
+| Metric | Range | Description |
+|--------|-------|-------------|
+| **Accuracy** | 0–1 | Overall correctness: (TP + TN) / total |
+| **Precision** | 0–1 | Positive-class precision: TP / (TP + FP). Of all samples predicted positive, how many were actually positive? |
+| **Recall** | 0–1 | Positive-class recall (sensitivity): TP / (TP + FN). Of all actual positives, how many were correctly identified? |
+| **F1** | 0–1 | Harmonic mean of precision and recall (positive class only). Balances false positives and false negatives for the positive class. |
+| **Positive Accuracy** | 0–1 | Accuracy on positive samples only: TP / (TP + FN). Same as recall for the positive class. |
+| **Negative Accuracy** | 0–1 | Accuracy on negative samples only: TN / (TN + FP). Same as specificity for the negative class. |
+
+### Agreement and Correlation Metrics
+
+| Metric | Range | Description |
+|--------|-------|-------------|
+| **Cohen's Kappa** | -1–1 | Agreement beyond chance. 0 = random agreement, 1 = perfect agreement. Unlike accuracy, accounts for agreement expected by chance. Returns 0.0 for single-class targets (torchmetrics returns NaN, coerced to 0.0). |
+| **MCC** (Matthews Correlation Coefficient) | -1–1 | Best single-number summary of confusion matrix quality. Uses all four cells (TP, TN, FP, FN) symmetrically, making it robust to class imbalance where accuracy can be misleading. 0 = random, 1 = perfect, -1 = inverse. |
+
+### Probability-Based Metrics
+
+| Metric | Range | Description |
+|--------|-------|-------------|
+| **AUC-ROC** | 0–1 | Area under the Receiver Operating Characteristic curve. Measures ranking quality: how well the model separates positive from negative samples across all thresholds. 0.5 = random, 1.0 = perfect separation. Requires probability scores; None when not available. Returns 0.0 for single-class targets. |
+| **Average Precision** (PR-AUC) | 0–1 | Area under the Precision-Recall curve. More informative than AUC-ROC for imbalanced datasets because it focuses on the positive class. A random classifier gives AP = positive prevalence (not 0.5), making it a stricter test. Requires probability scores; None when not available. Returns 0.0 for single-class targets. |
+
+### Negative-Class Metrics
+
+| Metric | Range | Description |
+|--------|-------|-------------|
+| **NPV** (Negative Predictive Value) | 0–1 | TN / (TN + FN). Of all samples predicted negative, how many were actually negative? Complement to precision for the negative class. Low NPV indicates many false negatives — the model incorrectly classifies actual negatives as positive. |
+| **Macro F1** | 0–1 | Mean of per-class F1 scores (F1_positive + F1_negative) / 2. Weights both classes equally regardless of prevalence. Unlike positive-class-only F1, Macro F1 drops significantly when the model ignores either class — making it the best early-warning indicator of class-imbalance collapse. |
+
+### When to Use Which Metric
+
+- **Balanced dataset**: All metrics are equally informative. Use F1 or accuracy for quick assessment.
+- **Imbalanced dataset** (common in sentiment analysis): Accuracy is misleading. Use **Macro F1** (detects negative-class neglect), **MCC** (robust single-number summary), and **Average Precision** (stricter than AUC-ROC).
+- **Negative-class performance matters**: Use **NPV** and **Negative Accuracy** alongside precision/recall.
+- **Model ranking quality**: Use **AUC-ROC** (threshold-independent) and **Average Precision** (focuses on positive class).
+
+### Key Literature
+
+- **MCC as best single metric**: Chicco & Jurman (2020), "The advantages of the Matthews correlation coefficient (MCC) over F1 score and accuracy in binary classification evaluation," *BMC Genomics* 21:6. — Demonstrates MCC is more informative than F1 and accuracy across binary classification tasks, including imbalanced ones. ([Springer Nature](https://bmcgenomics.biomedcentral.com/article/10.1186/s12864-019-6413-7))
+- **MCC real-world challenges**: Zhu & Wang (2023), "Challenges in the real world use of classification accuracy metrics: From recall and precision to the Matthews correlation coefficient," *PLOS One*. — Reviews practical pitfalls of recall/precision/F1 and recommends MCC. ([PLOS One](https://journals.plos.org/plosone/article?id=10.1371%2Fjournal.pone.0291908))
+- **Macro F1 definition and variants**: Opitz & Burst (2019), "Macro F1 and Macro F1," *arXiv:1911.03347*. — Shows macro F1 weights both classes equally, penalizing classifiers that ignore the minority class. ([arXiv](https://ui.adsabs.harvard.edu/abs/2019arXiv191103347O/abstract))
+- **PR-AUC vs ROC-AUC for imbalance**: Saito & Rehmsmeier (2015), "The Precision-Recall Plot Is More Informative than the ROC Plot When Evaluating Binary Classifiers on Imbalanced Datasets," *PLOS One*. — Definitive study showing PR curves (and Average Precision) are more informative than ROC curves when classes are imbalanced. ([PMC](https://ncbi.nlm.nih.gov/pmc/articles/PMC4349800/))
+- **ROC-AUC still valid for imbalance**: Richardson et al. (2024), "The receiver operating characteristic curve accurately assesses imbalanced datasets," *Patterns* 5(6). — Counterpoint showing ROC-AUC can still be valid, but recommends using it alongside PR-based metrics. ([ScienceDirect](https://www.sciencedirect.com/science/article/pii/S2666389924001090))
+
 ## Metric Naming Convention
 
 ### `sentimentizer_training_*` (training metrics)
@@ -79,7 +128,11 @@ Gauges are pre-initialized at module-import time in the standalone exporter (`ex
 - `sentimentizer_training_val_recall{model_type}`
 - `sentimentizer_training_val_f1{model_type}`
 - `sentimentizer_training_val_cohen_kappa{model_type}`
+- `sentimentizer_training_val_mcc{model_type}`
+- `sentimentizer_training_val_npv{model_type}`
+- `sentimentizer_training_val_macro_f1{model_type}`
 - `sentimentizer_training_val_auc_roc{model_type}`
+- `sentimentizer_training_val_avg_precision{model_type}`
 - `sentimentizer_training_val_positive_accuracy{model_type}`
 - `sentimentizer_training_val_negative_accuracy{model_type}`
 - `sentimentizer_training_epoch{model_type}`
@@ -96,7 +149,11 @@ Set by Ray workers during distributed training. These are prefixed with `ray_` b
 - `ray_sentimentizer_live_val_recall{model_type}`
 - `ray_sentimentizer_live_val_f1{model_type}`
 - `ray_sentimentizer_live_val_cohen_kappa{model_type}`
+- `ray_sentimentizer_live_val_mcc{model_type}`
+- `ray_sentimentizer_live_val_npv{model_type}`
+- `ray_sentimentizer_live_val_macro_f1{model_type}`
 - `ray_sentimentizer_live_val_auc_roc{model_type}`
+- `ray_sentimentizer_live_val_avg_precision{model_type}`
 - `ray_sentimentizer_live_val_positive_accuracy{model_type}`
 - `ray_sentimentizer_live_val_negative_accuracy{model_type}`
 - `ray_sentimentizer_live_epoch{model_type}`
@@ -187,9 +244,9 @@ Other model types' entries in the JSON file are left untouched — they'll natur
 
 ## NaN Handling in Metrics
 
-During training, `torch.sigmoid()` on extreme logit values can produce NaN, which causes `sklearn.metrics.roc_auc_score()` to raise `ValueError: Input contains NaN`. The codebase handles this at multiple levels:
+During training, `torch.sigmoid()` on extreme logit values can produce NaN, which would cause metric computation errors. The codebase handles this at multiple levels:
 
-1. **`sentimentizer/metrics.py`**: `compute_classification_metrics()` and `_auc_roc()` replace NaN probabilities with 0.5 (random-guess probability) before computing AUC-ROC (uses `sklearn.metrics.roc_auc_score` when available, falls back to a manual trapezoidal implementation otherwise)
+1. **`sentimentizer/metrics.py`**: `compute_classification_metrics()` replaces NaN probabilities with 0.5 (random-guess probability) via `_replace_nan_probs()` before passing to `torchmetrics.BinaryAUROC`. This also logs a warning for debugging. Cohen's kappa from `torchmetrics.BinaryCohenKappa` returns NaN for single-class targets — `_safe_item()` coerces this to 0.0 to avoid Prometheus gauge issues.
 2. **`sentimentizer/metrics.py`**: `compute_metrics_from_model()` replaces NaN at the tensor level using `torch.where()` before converting to numpy
 3. **`sentimentizer/trainer.py`**: Both `Trainer.evaluate()` and `_train_func()` (Ray) replace NaN in probabilities with 0.5 after `torch.sigmoid()`
 

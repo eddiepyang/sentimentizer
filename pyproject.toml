@@ -23,6 +23,7 @@ dependencies = [
     "orjson>=3.11.0",
     "pyarrow>=24.0.0",
     "scikit-learn>=1.8.0",
+    "torchmetrics>=1.9.0",
     "gensim>=4.4.0",
     "smart_open>=7.6.0",
     "structlog>=25.5.0",
@@ -57,6 +58,7 @@ dev = [
 
 [project.scripts]
 sentimentizer = "workflows.cli:cli"
+web-search = "sentimentizer.agent.websearch:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["sentimentizer", "workflows"]

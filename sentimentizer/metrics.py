@@ -2,16 +2,33 @@
 
 Provides comprehensive metrics beyond simple accuracy, including
 per-class accuracy, precision/recall/F1, Cohen's kappa, and AUC-ROC.
+
+Uses torchmetrics for metric computation, which provides GPU-native
+tensor operations and batch accumulation. Edge cases (NaN probabilities,
+single-class targets, empty arrays) are handled with explicit guards
+to maintain backward-compatible behavior.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
+from torchmetrics.classification import (
+    BinaryAUROC,
+    BinaryAveragePrecision,
+    BinaryCohenKappa,
+    BinaryF1Score,
+    BinaryMatthewsCorrCoef,
+    BinaryNegativePredictiveValue,
+    BinaryPrecision,
+    BinaryRecall,
+    MulticlassF1Score,
+)
 
 from sentimentizer import new_logger
 from sentimentizer.config import DEFAULT_LOG_LEVEL
@@ -31,7 +48,11 @@ class ClassificationMetrics:
         recall: Positive-class recall (TP / (TP + FN)).
         f1: Positive-class F1 score (harmonic mean of precision and recall).
         cohen_kappa: Cohen's kappa coefficient (agreement beyond chance).
-        auc_roc: Area under the ROC curve (None if sklearn is unavailable).
+        mcc: Matthews correlation coefficient (-1 to 1, robust to imbalance).
+        npv: Negative predictive value (TN / (TN + FN)).
+        macro_f1: Macro-averaged F1 (mean of per-class F1, weights both classes equally).
+        auc_roc: Area under the ROC curve (None if not computable).
+        avg_precision: Average precision (area under PR curve, None if not computable).
         tp: True positive count.
         tn: True negative count.
         fp: False positive count.
@@ -46,7 +67,11 @@ class ClassificationMetrics:
     recall: float = 0.0
     f1: float = 0.0
     cohen_kappa: float = 0.0
+    mcc: float = 0.0
+    npv: float = 0.0
+    macro_f1: float = 0.0
     auc_roc: float | None = None
+    avg_precision: float | None = None
     tp: int = 0
     tn: int = 0
     fp: int = 0
@@ -63,7 +88,13 @@ class ClassificationMetrics:
             "recall": round(self.recall, 4),
             "f1": round(self.f1, 4),
             "cohen_kappa": round(self.cohen_kappa, 4),
+            "mcc": round(self.mcc, 4),
+            "npv": round(self.npv, 4),
+            "macro_f1": round(self.macro_f1, 4),
             "auc_roc": round(self.auc_roc, 4) if self.auc_roc is not None else None,
+            "avg_precision": (
+                round(self.avg_precision, 4) if self.avg_precision is not None else None
+            ),
             "confusion_matrix": {
                 "tp": self.tp,
                 "tn": self.tn,
@@ -72,6 +103,44 @@ class ClassificationMetrics:
             },
             "total": self.total,
         }
+
+
+def _to_long_tensor(arr: np.ndarray | torch.Tensor) -> torch.Tensor:
+    """Convert predictions or targets to a 1-D long tensor on CPU."""
+    if isinstance(arr, torch.Tensor):
+        return arr.detach().cpu().long().flatten()
+    return torch.as_tensor(arr, dtype=torch.long).flatten()
+
+
+def _to_float_tensor(arr: np.ndarray | torch.Tensor) -> torch.Tensor:
+    """Convert probabilities to a 1-D float32 tensor on CPU."""
+    if isinstance(arr, torch.Tensor):
+        return arr.detach().cpu().float().flatten()
+    return torch.as_tensor(arr, dtype=torch.float32).flatten()
+
+
+def _replace_nan_probs(probabilities: torch.Tensor) -> tuple[torch.Tensor, int]:
+    """Replace NaN values in probabilities with 0.5 and return the count replaced."""
+    nan_mask = torch.isnan(probabilities)
+    nan_count = int(nan_mask.sum().item())
+    if nan_count > 0:
+        logger.warning(
+            "nan_in_probabilities",
+            message=f"Found {nan_count} NaN values in probabilities, replacing with 0.5",
+        )
+        probabilities = torch.where(
+            nan_mask, torch.tensor(0.5, dtype=probabilities.dtype), probabilities
+        )
+    return probabilities, nan_count
+
+
+def _safe_item(value: torch.Tensor | float) -> float:
+    """Extract a Python float from a tensor, converting NaN to 0.0."""
+    if isinstance(value, torch.Tensor):
+        value = value.item()
+    if math.isnan(value):
+        return 0.0
+    return value
 
 
 def compute_classification_metrics(
@@ -90,26 +159,19 @@ def compute_classification_metrics(
     Returns:
         ClassificationMetrics with all computed metrics.
     """
-    # Convert to numpy arrays
-    if isinstance(predictions, torch.Tensor):
-        predictions = predictions.detach().cpu().numpy()
-    if isinstance(targets, torch.Tensor):
-        targets = targets.detach().cpu().numpy()
-    if probabilities is not None and isinstance(probabilities, torch.Tensor):
-        probabilities = probabilities.detach().cpu().numpy()
+    # Convert to tensors
+    preds_t = _to_long_tensor(predictions)
+    targets_t = _to_long_tensor(targets)
 
-    predictions = np.asarray(predictions, dtype=np.int64).flatten()
-    targets = np.asarray(targets, dtype=np.int64).flatten()
-
-    total = len(targets)
+    total = targets_t.shape[0]
     if total == 0:
         return ClassificationMetrics(total=0)
 
-    # Confusion matrix components
-    tp = int(np.sum((predictions == 1) & (targets == 1)))
-    tn = int(np.sum((predictions == 0) & (targets == 0)))
-    fp = int(np.sum((predictions == 1) & (targets == 0)))
-    fn = int(np.sum((predictions == 0) & (targets == 1)))
+    # Compute confusion matrix counts directly (fast, no torchmetrics overhead)
+    tp = int(((preds_t == 1) & (targets_t == 1)).sum().item())
+    tn = int(((preds_t == 0) & (targets_t == 0)).sum().item())
+    fp = int(((preds_t == 1) & (targets_t == 0)).sum().item())
+    fn = int(((preds_t == 0) & (targets_t == 1)).sum().item())
 
     # Overall accuracy
     accuracy = (tp + tn) / max(total, 1)
@@ -120,26 +182,32 @@ def compute_classification_metrics(
     positive_accuracy = tp / max(positive_total, 1)
     negative_accuracy = tn / max(negative_total, 1)
 
-    # Precision, recall, F1 (positive class)
-    precision = tp / max(tp + fp, 1)
-    recall = tp / max(tp + fn, 1)
-    f1 = (2 * precision * recall) / max(precision + recall, 1e-10)
+    # Use torchmetrics for precision, recall, F1, Cohen's kappa, MCC, NPV
+    precision = _safe_item(BinaryPrecision()(preds_t, targets_t))
+    recall = _safe_item(BinaryRecall()(preds_t, targets_t))
+    f1 = _safe_item(BinaryF1Score()(preds_t, targets_t))
+    cohen_kappa = _safe_item(BinaryCohenKappa()(preds_t, targets_t))
+    mcc = _safe_item(BinaryMatthewsCorrCoef()(preds_t, targets_t))
+    npv = _safe_item(BinaryNegativePredictiveValue()(preds_t, targets_t))
+    macro_f1 = _safe_item(
+        MulticlassF1Score(num_classes=2, average="macro")(preds_t, targets_t)
+    )
 
-    # Cohen's kappa
-    cohen_kappa = _cohen_kappa(tp, tn, fp, fn, total)
-
-    # AUC-ROC (optional, requires probability scores)
+    # AUC-ROC and Average Precision (optional, require probability scores)
     auc_roc: float | None = None
+    avg_precision: float | None = None
     if probabilities is not None:
-        probabilities = np.asarray(probabilities, dtype=np.float64).flatten()
-        nan_count = int(np.isnan(probabilities).sum())
-        if nan_count > 0:
-            logger.warning(
-                "nan_in_probabilities",
-                message=f"Found {nan_count} NaN values in probabilities, replacing with 0.5",
-            )
-            probabilities = np.nan_to_num(probabilities, nan=0.5)
-        auc_roc = _auc_roc(probabilities, targets)
+        probs_t = _to_float_tensor(probabilities)
+        probs_t, _nan_count = _replace_nan_probs(probs_t)
+
+        # Check if both classes are present
+        if len(torch.unique(targets_t)) < 2:
+            logger.warning("auc_roc_only_one_class", message="AUC-ROC requires both classes")
+            auc_roc = 0.0
+            avg_precision = 0.0
+        else:
+            auc_roc = _safe_item(BinaryAUROC()(probs_t, targets_t))
+            avg_precision = _safe_item(BinaryAveragePrecision()(probs_t, targets_t))
 
     return ClassificationMetrics(
         accuracy=accuracy,
@@ -149,7 +217,11 @@ def compute_classification_metrics(
         recall=recall,
         f1=f1,
         cohen_kappa=cohen_kappa,
+        mcc=mcc,
+        npv=npv,
+        macro_f1=macro_f1,
         auc_roc=auc_roc,
+        avg_precision=avg_precision,
         tp=tp,
         tn=tn,
         fp=fp,
@@ -247,17 +319,42 @@ def compute_metrics_from_examples(
     positive_accuracy = tp / max(positive_total, 1)
     negative_accuracy = tn / max(negative_total, 1)
 
-    precision = tp / max(tp + fp, 1)
-    recall = tp / max(tp + fn, 1)
-    f1 = (2 * precision * recall) / max(precision + recall, 1e-10)
+    # Build tensors for torchmetrics: correct predictions match the expected label,
+    # incorrect predictions flip it (positive→0, negative→1).
+    targets_list: list[int] = []
+    preds_list: list[int] = []
+    for r in results:
+        expected = r.get("expected")
+        correct = r.get("correct", False)
+        target = 1 if expected == "positive" else 0
+        pred = target if correct else (1 - target)
+        targets_list.append(target)
+        preds_list.append(pred)
 
-    cohen_kappa = _cohen_kappa(tp, tn, fp, fn, total)
+    targets_t = torch.tensor(targets_list, dtype=torch.long)
+    preds_t = torch.tensor(preds_list, dtype=torch.long)
 
-    # AUC-ROC requires probability scores, which we have in 'score'
+    precision = _safe_item(BinaryPrecision()(preds_t, targets_t))
+    recall = _safe_item(BinaryRecall()(preds_t, targets_t))
+    f1 = _safe_item(BinaryF1Score()(preds_t, targets_t))
+    cohen_kappa = _safe_item(BinaryCohenKappa()(preds_t, targets_t))
+    mcc = _safe_item(BinaryMatthewsCorrCoef()(preds_t, targets_t))
+    npv = _safe_item(BinaryNegativePredictiveValue()(preds_t, targets_t))
+    macro_f1 = _safe_item(
+        MulticlassF1Score(num_classes=2, average="macro")(preds_t, targets_t)
+    )
+
+    # AUC-ROC and Average Precision require probability scores ('score')
     probabilities = np.array([r.get("score", 0.5) for r in results])
-    targets = np.array([1 if r.get("expected") == "positive" else 0 for r in results])
+    probs_t = _to_float_tensor(probabilities)
+    probs_t, _nan_count = _replace_nan_probs(probs_t)
 
-    auc_roc = _auc_roc(probabilities, targets)
+    if len(torch.unique(targets_t)) < 2:
+        auc_roc = 0.0
+        avg_precision = 0.0
+    else:
+        auc_roc = _safe_item(BinaryAUROC()(probs_t, targets_t))
+        avg_precision = _safe_item(BinaryAveragePrecision()(probs_t, targets_t))
 
     return ClassificationMetrics(
         accuracy=accuracy,
@@ -267,106 +364,14 @@ def compute_metrics_from_examples(
         recall=recall,
         f1=f1,
         cohen_kappa=cohen_kappa,
+        mcc=mcc,
+        npv=npv,
+        macro_f1=macro_f1,
         auc_roc=auc_roc,
+        avg_precision=avg_precision,
         tp=tp,
         tn=tn,
         fp=fp,
         fn=fn,
         total=total,
     )
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-
-def _cohen_kappa(tp: int, tn: int, fp: int, fn: int, total: int) -> float:
-    """Compute Cohen's kappa coefficient from confusion matrix counts.
-
-    Cohen's kappa measures inter-rater agreement, correcting for
-    agreement occurring by chance. Range: -1 to 1 (1 = perfect agreement).
-
-    Formula: kappa = (p_o - p_e) / (1 - p_e)
-    where p_o = observed agreement, p_e = expected agreement by chance.
-    """
-    if total == 0:
-        return 0.0
-
-    # Observed agreement
-    p_o = (tp + tn) / total
-
-    # Expected agreement by chance
-    # P(predicted positive) * P(actual positive) + P(predicted negative) * P(actual negative)
-    p_pred_pos = (tp + fp) / total
-    p_actual_pos = (tp + fn) / total
-    p_pred_neg = (tn + fn) / total
-    p_actual_neg = (tn + fp) / total
-    p_e = p_pred_pos * p_actual_pos + p_pred_neg * p_actual_neg
-
-    if p_e == 1.0:
-        return 1.0  # Perfect agreement edge case
-
-    return (p_o - p_e) / (1.0 - p_e)
-
-
-def _auc_roc(probabilities: np.ndarray, targets: np.ndarray) -> float:
-    """Compute Area Under the ROC Curve using the trapezoidal rule.
-
-    Falls back to a simple implementation if scikit-learn is unavailable.
-    NaN values in probabilities are replaced with 0.5 (random-guess probability).
-    """
-    # Replace NaN probabilities with 0.5 (random guess) as a safety net
-    nan_count = int(np.isnan(probabilities).sum())
-    if nan_count > 0:
-        logger.warning(
-            "nan_in_probabilities",
-            message=f"Found {nan_count} NaN values in probabilities, replacing with 0.5",
-        )
-        probabilities = np.nan_to_num(probabilities, nan=0.5)
-
-    try:
-        from sklearn.metrics import roc_auc_score
-
-        # Check if both classes are present
-        if len(np.unique(targets)) < 2:
-            logger.warning("auc_roc_only_one_class", message="AUC-ROC requires both classes")
-            return 0.0
-
-        return float(roc_auc_score(targets, probabilities))
-    except ImportError:
-        logger.warning("sklearn_not_available", message="Computing AUC-ROC with trapezoidal rule")
-        return _auc_roc_manual(probabilities, targets)
-
-
-def _auc_roc_manual(probabilities: np.ndarray, targets: np.ndarray) -> float:
-    """Manual AUC-ROC computation using the trapezoidal rule.
-
-    Sorts by probability descending and computes the ROC curve,
-    then integrates using the trapezoidal rule.
-    """
-    sorted_indices = np.argsort(-probabilities)
-    sorted_targets = targets[sorted_indices]
-
-    total_pos = max(np.sum(targets == 1), 1)
-    total_neg = max(np.sum(targets == 0), 1)
-
-    tpr_list = [0.0]
-    fpr_list = [0.0]
-    tp_count = 0
-    fp_count = 0
-
-    for i in range(len(sorted_targets)):
-        if sorted_targets[i] == 1:
-            tp_count += 1
-        else:
-            fp_count += 1
-        tpr_list.append(tp_count / total_pos)
-        fpr_list.append(fp_count / total_neg)
-
-    # Trapezoidal rule for AUC
-    tpr_arr = np.array(tpr_list)
-    fpr_arr = np.array(fpr_list)
-    auc = float(np.trapz(tpr_arr, fpr_arr))
-
-    return max(0.0, min(1.0, auc))

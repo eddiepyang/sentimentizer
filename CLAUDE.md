@@ -171,6 +171,63 @@ Always verify against the installed source in `.venv/lib/python3.11/site-package
   via `_ray_cleanup()` (registered with `atexit`). Always call `ray.shutdown()`
   in tests and scripts when done.
 
+## Web search skill
+
+Web search is available via two interfaces:
+
+1. **Python module** (`sentimentizer/agent/websearch.py`) — typed, secure, and integrated with the tuning agent as a `@agent.tool`. This is the preferred interface for code and agent use.
+
+2. **Shell script** (`scripts/web_search.sh`) — lightweight CLI convenience for quick manual queries.
+
+### Prerequisites
+
+- Set the `OLLAMA_API_KEY` environment variable (add it to `.env` from `.env.example`)
+
+### Python module usage
+
+```python
+from sentimentizer.agent.websearch import web_search, WebSearchResult, reset_rate_limit
+
+# Basic search
+results: list[WebSearchResult] = web_search("best learning rate for RNN")
+for r in results:
+    print(r.title, r.url, r.content[:100])
+
+# Reset rate limit at the start of each agent run
+reset_rate_limit()
+```
+
+### Shell script usage
+
+```bash
+# Basic search
+scripts/web_search.sh "what is ollama?"
+
+# Search for technical documentation
+scripts/web_search.sh "Ray 2.55 Dataset API changes"
+
+# Pipe output through jq for formatting
+scripts/web_search.sh "python asyncio best practices" | jq .
+```
+
+### Security safeguards (Python module)
+
+The Python websearch module includes several security safeguards:
+
+- **API key protection**: Key is read from `OLLAMA_API_KEY` env var only; never passed as a parameter or exposed in error messages
+- **Query validation**: Queries are checked for length (max 200 chars) and secret patterns (API keys, tokens, passwords) before being sent
+- **Content sanitization**: Search results are truncated (max 2000 chars) and filtered for prompt-injection patterns (`ignore previous instructions`, `system:`, `<system>` tags, etc.)
+- **Error sanitization**: Error messages have Bearer tokens and key values replaced with `[REDACTED]`
+- **Rate limiting**: Max 3 calls per agent run to prevent excessive API usage; use `reset_rate_limit()` at the start of each run
+- **Timeout**: 15-second default request timeout to prevent hanging
+
+### When to use
+
+- Looking up API documentation or library versions not in the codebase
+- Checking for known issues or breaking changes in dependencies
+- Finding current best practices or patterns
+- Verifying facts that require up-to-date information
+
 ## Code quality principles
 
 ### Always use type hints

@@ -4,9 +4,8 @@ Tests cover:
 - ClassificationMetrics dataclass defaults and to_dict()
 - compute_classification_metrics from arrays
 - compute_metrics_from_examples from validation results
-- Cohen's kappa calculation
-- AUC-ROC calculation
-- Edge cases (empty, single class)
+- torchmetrics-based precision/recall/F1/Cohen's kappa/AUC-ROC
+- Edge cases (empty, single class, NaN probabilities)
 """
 
 import numpy as np
@@ -14,7 +13,10 @@ import torch
 
 from sentimentizer.metrics import (
     ClassificationMetrics,
-    _cohen_kappa,
+    _replace_nan_probs,
+    _safe_item,
+    _to_float_tensor,
+    _to_long_tensor,
     compute_classification_metrics,
     compute_metrics_from_examples,
 )
@@ -33,7 +35,11 @@ class TestClassificationMetrics:
         assert m.recall == 0.0
         assert m.f1 == 0.0
         assert m.cohen_kappa == 0.0
+        assert m.mcc == 0.0
+        assert m.npv == 0.0
+        assert m.macro_f1 == 0.0
         assert m.auc_roc is None
+        assert m.avg_precision is None
         assert m.tp == 0
         assert m.tn == 0
         assert m.fp == 0
@@ -50,7 +56,11 @@ class TestClassificationMetrics:
             recall=0.9,
             f1=0.8947,
             cohen_kappa=0.75,
+            mcc=0.6,
+            npv=0.85,
+            macro_f1=0.78,
             auc_roc=0.92,
+            avg_precision=0.88,
             tp=9,
             tn=17,
             fp=2,
@@ -65,7 +75,11 @@ class TestClassificationMetrics:
         assert d["recall"] == 0.9
         assert d["f1"] == 0.8947
         assert d["cohen_kappa"] == 0.75
+        assert d["mcc"] == 0.6
+        assert d["npv"] == 0.85
+        assert d["macro_f1"] == 0.78
         assert d["auc_roc"] == 0.92
+        assert d["avg_precision"] == 0.88
         assert d["confusion_matrix"]["tp"] == 9
         assert d["confusion_matrix"]["tn"] == 17
         assert d["confusion_matrix"]["fp"] == 2
@@ -73,10 +87,11 @@ class TestClassificationMetrics:
         assert d["total"] == 29
 
     def test_to_dict_none_auc(self) -> None:
-        """to_dict should handle None auc_roc."""
-        m = ClassificationMetrics(accuracy=0.8, auc_roc=None)
+        """to_dict should handle None auc_roc and avg_precision."""
+        m = ClassificationMetrics(accuracy=0.8, auc_roc=None, avg_precision=None)
         d = m.to_dict()
         assert d["auc_roc"] is None
+        assert d["avg_precision"] is None
 
 
 class TestComputeClassificationMetrics:
@@ -96,7 +111,11 @@ class TestComputeClassificationMetrics:
         assert m.recall == 1.0
         assert m.f1 == 1.0
         assert m.cohen_kappa == 1.0
+        assert m.mcc == 1.0
+        assert m.npv == 1.0
+        assert m.macro_f1 == 1.0
         assert m.auc_roc == 1.0
+        assert m.avg_precision == 1.0
         assert m.tp == 3
         assert m.tn == 3
         assert m.fp == 0
@@ -123,11 +142,6 @@ class TestComputeClassificationMetrics:
         targets = np.array([1, 1, 0, 0, 1, 1, 0, 0])
 
         m = compute_classification_metrics(predictions, targets)
-        # TP: pred=1, actual=1 → 3 (indices 0,1,4)
-        # TN: pred=0, actual=0 → 2 (indices 2,3)
-        # FP: pred=1, actual=0 → 1 (index 7)
-        # FN: pred=0, actual=1 → 1 (index 5)
-        # Wait, let me recount:
         # idx 0: pred=1, actual=1 → TP
         # idx 1: pred=1, actual=1 → TP
         # idx 2: pred=0, actual=0 → TN
@@ -186,27 +200,41 @@ class TestComputeClassificationMetrics:
 
 
 class TestCohenKappa:
-    """Test Cohen's kappa calculation."""
+    """Test Cohen's kappa calculation via torchmetrics."""
 
     def test_perfect_agreement(self) -> None:
         """Perfect agreement should give kappa=1.0."""
-        assert _cohen_kappa(tp=10, tn=10, fp=0, fn=0, total=20) == 1.0
+        predictions = np.array([1, 1, 0, 0, 1, 0])
+        targets = np.array([1, 1, 0, 0, 1, 0])
+        m = compute_classification_metrics(predictions, targets)
+        assert m.cohen_kappa == 1.0
 
     def test_random_agreement(self) -> None:
         """Random agreement (50/50) should give kappa≈0.0."""
         # 50% positive, 50% negative, predictions match 50% by chance
-        kappa = _cohen_kappa(tp=25, tn=25, fp=25, fn=25, total=100)
-        assert abs(kappa) < 0.05  # Should be near 0
+        predictions = np.array([1, 1, 1, 1, 0, 0, 0, 0])
+        targets = np.array([1, 1, 0, 0, 1, 1, 0, 0])
+        m = compute_classification_metrics(predictions, targets)
+        assert abs(m.cohen_kappa) < 0.05  # Should be near 0
 
-    def test_all_negative(self) -> None:
-        """All negative predictions should give kappa based on agreement."""
-        # All predictions negative, all actual negative → perfect agreement
-        kappa = _cohen_kappa(tp=0, tn=20, fp=0, fn=0, total=20)
-        assert kappa == 1.0
+    def test_single_class_returns_zero(self) -> None:
+        """Single-class targets should return kappa=0.0 (torchmetrics returns nan, coerced to 0.0).
+
+        This differs from the previous custom implementation which returned 1.0 for
+        perfect single-class agreement. The torchmetrics convention (nan→0.0) is more
+        conservative and avoids Prometheus gauge issues with NaN values.
+        """
+        predictions = np.array([0, 0, 0, 0])
+        targets = np.array([0, 0, 0, 0])
+        m = compute_classification_metrics(predictions, targets)
+        assert m.cohen_kappa == 0.0  # nan→0.0 via _safe_item
 
     def test_zero_total(self) -> None:
-        """Zero total should return 0.0."""
-        assert _cohen_kappa(tp=0, tn=0, fp=0, fn=0, total=0) == 0.0
+        """Zero total should return zeroed metrics."""
+        predictions = np.array([], dtype=np.int64)
+        targets = np.array([], dtype=np.int64)
+        m = compute_classification_metrics(predictions, targets)
+        assert m.cohen_kappa == 0.0
 
 
 class TestComputeMetricsFromExamples:
@@ -277,7 +305,7 @@ class TestNaNHandling:
         assert 0.0 <= m.auc_roc <= 1.0
 
     def test_all_nan_probabilities(self) -> None:
-        """All-NaN probabilities should still produce a valid result (auc_roc=0.5)."""
+        """All-NaN probabilities should still produce a valid result (auc_roc≈0.5)."""
         predictions = np.array([1, 0, 1, 0])
         targets = np.array([1, 0, 1, 0])
         probabilities = np.array([np.nan, np.nan, np.nan, np.nan])
@@ -286,17 +314,6 @@ class TestNaNHandling:
         assert m.auc_roc is not None
         # All 0.5 probabilities = random guess = AUC ~0.5
         assert 0.0 <= m.auc_roc <= 1.0
-
-    def test_nan_in_probabilities_auc_roc_direct(self) -> None:
-        """_auc_roc should handle NaN probabilities gracefully."""
-        from sentimentizer.metrics import _auc_roc
-
-        probabilities = np.array([0.9, 0.1, np.nan, 0.2])
-        targets = np.array([1, 0, 1, 0])
-
-        result = _auc_roc(probabilities, targets)
-        assert isinstance(result, float)
-        assert 0.0 <= result <= 1.0
 
     def test_nan_predictions_unchanged(self) -> None:
         """Predictions should not be affected by NaN in probabilities."""
@@ -307,3 +324,52 @@ class TestNaNHandling:
         m = compute_classification_metrics(predictions, targets, probabilities)
         # With all NaN probs replaced with 0.5, predictions based on >=0.5 should match
         assert m.accuracy == 1.0  # all correct since targets match predictions
+
+
+class TestHelperFunctions:
+    """Test internal helper functions."""
+
+    def test_to_long_tensor_numpy(self) -> None:
+        """_to_long_tensor should convert numpy arrays."""
+        arr = np.array([1, 0, 1])
+        result = _to_long_tensor(arr)
+        assert result.dtype == torch.long
+        assert result.tolist() == [1, 0, 1]
+
+    def test_to_long_tensor_torch(self) -> None:
+        """_to_long_tensor should convert torch tensors."""
+        t = torch.tensor([1.0, 0.0, 1.0])
+        result = _to_long_tensor(t)
+        assert result.dtype == torch.long
+        assert result.tolist() == [1, 0, 1]
+
+    def test_to_float_tensor_numpy(self) -> None:
+        """_to_float_tensor should convert numpy arrays to float32."""
+        arr = np.array([0.9, 0.1])
+        result = _to_float_tensor(arr)
+        assert result.dtype == torch.float32
+        assert abs(result[0].item() - 0.9) < 1e-6
+
+    def test_replace_nan_probs_no_nan(self) -> None:
+        """_replace_nan_probs should return unchanged tensor when no NaN."""
+        t = torch.tensor([0.9, 0.1, 0.5])
+        result, count = _replace_nan_probs(t)
+        assert count == 0
+        assert torch.equal(result, t)
+
+    def test_replace_nan_probs_with_nan(self) -> None:
+        """_replace_nan_probs should replace NaN with 0.5."""
+        t = torch.tensor([0.9, float("nan"), 0.5])
+        result, count = _replace_nan_probs(t)
+        assert count == 1
+        assert result[1].item() == 0.5
+
+    def test_safe_item_normal(self) -> None:
+        """_safe_item should return float for normal values."""
+        assert _safe_item(torch.tensor(0.5)) == 0.5
+        assert _safe_item(0.5) == 0.5
+
+    def test_safe_item_nan(self) -> None:
+        """_safe_item should convert NaN to 0.0."""
+        assert _safe_item(float("nan")) == 0.0
+        assert _safe_item(torch.tensor(float("nan"))) == 0.0
