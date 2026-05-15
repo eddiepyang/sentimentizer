@@ -512,6 +512,7 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
         },
         "title": "Model Training",
         "uid": "sentimentizerModelTraining",
+        "tags": ["sentimentizer", "training"],
         "version": 1,
         "schemaVersion": 36,
         "style": "dark",
@@ -568,7 +569,7 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
                 "title": "Current Epoch",
                 "type": "stat",
                 "datasource": _DS,
-                "gridPos": {"h": 8, "w": 4, "x": 0, "y": 0},
+                "gridPos": {"h": 8, "w": 4, "x": 0, "y": 8},
                 "targets": [
                     _table_target(
                         "sentimentizer_training_epoch",
@@ -601,7 +602,7 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
                 "title": "Loss (Train vs Val) + LR",
                 "type": "timeseries",
                 "datasource": _DS,
-                "gridPos": {"h": 8, "w": 10, "x": 4, "y": 0},
+                "gridPos": {"h": 8, "w": 10, "x": 4, "y": 8},
                 "targets": [
                     _target(
                         "sentimentizer_training_train_loss",
@@ -641,7 +642,7 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
                 "title": "Validation Core Metrics",
                 "type": "timeseries",
                 "datasource": _DS,
-                "gridPos": {"h": 8, "w": 10, "x": 14, "y": 0},
+                "gridPos": {"h": 8, "w": 10, "x": 14, "y": 8},
                 "targets": [
                     _target(
                         "sentimentizer_training_val_accuracy",
@@ -682,7 +683,7 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
                 "title": "Per-Class Accuracy",
                 "type": "timeseries",
                 "datasource": _DS,
-                "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+                "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
                 "targets": [
                     _target(
                         "sentimentizer_training_val_positive_accuracy",
@@ -711,7 +712,7 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
                 "title": "Cohen's Kappa & AUC-ROC",
                 "type": "timeseries",
                 "datasource": _DS,
-                "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+                "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
                 "targets": [
                     _target(
                         "sentimentizer_training_val_cohen_kappa",
@@ -737,10 +738,68 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
                 },
             },
             {
+                "title": "MCC & NPV",
+                "type": "timeseries",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
+                "targets": [
+                    _target(
+                        "sentimentizer_training_val_mcc",
+                        "ray_sentimentizer_live_val_mcc",
+                        "MCC ({{model_type}})",
+                        "A",
+                    ),
+                    _target(
+                        "sentimentizer_training_val_npv",
+                        "ray_sentimentizer_live_val_npv",
+                        "NPV ({{model_type}})",
+                        "B",
+                    ),
+                ],
+                "fieldConfig": {
+                    "defaults": {
+                        "custom": {"drawStyle": "line", "lineWidth": 2},
+                        "unit": "none",
+                        "min": -1,
+                        "max": 1,
+                    },
+                    "overrides": [],
+                },
+            },
+            {
+                "title": "Macro F1 & Avg Precision",
+                "type": "timeseries",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
+                "targets": [
+                    _target(
+                        "sentimentizer_training_val_macro_f1",
+                        "ray_sentimentizer_live_val_macro_f1",
+                        "Macro F1 ({{model_type}})",
+                        "A",
+                    ),
+                    _target(
+                        "sentimentizer_training_val_avg_precision",
+                        "ray_sentimentizer_live_val_avg_precision",
+                        "Avg Precision ({{model_type}})",
+                        "B",
+                    ),
+                ],
+                "fieldConfig": {
+                    "defaults": {
+                        "custom": {"drawStyle": "line", "lineWidth": 2},
+                        "unit": "none",
+                        "min": 0,
+                        "max": 1,
+                    },
+                    "overrides": [],
+                },
+            },
+            {
                 "title": "Current Epoch & Metrics Snapshot",
                 "type": "table",
                 "datasource": _DS,
-                "gridPos": {"h": 8, "w": 24, "x": 0, "y": 16},
+                "gridPos": {"h": 8, "w": 24, "x": 0, "y": 0},
                 "targets": [
                     _table_target("sentimentizer_training_epoch", "Epoch", "A"),
                     _table_target("sentimentizer_training_train_loss", "Train Loss", "B"),
@@ -750,10 +809,14 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
                     _table_target("sentimentizer_training_val_precision", "Precision", "F"),
                     _table_target("sentimentizer_training_val_recall", "Recall", "G"),
                     _table_target("sentimentizer_training_val_cohen_kappa", "Kappa", "H"),
-                    _table_target("sentimentizer_training_val_positive_accuracy", "Pos Acc", "I"),
-                    _table_target("sentimentizer_training_val_negative_accuracy", "Neg Acc", "J"),
-                    _table_target("sentimentizer_training_val_auc_roc", "AUC-ROC", "K"),
-                    _table_target("sentimentizer_training_lr", "LR", "M"),
+                    _table_target("sentimentizer_training_val_mcc", "MCC", "I"),
+                    _table_target("sentimentizer_training_val_npv", "NPV", "J"),
+                    _table_target("sentimentizer_training_val_macro_f1", "Macro F1", "K"),
+                    _table_target("sentimentizer_training_val_positive_accuracy", "Pos Acc", "L"),
+                    _table_target("sentimentizer_training_val_negative_accuracy", "Neg Acc", "M"),
+                    _table_target("sentimentizer_training_val_auc_roc", "AUC-ROC", "N"),
+                    _table_target("sentimentizer_training_val_avg_precision", "Avg Precision", "O"),
+                    _table_target("sentimentizer_training_lr", "LR", "P"),
                 ],
                 "transformations": [
                     {
@@ -780,10 +843,14 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
                                 "Value #F": "Precision",
                                 "Value #G": "Recall",
                                 "Value #H": "Kappa",
-                                "Value #I": "Pos Acc",
-                                "Value #J": "Neg Acc",
-                                "Value #K": "AUC-ROC",
-                                "Value #M": "LR",
+                                "Value #I": "MCC",
+                                "Value #J": "NPV",
+                                "Value #K": "Macro F1",
+                                "Value #L": "Pos Acc",
+                                "Value #M": "Neg Acc",
+                                "Value #N": "AUC-ROC",
+                                "Value #O": "Avg Precision",
+                                "Value #P": "LR",
                             },
                         },
                     },
@@ -898,7 +965,7 @@ def generate_tune_metrics_dashboard() -> tuple[str, None]:
                 "title": "Val Accuracy (per trial)",
                 "type": "timeseries",
                 "datasource": _DS,
-                "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+                "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
                 "targets": [
                     _target_trial("sentimentizer_tune_val_accuracy", "Trial {{trial_id}}", "A")
                 ],
@@ -916,7 +983,7 @@ def generate_tune_metrics_dashboard() -> tuple[str, None]:
                 "title": "Train vs Val Loss (per trial)",
                 "type": "timeseries",
                 "datasource": _DS,
-                "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+                "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
                 "targets": [
                     _target_trial("sentimentizer_tune_train_loss", "Train {{trial_id}}", "A"),
                     _target_trial("sentimentizer_tune_val_loss", "Val {{trial_id}}", "B"),
@@ -933,7 +1000,7 @@ def generate_tune_metrics_dashboard() -> tuple[str, None]:
                 "title": "Val Precision (per trial)",
                 "type": "timeseries",
                 "datasource": _DS,
-                "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+                "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
                 "targets": [
                     _target_trial("sentimentizer_tune_val_precision", "Trial {{trial_id}}", "A")
                 ],
@@ -951,7 +1018,7 @@ def generate_tune_metrics_dashboard() -> tuple[str, None]:
                 "title": "Val Recall (per trial)",
                 "type": "timeseries",
                 "datasource": _DS,
-                "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+                "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
                 "targets": [
                     _target_trial("sentimentizer_tune_val_recall", "Trial {{trial_id}}", "A")
                 ],

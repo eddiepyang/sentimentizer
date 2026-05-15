@@ -254,9 +254,33 @@ TRAINING_VAL_COHEN_KAPPA = Gauge(
     ["model_type"],
 )
 
+TRAINING_VAL_MCC = Gauge(
+    "sentimentizer_training_val_mcc",
+    "Validation Matthews correlation coefficient from the current training run",
+    ["model_type"],
+)
+
+TRAINING_VAL_NPV = Gauge(
+    "sentimentizer_training_val_npv",
+    "Validation negative predictive value from the current training run",
+    ["model_type"],
+)
+
+TRAINING_VAL_MACRO_F1 = Gauge(
+    "sentimentizer_training_val_macro_f1",
+    "Validation macro-averaged F1 from the current training run",
+    ["model_type"],
+)
+
 TRAINING_VAL_AUC_ROC = Gauge(
     "sentimentizer_training_val_auc_roc",
     "Validation AUC-ROC from the current training run",
+    ["model_type"],
+)
+
+TRAINING_VAL_AVG_PRECISION = Gauge(
+    "sentimentizer_training_val_avg_precision",
+    "Validation average precision (PR-AUC) from the current training run",
     ["model_type"],
 )
 
@@ -471,11 +495,19 @@ def _update_training_metrics() -> None:
             TRAINING_VAL_RECALL.labels(**lbl).set(float(data.get("recall", 0)))
             TRAINING_VAL_F1.labels(**lbl).set(float(data.get("f1", 0)))
             TRAINING_VAL_COHEN_KAPPA.labels(**lbl).set(float(data.get("cohen_kappa", 0)))
+            TRAINING_VAL_MCC.labels(**lbl).set(float(data.get("mcc", 0)))
+            TRAINING_VAL_NPV.labels(**lbl).set(float(data.get("npv", 0)))
+            TRAINING_VAL_MACRO_F1.labels(**lbl).set(float(data.get("macro_f1", 0)))
             auc_roc = data.get("auc_roc")
             if auc_roc is not None:
                 TRAINING_VAL_AUC_ROC.labels(**lbl).set(float(auc_roc))
             else:
                 TRAINING_VAL_AUC_ROC.labels(**lbl).set(0)
+            avg_precision = data.get("avg_precision")
+            if avg_precision is not None:
+                TRAINING_VAL_AVG_PRECISION.labels(**lbl).set(float(avg_precision))
+            else:
+                TRAINING_VAL_AVG_PRECISION.labels(**lbl).set(0)
             TRAINING_VAL_POSITIVE_ACCURACY.labels(**lbl).set(
                 float(data.get("positive_accuracy", 0))
             )

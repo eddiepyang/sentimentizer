@@ -6,7 +6,32 @@ Sentimentizer is a PyTorch-based sentiment analysis pipeline with three model ar
 
 ## Recent Changes
 
-### Dictionary Tokenization Bug Fix (current)
+### torchmetrics Migration (current)
+
+**Change**: Replaced custom `_cohen_kappa()`, `_auc_roc()`, and `_auc_roc_manual()` implementations with `torchmetrics` library (`BinaryPrecision`, `BinaryRecall`, `BinaryF1Score`, `BinaryCohenKappa`, `BinaryAUROC`, `BinaryMatthewsCorrCoef`, `BinaryNegativePredictiveValue`, `BinaryAveragePrecision`). This eliminates ~200 lines of hand-rolled metric math and the `sklearn.metrics.roc_auc_score` conditional import.
+
+**New metrics added**:
+- **MCC** (Matthews Correlation Coefficient): Range -1 to 1, robust to class imbalance. Best single-number summary of confusion matrix quality.
+- **NPV** (Negative Predictive Value): TN / (TN + FN). Complement to precision for the negative class.
+- **Average Precision** (PR-AUC): Area under the Precision-Recall curve. More informative than AUC-ROC for imbalanced datasets.
+- **Macro F1**: Mean of per-class F1 scores. Weights both classes equally — drops significantly when the model ignores the negative class, unlike positive-class-only F1.
+
+**Edge-case handling**:
+- **NaN probabilities**: `torchmetrics.BinaryAUROC` silently gives wrong results with NaN input. `_replace_nan_probs()` replaces NaN→0.5 *before* calling torchmetrics, preserving the existing warning log.
+- **Single-class Cohen's kappa**: `torchmetrics.BinaryCohenKappa` returns `nan` for single-class targets. `_safe_item()` coerces `nan→0.0` to avoid Prometheus gauge issues. **Behavioral change**: single-class kappa is now `0.0` (was `1.0` in the custom implementation).
+- **Empty arrays**: Guard clause returns `ClassificationMetrics(total=0)` before calling torchmetrics (which would crash on empty input).
+
+**Key files changed**:
+- `sentimentizer/metrics.py` — rewrote with torchmetrics `Binary*` classes; added `_to_long_tensor`, `_to_float_tensor`, `_replace_nan_probs`, `_safe_item` helpers; added `mcc`, `npv`, `avg_precision` fields to `ClassificationMetrics`
+- `sentimentizer/trainer.py` — added MCC/NPV/avg_precision gauges, JSON persistence, and logger fields
+- `sentimentizer/exporter.py` — added `TRAINING_VAL_MCC`, `TRAINING_VAL_NPV`, `TRAINING_VAL_AVG_PRECISION` gauges and JSON reading
+- `workflows/stages/train.py` — updated `_reset_stale_metrics()` and `_persist_metrics_to_file()` for new metrics
+- `tests/test_metrics.py` — updated for torchmetrics; added `TestHelperFunctions` class; updated `TestCohenKappa.test_single_class_returns_zero`
+- `tests/test_rnn.py` — updated mock_gauges dicts with new keys
+- `pyproject.toml` — added `torchmetrics>=1.9.0` dependency
+- `docs/metrics.md` — updated NaN handling section; added new metric names
+
+### Dictionary Tokenization Bug Fix
 
 **Problem**: The dictionary stored tokens with wrapping quotes (e.g., `"'the'"` instead of `"the"`) because `str()` was called on numpy arrays from parquet columns instead of converting them to Python lists via `list()`. This caused a 99.9% GloVe vocabulary mismatch — nearly every word was mapped to the OOV embedding index (row `len(dictionary) + 1`), so the model trained on random embeddings and collapsed to predicting the majority class (zero negative accuracy, zero Cohen's kappa).
 
@@ -146,3 +171,7 @@ Grafana only reads provisioned dashboard files on **startup**, so a restart is r
 - PyTorch CUDA torch is installed by default via `make setup` (resolves from PyPI). For CI environments without GPU, use `make setup-ci` to install the CPU-only variant from the PyTorch wheel index. `resolve_device("auto")` warns when torch is CPU-only (`+cpu` suffix) but NVIDIA libraries are installed — this indicates a misconfigured environment where `torch.cuda.is_available()` returns `False` despite hardware being present.
 - `resolve_device("auto")` warns when torch is CPU-only (`+cpu` suffix) but NVIDIA libraries are installed — this indicates a misconfigured environment where `torch.cuda.is_available()` returns `False` despite hardware being present.
 - `_load_model()` is only called in the single-node path. Distributed training (`_run_fit_distributed`) does NOT load the model in the driver process — Ray workers create their own model via `_train_func`. Loading the model in the driver would waste GPU memory for `run_type="update"`.
+- `torchmetrics.BinaryAUROC` silently gives wrong results with NaN input — always call `_replace_nan_probs()` before passing probabilities to it
+- `torchmetrics.BinaryCohenKappa` returns `nan` for single-class targets — always wrap with `_safe_item()` to coerce `nan→0.0` for Prometheus gauge compatibility
+- Single-class Cohen's kappa is `0.0` (not `1.0`) — this is a behavioral change from the previous custom implementation
+- Empty arrays must be guarded before calling torchmetrics (it crashes on empty input) — use the `if total == 0` early return in `compute_classification_metrics()`

@@ -834,3 +834,198 @@ class TestMetricsIntegration:
 
         assert 0.0 <= metrics.accuracy <= 1.0
         assert metrics.total == 8
+
+
+class TestMetricsPersistence:
+    """Regression tests for metrics pipeline bugs.
+
+    These tests prevent regressions of:
+    1. _write_epoch_metrics_to_file being inside try/except ImportError block
+       in _train_func (would skip JSON file write if exporter not importable)
+    2. train_loss Ray gauge never being set
+    3. TRAINING_TRAIN_LOSS not being set in single-node evaluate()
+    4. train_loss not written to JSON file
+    """
+
+    def test_write_epoch_metrics_writes_train_loss(self) -> None:
+        """train_loss must be persisted to the per-model JSON file."""
+        from sentimentizer.metrics import ClassificationMetrics
+        from sentimentizer.trainer import _write_epoch_metrics_to_file
+        from pathlib import Path
+
+        metrics = ClassificationMetrics(
+            accuracy=0.8, precision=0.75, recall=0.7, f1=0.72,
+            cohen_kappa=0.5, mcc=0.4, npv=0.6, macro_f1=0.65,
+            auc_roc=0.85, avg_precision=0.78,
+            positive_accuracy=0.8, negative_accuracy=0.7,
+            tp=4, tn=3, fp=1, fn=1, total=9,
+        )
+
+        _write_epoch_metrics_to_file(
+            model_type="test_train_loss",
+            epoch=1,
+            train_loss=0.42,
+            val_loss=0.55,
+            metrics=metrics,
+            lr=0.001,
+        )
+
+        path = Path("/tmp/sentimentizer_metrics") / "test_train_loss_metrics.json"
+        assert path.exists(), "Metrics file should be written"
+        data = json.loads(path.read_text())
+        actual = data["train_loss"]
+        assert actual == 0.42, f"train_loss should be 0.42, got {actual}"
+        assert data["val_loss"] == 0.55
+        assert data["epoch"] == 1
+        # Clean up
+        path.unlink(missing_ok=True)
+
+    def test_write_epoch_metrics_includes_all_new_metrics(self) -> None:
+        """mcc, npv, macro_f1, avg_precision must be in the persisted JSON."""
+        from sentimentizer.metrics import ClassificationMetrics
+        from sentimentizer.trainer import _write_epoch_metrics_to_file
+        from pathlib import Path
+
+        metrics = ClassificationMetrics(
+            accuracy=0.8, precision=0.75, recall=0.7, f1=0.72,
+            cohen_kappa=0.5, mcc=0.4, npv=0.6, macro_f1=0.65,
+            auc_roc=0.85, avg_precision=0.78,
+            positive_accuracy=0.8, negative_accuracy=0.7,
+            tp=4, tn=3, fp=1, fn=1, total=9,
+        )
+
+        _write_epoch_metrics_to_file(
+            model_type="test_new_metrics",
+            epoch=2,
+            train_loss=0.33,
+            val_loss=0.44,
+            metrics=metrics,
+            lr=0.001,
+        )
+
+        path = Path("/tmp/sentimentizer_metrics") / "test_new_metrics_metrics.json"
+        assert path.exists()
+        data = json.loads(path.read_text())
+        assert data["mcc"] == 0.4
+        assert data["npv"] == 0.6
+        assert data["macro_f1"] == 0.65
+        assert data["avg_precision"] == 0.78
+        path.unlink(missing_ok=True)
+
+    def test_evaluate_sets_train_loss_ray_gauge(self) -> None:
+        """Trainer.evaluate() must set the train_loss Ray gauge.
+
+        Regression test: train_loss gauge was defined but never set,
+        so ray_sentimentizer_live_train_loss was always empty.
+        """
+        from sentimentizer.trainer import Trainer, TrainerConfig
+        from unittest.mock import MagicMock, patch
+
+        mock_model = MagicMock()
+        mock_loader = MagicMock()
+        mock_loader.dataset = [1, 2]
+        mock_loader.__iter__.return_value = iter([(torch.zeros(2, 10), torch.ones(2, 1))])
+
+        cfg = TrainerConfig(device="cpu")
+        trainer = Trainer(
+            loss_function=torch.nn.BCEWithLogitsLoss(),
+            optimizer=MagicMock(),
+            scheduler=MagicMock(),
+            cfg=cfg,
+            model_type="rnn",
+        )
+
+        mock_gauges = {key: MagicMock() for key in [
+            "train_loss", "val_loss", "val_accuracy", "val_precision",
+            "val_recall", "val_f1", "val_cohen_kappa", "val_mcc",
+            "val_npv", "val_macro_f1", "val_auc_roc", "val_avg_precision",
+            "val_positive_accuracy", "val_negative_accuracy", "epoch", "lr",
+        ]}
+
+        with (
+            patch("sentimentizer.trainer._get_ray_gauges", return_value=mock_gauges),
+            patch("sentimentizer.exporter.TRAINING_TRAIN_LOSS", create=True),
+            patch("sentimentizer.exporter.TRAINING_EPOCH", create=True),
+            patch("sentimentizer.exporter.TRAINING_LR", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_LOSS", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_ACCURACY", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_PRECISION", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_RECALL", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_F1", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_COHEN_KAPPA", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_MCC", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_NPV", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_MACRO_F1", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_AUC_ROC", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_AVG_PRECISION", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_POSITIVE_ACCURACY", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_NEGATIVE_ACCURACY", create=True),
+        ):
+            mock_model.return_value = torch.randn(2, 1)
+            trainer.evaluate(mock_model, mock_loader, epoch=1)
+
+            # The train_loss gauge must have been set
+            mock_gauges["train_loss"].set.assert_called_once()
+            # The val_loss gauge must also have been set
+            mock_gauges["val_loss"].set.assert_called_once()
+
+    def test_evaluate_writes_train_loss_to_json(self) -> None:
+        """Trainer.evaluate() must write train_loss to the JSON metrics file.
+
+        Regression test: verify train_loss is persisted to JSON for the
+        standalone exporter to read.
+        """
+        from sentimentizer.trainer import Trainer, TrainerConfig
+        from unittest.mock import MagicMock, patch
+        from pathlib import Path
+
+        mock_model = MagicMock()
+        mock_loader = MagicMock()
+        mock_loader.dataset = [1, 2]
+        mock_loader.__iter__.return_value = iter([(torch.zeros(2, 10), torch.ones(2, 1))])
+
+        cfg = TrainerConfig(device="cpu")
+        trainer = Trainer(
+            loss_function=torch.nn.BCEWithLogitsLoss(),
+            optimizer=MagicMock(),
+            scheduler=MagicMock(),
+            cfg=cfg,
+            model_type="test_json",
+        )
+
+        mock_gauges = {key: MagicMock() for key in [
+            "train_loss", "val_loss", "val_accuracy", "val_precision",
+            "val_recall", "val_f1", "val_cohen_kappa", "val_mcc",
+            "val_npv", "val_macro_f1", "val_auc_roc", "val_avg_precision",
+            "val_positive_accuracy", "val_negative_accuracy", "epoch", "lr",
+        ]}
+
+        with (
+            patch("sentimentizer.trainer._get_ray_gauges", return_value=mock_gauges),
+            patch("sentimentizer.exporter.TRAINING_TRAIN_LOSS", create=True),
+            patch("sentimentizer.exporter.TRAINING_EPOCH", create=True),
+            patch("sentimentizer.exporter.TRAINING_LR", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_LOSS", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_ACCURACY", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_PRECISION", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_RECALL", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_F1", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_COHEN_KAPPA", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_MCC", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_NPV", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_MACRO_F1", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_AUC_ROC", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_AVG_PRECISION", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_POSITIVE_ACCURACY", create=True),
+            patch("sentimentizer.exporter.TRAINING_VAL_NEGATIVE_ACCURACY", create=True),
+        ):
+            mock_model.return_value = torch.randn(2, 1)
+            trainer.evaluate(mock_model, mock_loader, epoch=1)
+
+        # Check the JSON file was written with train_loss
+        path = Path("/tmp/sentimentizer_metrics") / "test_json_metrics.json"
+        assert path.exists(), "Metrics JSON file should be written by evaluate()"
+        data = json.loads(path.read_text())
+        assert "train_loss" in data, "train_loss key must be present in metrics JSON"
+        assert isinstance(data["train_loss"], float)
+        path.unlink(missing_ok=True)

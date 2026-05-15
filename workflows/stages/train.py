@@ -49,7 +49,11 @@ def _reset_stale_metrics(model_type: str) -> None:
                 "recall": 0.0,
                 "f1": 0.0,
                 "cohen_kappa": 0.0,
+                "mcc": 0.0,
+                "npv": 0.0,
+                "macro_f1": 0.0,
                 "auc_roc": None,
+                "avg_precision": None,
                 "positive_accuracy": 0.0,
                 "negative_accuracy": 0.0,
                 "epoch": 0,
@@ -78,10 +82,14 @@ def _reset_stale_metrics(model_type: str) -> None:
             TRAINING_TRAIN_LOSS,
             TRAINING_VAL_ACCURACY,
             TRAINING_VAL_AUC_ROC,
+            TRAINING_VAL_AVG_PRECISION,
             TRAINING_VAL_COHEN_KAPPA,
             TRAINING_VAL_F1,
             TRAINING_VAL_LOSS,
+            TRAINING_VAL_MACRO_F1,
+            TRAINING_VAL_MCC,
             TRAINING_VAL_NEGATIVE_ACCURACY,
+            TRAINING_VAL_NPV,
             TRAINING_VAL_POSITIVE_ACCURACY,
             TRAINING_VAL_PRECISION,
             TRAINING_VAL_RECALL,
@@ -97,6 +105,9 @@ def _reset_stale_metrics(model_type: str) -> None:
                 TRAINING_VAL_RECALL,
                 TRAINING_VAL_F1,
                 TRAINING_VAL_COHEN_KAPPA,
+                TRAINING_VAL_MCC,
+                TRAINING_VAL_NPV,
+                TRAINING_VAL_MACRO_F1,
                 TRAINING_VAL_POSITIVE_ACCURACY,
                 TRAINING_VAL_NEGATIVE_ACCURACY,
                 TRAINING_EPOCH,
@@ -104,6 +115,7 @@ def _reset_stale_metrics(model_type: str) -> None:
             ):
                 gauge.labels(**lbl).set(0)
             TRAINING_VAL_AUC_ROC.labels(**lbl).set(0)
+            TRAINING_VAL_AVG_PRECISION.labels(**lbl).set(0)
     except ImportError:
         pass
 
@@ -455,6 +467,7 @@ def _persist_metrics_to_file(metrics: dict, model_type: str) -> None:
     path = _metrics_path(model_type)
 
     auc_roc = metrics.get("auc_roc")
+    avg_precision = metrics.get("avg_precision")
     data: dict[str, Any] = {
         "train_loss": float(metrics.get("train_loss", 0)),
         "val_loss": float(metrics.get("val_loss", 0)),
@@ -463,7 +476,11 @@ def _persist_metrics_to_file(metrics: dict, model_type: str) -> None:
         "recall": float(metrics.get("recall", 0)),
         "f1": float(metrics.get("f1", 0)),
         "cohen_kappa": float(metrics.get("cohen_kappa", 0)),
+        "mcc": float(metrics.get("mcc", 0)),
+        "npv": float(metrics.get("npv", 0)),
+        "macro_f1": float(metrics.get("macro_f1", 0)),
         "auc_roc": float(auc_roc) if auc_roc is not None else None,
+        "avg_precision": float(avg_precision) if avg_precision is not None else None,
         "positive_accuracy": float(metrics.get("pos_acc", metrics.get("positive_accuracy", 0))),
         "negative_accuracy": float(metrics.get("neg_acc", metrics.get("negative_accuracy", 0))),
         "epoch": int(metrics.get("epoch", 0)),

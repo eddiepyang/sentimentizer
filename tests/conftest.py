@@ -6,6 +6,7 @@ import pytest
 # Ray recommends at least 50% of available memory for the object store.
 # The default is ~40% which triggers a warning. Set this before ray.init().
 os.environ.setdefault("RAY_DEFAULT_OBJECT_STORE_MEMORY_PROPORTION", "0.5")
+os.environ.setdefault("SMART_OPEN_QUIET", "1")
 
 # Enable Ray Data rich progress bars and suppress the "new progress UI" info message.
 # These must be set before ray.data.context is imported so the defaults are picked up.
