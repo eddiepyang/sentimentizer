@@ -1,5 +1,6 @@
 .DS_Store
 *.txt
+!sentimentizer/prompts/*.txt
 *.csv
 *.zip
 *.tsv
