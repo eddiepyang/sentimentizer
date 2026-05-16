@@ -15,10 +15,19 @@ def patch_transformers_default_logdir() -> None:
 
     Must be called BEFORE ``import setfit`` — otherwise the ImportError
     is raised at module load time.
+
+    Silently skips when ``transformers`` is not installed (e.g. the
+    ``[router]`` optional dependencies are not installed).
     """
     import importlib
 
-    _module = importlib.import_module("transformers.training_args")
+    try:
+        _module = importlib.import_module("transformers.training_args")
+    except ModuleNotFoundError:
+        # transformers not installed — shim is unnecessary since setfit
+        # can't be imported without it either.
+        return
+
     if not hasattr(_module, "default_logdir"):
         import os
 
