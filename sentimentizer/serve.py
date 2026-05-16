@@ -180,8 +180,7 @@ class SentimentizerDeployment:
     def _predict_sentiment(self, text: str, model_name: str | None = None) -> dict:
         """Run sentiment analysis on a single text."""
         model, resolved_name = self._get_model(model_name)
-        processed_input = self.tokenizer.tokenize_text(text)
-        score = model.predict(processed_input).item()
+        score = model.predict_text(text, self.tokenizer)
         return {
             "model": resolved_name,
             "sentiment_score": score,

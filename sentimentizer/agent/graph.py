@@ -48,7 +48,7 @@ def should_continue(state: AgentState) -> str:
 
 
 def build_graph(
-    model_type: str,
+    model_type: str = "",
     config_path: str | Path | None = None,
 ) -> StateGraph:
     """Build the LangGraph tuning agent graph.
@@ -63,8 +63,8 @@ def build_graph(
     analyze or goes to END.
 
     Args:
-        model_type: Model to tune ('rnn', 'encoder', 'decoder').
-        config_path: Path to agent config YAML.
+        model_type: Unused, kept for API compatibility.
+        config_path: Unused, kept for API compatibility.
 
     Returns:
         Compiled StateGraph ready to run.

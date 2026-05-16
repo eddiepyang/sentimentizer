@@ -50,7 +50,6 @@ class Decoder(BaseSentimentModel):
     into a sentiment score.
 
     Args:
-        input_len: Maximum sequence length (number of tokens)
         emb_weights: Pre-trained embedding weights of shape (vocab_size, emb_dim)
         d_model: Internal Transformer dimension (projected from embeddings)
         n_heads: Number of attention heads
@@ -175,7 +174,6 @@ class Decoder(BaseSentimentModel):
 def new_model(
     dict_path: str,
     embeddings_config: EmbeddingsConfig,
-    input_len: int,
     model_config: DecoderConfig = _DEFAULT_DECODER_CONFIG,
 ) -> Decoder:
     """Create a new Decoder model with pre-trained GloVe embeddings.
@@ -183,7 +181,6 @@ def new_model(
     Args:
         dict_path: Path to the gensim dictionary file
         embeddings_config: Configuration for GloVe embeddings
-        input_len: Maximum sequence length
         model_config: Decoder architecture configuration (defaults from DecoderConfig)
     """
 

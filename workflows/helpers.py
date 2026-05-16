@@ -93,7 +93,6 @@ def _load_model(state: State, device: str) -> Any:
         model = new_model(
             dict_path=DriverConfig.files.dictionary_file_path,
             embeddings_config=DriverConfig.embeddings(),
-            input_len=DriverConfig.tokenizer.max_len,
             model_config=model_config,
         )
     elif state.run_type == "update":

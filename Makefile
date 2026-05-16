@@ -1,9 +1,9 @@
 .PHONY: setup setup-ci setup-dev download-data train train-rnn train-encoder train-decoder \
-       train-distributed train-quick serve test lint format check clean docker-build docker-run \
-	   gpu-reset tune tune-rnn tune-encoder tune-decoder tune-standalone \
-	   start-metrics stop-metrics setup-dashboards start-exporter stop-exporter stop-ray \
-	   upload-rnn upload-encoder upload-decoder download-rnn download-encoder download-decoder \
-	   push-hub pull-hub diagnose diagnose-env diagnose-pipeline
+       train-distributed train-quick serve test test-lint lint format check clean docker-build docker-run \
+ 	   gpu-reset tune tune-rnn tune-encoder tune-decoder tune-standalone \
+ 	   start-metrics stop-metrics setup-dashboards start-exporter stop-exporter stop-ray \
+ 	   upload-rnn upload-encoder upload-decoder download-rnn download-encoder download-decoder \
+ 	   push-hub pull-hub diagnose diagnose-env diagnose-pipeline
 
 # Default device: use auto-detect (cuda > mps > cpu)
 DEVICE ?= auto
@@ -208,6 +208,10 @@ serve:
 
 ## Run all tests with verbose output
 test:
+	uv run pytest tests/ -v
+
+## Run lint checks then tests (lint must pass before tests run)
+test-lint: lint
 	uv run pytest tests/ -v
 
 ## Run tests with coverage report

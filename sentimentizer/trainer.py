@@ -601,7 +601,7 @@ def _train_func(config: dict) -> None:
     dict_path = config["dict_path"]
     embeddings_model_name = config["embeddings_model_name"]
     embeddings_emb_length = config["embeddings_emb_length"]
-    input_len = config["input_len"]
+    # input_len is no longer needed by new_model() — removed from config
 
     # Create model on this worker
     from sentimentizer.config import EmbeddingsConfig
@@ -623,7 +623,7 @@ def _train_func(config: dict) -> None:
     model = new_model(
         dict_path=dict_path,
         embeddings_config=embeddings_config,
-        input_len=input_len,
+        # input_len removed from new_model() signatures
     )
 
     # Prepare model for distributed training (DDP) and move to correct device
@@ -935,7 +935,6 @@ def new_ray_trainer(
         "dict_path": driver_config.files.dictionary_file_path,
         "embeddings_model_name": driver_config.embeddings.model_name,
         "embeddings_emb_length": driver_config.embeddings.emb_length,
-        "input_len": driver_config.tokenizer.max_len,
         "pos_weight": cfg.pos_weight,
     }
 

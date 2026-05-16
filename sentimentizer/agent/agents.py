@@ -97,7 +97,7 @@ def create_analysis_agent(config: AgentConfig) -> Agent[TuningDeps, AnalysisResu
         return ctx.deps.model_type
 
     @agent.tool
-    def search_web(ctx: RunContext[TuningDeps], query: str) -> list[dict[str, str]]:
+    def search_web(_ctx: RunContext[TuningDeps], query: str) -> list[dict[str, str]]:
         """Search the web for deep learning best practices and techniques.
 
         Use this to look up information about hyperparameter tuning,

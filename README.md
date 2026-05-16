@@ -27,9 +27,24 @@ model = get_trained_model(device="cpu")
 tokenizer = get_trained_tokenizer()
 
 review_text = "greatest pie ever, best in town!"
+model.predict_text(review_text, tokenizer)
+# >> 0.9701
+```
+
+`predict_text()` combines tokenization and inference into one call — it accepts raw text and a tokenizer, and returns a `float` sentiment score.
+
+For advanced use, you can also call tokenization and prediction separately:
+
+```python
+# Two-step: tokenize first, then predict
 positive_ids = tokenizer.tokenize_text(review_text)
 model.predict(positive_ids)
 # >> tensor(0.9701)
+
+# Tokenize without inference (for inspection)
+from sentimentizer.tokenizer import regex_tokenize, text_sequencer
+tokens = regex_tokenize(review_text)
+token_ids = text_sequencer(tokenizer.dictionary, tokens, tokenizer.cfg.max_len)
 ```
 
 Scores range from **0** (very negative) to **1** (very positive).
@@ -637,6 +652,7 @@ sentimentizer/
 │   └── evaluate.py      # Similarity heatmap, threshold calibration
 └── models/
     ├── __init__.py
+    ├── base.py           # BaseSentimentModel with predict() and predict_text()
     ├── rnn.py           # RNN model with GloVe embeddings
     ├── encoder.py       # Transformer encoder model
     └── decoder.py       # Transformer decoder model

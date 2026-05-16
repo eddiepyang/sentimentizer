@@ -61,7 +61,6 @@ class Encoder(BaseSentimentModel):
     a multi-layer Transformer encoder with batch_first=True.
 
     Args:
-        input_len: Maximum sequence length (number of tokens)
         d_model: Internal Transformer dimension (projected from embeddings)
         n_heads: Number of attention heads
         emb_weights: Pre-trained embedding weights of shape (vocab_size, emb_dim)
@@ -171,7 +170,6 @@ class Encoder(BaseSentimentModel):
 def new_model(
     dict_path: str,
     embeddings_config: EmbeddingsConfig,
-    input_len: int,
     model_config: EncoderConfig = _DEFAULT_ENCODER_CONFIG,
 ) -> Encoder:
     """Create a new Encoder model with pre-trained GloVe embeddings.
@@ -179,7 +177,6 @@ def new_model(
     Args:
         dict_path: Path to the gensim dictionary file
         embeddings_config: Configuration for GloVe embeddings
-        input_len: Maximum sequence length
         model_config: Encoder architecture configuration (defaults from EncoderConfig)
     """
     dict_yelp = corpora.Dictionary.load(dict_path)

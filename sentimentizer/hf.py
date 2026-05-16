@@ -246,6 +246,7 @@ def _format_usage_section(model_type: str, repo_id: str) -> str:
         f"download_weights(\n"
         f'    "{model_type}",\n'
         f"    weights_path,\n"
+        f'    repo_id="{repo_id}",\n'
         f"    dict_path=DriverConfig.files.dictionary_file_path,\n"
         f")\n\n"
         f"# Load and run inference\n"
