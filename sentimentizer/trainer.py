@@ -569,9 +569,7 @@ class Trainer:
             mcc=round(metrics.mcc, 4),
             npv=round(metrics.npv, 4),
             macro_f1=round(metrics.macro_f1, 4),
-            auc_roc=(
-                round(metrics.auc_roc, 4) if metrics.auc_roc is not None else None
-            ),
+            auc_roc=(round(metrics.auc_roc, 4) if metrics.auc_roc is not None else None),
             avg_precision=(
                 round(metrics.avg_precision, 4) if metrics.avg_precision is not None else None
             ),
@@ -937,9 +935,7 @@ def _train_func(config: dict) -> None:
             mcc=round(metrics.mcc, 4),
             npv=round(metrics.npv, 4),
             macro_f1=round(metrics.macro_f1, 4),
-            auc_roc=(
-                round(metrics.auc_roc, 4) if metrics.auc_roc is not None else None
-            ),
+            auc_roc=(round(metrics.auc_roc, 4) if metrics.auc_roc is not None else None),
             avg_precision=(
                 round(metrics.avg_precision, 4) if metrics.avg_precision is not None else None
             ),

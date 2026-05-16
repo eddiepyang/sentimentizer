@@ -218,6 +218,229 @@ def hf_pull(ctx: click.Context, repo_id: str | None) -> None:
     run_hf_pull(ctx.obj, repo_id=repo_id)
 
 
+# ── export ────────────────────────────────────
+
+
+@cli.command()
+@click.option(
+    "--model",
+    type=click.Choice(["rnn", "encoder", "decoder"]),
+    required=True,
+    help="Model to export to ONNX",
+)
+@click.option("--quantize/--no-quantize", default=True, help="Apply INT8 quantization")
+@click.option("--output-dir", default="onnx_artifacts", help="Output directory")
+@click.pass_context
+def export(ctx: click.Context, model: str, quantize: bool, output_dir: str) -> None:
+    """Export a trained model to ONNX format."""
+    from workflows.stages.export import run_export
+
+    run_export(ctx.obj, model_type=model, quantize=quantize, output_dir=output_dir)
+
+
+# ── router ─────────────────────────────────────
+
+
+@cli.group()
+def router() -> None:
+    """SetFit router operations."""
+
+
+@router.command("train")
+@click.option("--data", type=click.Path(exists=True), help="Path to augmented JSONL data")
+@click.option("--base-model", default=None, help="SetFit base model (overrides config default)")
+@click.option("--output-dir", default=None, help="Output directory for trained model")
+@click.option(
+    "--config",
+    "config_path",
+    default=None,
+    type=click.Path(exists=True),
+    help="Path to router config YAML (defaults to router/config.yaml)",
+)
+@click.pass_context
+def router_train(
+    ctx: click.Context,
+    data: str,
+    base_model: str | None,
+    output_dir: str | None,
+    config_path: str | None,
+) -> None:
+    """Train the SetFit router model."""
+    from pathlib import Path
+
+    from sentimentizer.router.config import SetFitConfig, load_router_config
+    from sentimentizer.router.dataset import load_router_dataset
+    from sentimentizer.router.train_router import train_router
+
+    train_cfg, _ = load_router_config(config_path)
+    config = SetFitConfig(
+        base_model=base_model or train_cfg.base_model,
+        output_dir=Path(output_dir) if output_dir else train_cfg.output_dir,
+    )
+    train_ds, eval_ds = load_router_dataset(data)
+    train_router(config, train_ds, eval_ds)
+
+
+@router.command("augment")
+@click.option(
+    "--output",
+    default=None,
+    help="Output JSONL file path (overrides config default)",
+)
+@click.option(
+    "--model",
+    default=None,
+    help="Ollama model name (overrides config default)",
+)
+@click.option(
+    "--variations",
+    default=None,
+    type=int,
+    help="Number of variations per seed (overrides config default)",
+)
+@click.option(
+    "--ollama-url",
+    default=None,
+    help="Ollama API endpoint (overrides config default)",
+)
+@click.option(
+    "--resume",
+    is_flag=True,
+    help="Resume from existing output file, skipping already-processed seeds",
+)
+@click.option(
+    "--config",
+    "config_path",
+    default=None,
+    type=click.Path(exists=True),
+    help="Path to router config YAML (defaults to router/config.yaml)",
+)
+@click.pass_context
+def router_augment(
+    ctx: click.Context,
+    output: str | None,
+    model: str | None,
+    variations: int | None,
+    ollama_url: str | None,
+    resume: bool,
+    config_path: str | None,
+) -> None:
+    """Augment seed utterances using GLM 5.1 via Ollama.
+
+    Streams each entry to the output JSONL file as it's generated,
+    so you can see progress in real-time. Defaults come from
+    router/config.yaml; CLI flags override when provided.
+
+    Use --resume to continue an interrupted augmentation: seeds that
+    already appear in the output file are skipped, and new entries are
+    appended to the existing file.
+    """
+    from sentimentizer.router.augment import augment_seeds
+    from sentimentizer.router.config import load_router_config
+    from sentimentizer.router.seeds import SEED_UTTERANCES
+
+    _, augment_cfg = load_router_config(config_path)
+    effective_model = model or augment_cfg.model
+    effective_url = ollama_url or augment_cfg.ollama_url
+    effective_variations = variations or augment_cfg.variations_per_seed
+    effective_output = output or augment_cfg.output_path
+
+    if resume:
+        click.echo(f"Resuming augmentation to {effective_output}...")
+    else:
+        click.echo(f"Augmenting {len(SEED_UTTERANCES)} seeds with model={effective_model}...")
+    click.echo(f"Streaming output to {effective_output} (entries written as generated)")
+    augmented = augment_seeds(
+        SEED_UTTERANCES,
+        model=effective_model,
+        ollama_url=effective_url,
+        variations_per_seed=effective_variations,
+        output_path=effective_output,
+        resume=resume,
+    )
+    click.echo(f"Done: {len(augmented)} total utterances written to {effective_output}")
+
+
+@router.command("evaluate")
+@click.option("--model-path", required=True, help="Path to trained router model")
+@click.option("--data", type=click.Path(exists=True), help="Path to evaluation JSONL data")
+@click.pass_context
+def router_evaluate(ctx: click.Context, model_path: str, data: str | None) -> None:
+    """Evaluate the SetFit router model."""
+    from setfit import SetFitModel
+
+    from sentimentizer.router.evaluate import evaluate_router
+
+    model = SetFitModel.from_pretrained(model_path)
+    if data:
+        from sentimentizer.router.dataset import load_router_dataset
+
+        _, eval_ds = load_router_dataset(data)
+        evaluate_router(model, eval_ds)
+    else:
+        click.echo("No evaluation data provided. Use --data to specify a JSONL file.")
+
+
+# ── serve ───────────────────────────────────────
+
+
+@cli.command("serve")
+@click.option("--model-path", default="models/router", help="Path to trained router model")
+@click.option("--host", default="0.0.0.0", help="Host to serve on")
+@click.option("--port", default=8080, type=int, help="Port to serve on")
+@click.pass_context
+def serve_cmd(ctx: click.Context, model_path: str, host: str, port: int) -> None:
+    """Serve the unified Sentimentizer API via Ray Serve.
+
+    Starts a REST API serving both sentiment analysis and review routing:
+
+    Sentiment endpoints:
+        POST /predict, POST /batch, POST /tokenize, GET /models
+
+    Router endpoints:
+        POST /router/predict, POST /router/batch, GET /router/models
+
+    Shared endpoints:
+        GET /health, GET /metrics
+
+    Requires the ray extra: pip install -e ".[ray]"
+    """
+    import subprocess
+    import sys
+
+    click.echo(f"Starting Sentimentizer serve on {host}:{port}...")
+    click.echo(f"Router model path: {model_path}")
+    click.echo("")
+    click.echo("Sentiment endpoints:")
+    click.echo("  POST /predict     — Classify a single text")
+    click.echo("  POST /batch       — Classify multiple texts")
+    click.echo("  POST /tokenize    — Tokenize text without inference")
+    click.echo("  GET  /models      — Sentiment model metadata")
+    click.echo("")
+    click.echo("Router endpoints:")
+    click.echo("  POST /router/predict  — Route a single text")
+    click.echo("  POST /router/batch    — Route multiple texts")
+    click.echo("  GET  /router/models   — Router model metadata")
+    click.echo("")
+    click.echo("Shared endpoints:")
+    click.echo("  GET  /health  — Health check")
+    click.echo("  GET  /metrics — Request metrics")
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "ray.serve",
+        "run",
+        "sentimentizer.serve:app",
+        "--host",
+        host,
+        "--port",
+        str(port),
+    ]
+    env = {**__import__("os").environ, "ROUTER_MODEL_PATH": model_path}
+    subprocess.run(cmd, env=env)
+
+
 # ── diagnose ─────────────────────────────────
 
 

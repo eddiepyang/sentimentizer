@@ -1,5 +1,13 @@
 ## Complete Implementation Plan: ONNX Export + SetFit Router Pipeline
 
+> **Status: IMPLEMENTED** — All code from this plan has been implemented and tested.
+> See `AGENTS.md` for current conventions and `tests/test_export_onnx.py` / `tests/test_router.py` for test coverage.
+>
+> **Deviation from plan**: `optimum-onnx[onnxruntime]` was removed from `[onnx]` deps due to
+> conflict with `numpy>=2.4.0`. The ONNX export uses `onnxruntime` directly via
+> `onnxruntime.quantization.quantize_dynamic`. `requests` was added to `[router]` deps
+> for the Ollama augmentation client.
+
 ---
 
 ### 1. Architecture Overview
@@ -317,11 +325,11 @@ from pathlib import Path
 class SetFitConfig:
     """Configuration for the SetFit router training pipeline.
 
-    Default base model is all-MiniLM-L6-v2 (22M params, ~80MB) to match
+    Default base model is BAAI/bge-base-en-v1.5 (109M params, 768-dim embeddings, strong MTEB scores) to match
     the project's "smole" philosophy. Upgrade to mxbai-embed-large-v1
     (335M params, ~1.3GB) only if evaluation fails to meet thresholds.
     """
-    base_model: str = "all-MiniLM-L6-v2"
+    base_model: str = "BAAI/bge-base-en-v1.5"
     num_iterations: int = 20      # contrastive pairs per example
     num_epochs: int = 1           # fine-tuning epochs
     batch_size: int = 16
@@ -806,7 +814,7 @@ models/router/
 | RNN export | `_RNNOnnxWrapper` with masked fallback | `pack_padded_sequence` is ONNX-incompatible; wrapper avoids kwarg issue with `torch.onnx.export` |
 | RNN tolerance | 1e-2 | Masked fallback has slight numeric drift from padding; Encoder/Decoder use 1e-4 |
 | Router export | Python `setfit` inference (v1) | SetFit models need separate sentence-transformer + head export; deferred to v2 |
-| Router base model | `all-MiniLM-L6-v2` (default) | 22M params, ~80MB — matches project's "smole" philosophy; upgrade to `mxbai-embed-large-v1` only if eval fails |
+| Router base model | `BAAI/bge-base-en-v1.5` (default) | 109M params, 768-dim embeddings, strong MTEB scores; upgrade to `mxbai-embed-large-v1` only if eval fails |
 | Quantization | INT8 dynamic (`quantize_dynamic`) | Optimal for AVX-512, keeps FP32 activations |
 | SetFit version | `>=1.1.0` | Uses Sentence Transformers backend; old `SetFitTrainer` deprecated |
 | Optimum ONNX | `optimum-onnx[onnxruntime]` | `optimum` v2.0+ moved ONNX functionality to separate package |
@@ -842,7 +850,7 @@ models/router/
 
 #### C. Router Model Footprint
 - **Risk**: `mxbai-embed-large-v1` (335M params, ~1.3GB) contradicts the project's "smole" philosophy and introduces severe cold-start latencies.
-- **Mitigation**: Default to `all-MiniLM-L6-v2` (22M params, ~80MB). Only upgrade if evaluation fails to meet inter-class < 0.65 / intra-class > 0.85 thresholds.
+- **Mitigation**: Default to `BAAI/bge-base-en-v1.5` (109M params, 768-dim embeddings, strong MTEB scores). Only upgrade to `mxbai-embed-large-v1` if evaluation fails to meet inter-class < 0.65 / intra-class > 0.85 thresholds.
 
 #### D. Architectural Integration (Go vs. Python)
 - **Risk**: If the primary web service is written in Go, forcing it to call a Python process for SetFit routing introduces IPC/Network latency, negating ONNX's sub-millisecond execution speeds.
