@@ -139,26 +139,150 @@ class Tokenizer:
     cfg: TokenizerConfig = field(default_factory=TokenizerConfig)
 
     @classmethod
+    def build_dictionary(
+        cls,
+        data_source: object,
+        cfg: TokenizerConfig | None = None,
+    ) -> Tokenizer:
+        """Build dictionary from any DataSource (pandas or Ray).
+
+        Replaces ``new_dictionary()`` and ``_build_dictionary_distributed()``
+        with a single unified entry point.
+        """
+        if cfg is None:
+            cfg = TokenizerConfig(save_dictionary=True)
+
+        total_word_freq: Counter = Counter()
+        total_doc_freq: Counter = Counter()
+        total_num_docs = 0
+
+        for batch in data_source.iter_batches(batch_size=10000, batch_format="numpy"):
+            wf, df, nd = _count_vocab_batch(batch, cfg.text_col)
+            total_word_freq += wf
+            total_doc_freq += df
+            total_num_docs += nd
+
+        dictionary = corpora.Dictionary()
+        dictionary.num_docs = total_num_docs
+
+        for idx, word in enumerate(
+            sorted(total_word_freq.keys(), key=lambda w: (-total_word_freq[w], w))
+        ):
+            dictionary.token2id[word] = idx
+            dictionary.dfs[idx] = total_doc_freq[word]
+
+        dictionary.num_pos = sum(total_word_freq.values())
+        dictionary.num_nnz = sum(total_doc_freq.values())
+
+        dictionary.filter_extremes(
+            no_below=cfg.dict_min,
+            no_above=cfg.no_above,
+            keep_n=cfg.dict_keep,
+        )
+        dictionary.compactify()
+
+        if cfg.save_dictionary:
+            dictionary.save(str(FileConfig.dictionary_file_path))
+
+        logger.info(f"dictionary created: {len(dictionary)} terms, " f"{total_num_docs} documents")
+        return cls(dictionary=dictionary, cfg=cfg)
+
+    @classmethod
     def from_data(cls: type[TokenizerType], data: pd.DataFrame) -> TokenizerType:
         """creates tokenizer from dataframe"""
         return cls(dictionary=new_dictionary(data, TokenizerConfig(save_dictionary=False)))
 
     @time_decorator
-    def transform_dataframe(self, data: pd.DataFrame) -> pd.DataFrame:
-        """transforms dataframe with text and target"""
+    def transform(self, data_source: object) -> object:
+        """Transform any DataSource: drop neutral, tokenize, convert ratings.
+
+        Replaces ``transform_dataframe()`` and ``transform_dataset()``.
+        Uses expression-based filter (Risk 9 mitigation) for the neutral-drop
+        step on the pandas path.
+        """
         if self.dictionary is None:
             raise ValueError("no dictionary loaded")
 
-        # Work on a copy to avoid mutating the input DataFrame
-        data = data.copy()
+        dictionary = self.dictionary
+        cfg = self.cfg
 
-        # Drop neutral (3-star) reviews for strict binary classification
-        data = data[data[self.cfg.label_col] != 3].copy()
-        data[self.cfg.inputs] = data[self.cfg.text_col].map(
-            lambda text: text_sequencer(self.dictionary, text, self.cfg.max_len)  # type: ignore[arg-type]
+        # Step 1: Drop neutral (3-star) reviews — use expression-based filter
+        filtered = data_source.filter(col=cfg.label_col, op="ne", value=3)
+
+        # Step 2: Map batches to convert text to sequences
+        def transform_batch(batch: dict) -> dict:
+            inputs = []
+            for text in batch[cfg.text_col]:
+                inputs.append(text_sequencer(dictionary, text, cfg.max_len))
+            batch[cfg.inputs] = np.array(inputs)
+
+            if cfg.label_col in batch:
+                batch[cfg.labels] = vectorized_convert_ratings(np.asarray(batch[cfg.label_col]))
+
+            # Drop variable-length columns
+            cols_to_keep = {cfg.inputs, cfg.labels}
+            for col in list(batch.keys()):
+                if col not in cols_to_keep:
+                    del batch[col]
+            return batch
+
+        return filtered.map_batches(transform_batch, batch_size=10000, batch_format="numpy")
+
+    def update_dictionary(self, data_source: object) -> None:
+        """Update existing dictionary with new tokens from any DataSource.
+
+        Replaces ``update_from_dataset()``. Skips ``filter_extremes`` and
+        ``compactify`` to preserve existing token IDs.
+        """
+        cfg = self.cfg
+        total_word_freq: Counter = Counter()
+        total_doc_freq: Counter = Counter()
+        total_num_docs = 0
+
+        for batch in data_source.iter_batches(batch_size=10000, batch_format="numpy"):
+            wf, df, nd = _count_vocab_batch(batch, cfg.text_col)
+            total_word_freq += wf
+            total_doc_freq += df
+            total_num_docs += nd
+
+        old_len = len(self.dictionary)
+        for word in total_word_freq:
+            if word not in self.dictionary.token2id:
+                idx = len(self.dictionary)
+                self.dictionary.token2id[word] = idx
+                self.dictionary.dfs[idx] = total_doc_freq[word]
+            else:
+                idx = self.dictionary.token2id[word]
+                self.dictionary.dfs[idx] += total_doc_freq[word]
+
+        self.dictionary.num_docs += total_num_docs
+        self.dictionary.num_pos += sum(total_word_freq.values())
+        self.dictionary.num_nnz += sum(total_doc_freq.values())
+
+        new_len = len(self.dictionary)
+        logger.info(
+            f"dictionary updated: added {new_len - old_len} new terms, "
+            f"total {new_len} terms, {total_num_docs} new documents"
         )
 
-        data[self.cfg.labels] = vectorized_convert_ratings(data[self.cfg.label_col].values)
+        if cfg.save_dictionary:
+            self.dictionary.save(str(FileConfig.dictionary_file_path))
+
+    def transform_dataframe(self, data: pd.DataFrame) -> pd.DataFrame:
+        """transforms dataframe with text and target (legacy shim).
+
+        Preserves original columns and adds ``inputs``/``labels``.
+        """
+        if self.dictionary is None:
+            raise ValueError("no dictionary loaded")
+
+        cfg = self.cfg
+        data = data.copy()
+        data = data[data[cfg.label_col] != 3].copy()
+        data[cfg.inputs] = data[cfg.text_col].map(
+            lambda text: text_sequencer(self.dictionary, text, cfg.max_len)
+        )
+        data[cfg.labels] = vectorized_convert_ratings(data[cfg.label_col].values)
         logger.info("converted tokens to numbers...")
         return data
 
