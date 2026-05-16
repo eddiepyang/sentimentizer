@@ -3,7 +3,8 @@ from __future__ import annotations
 import math
 import os
 import time
-from collections.abc import Callable
+from collections import deque
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -230,6 +231,223 @@ def val_step(
     return loss.item()
 
 
+@dataclass
+class EpochResult:
+    """Per-epoch training result container."""
+
+    epoch: int
+    train_loss: float
+    val_loss: float
+    metrics: ClassificationMetrics
+    lr: float
+
+
+@dataclass
+class TrainingState:
+    """Mutable training state container."""
+
+    val_loss: float = float("inf")
+    latest_train_loss: float = 0.0
+    latest_epoch: int = 0
+    latest_metrics: ClassificationMetrics | None = None
+    best_val_loss: float = float("inf")
+    patience_counter: int = 0
+    running_loss_mean: float = 0.0
+    steps: int = 0
+
+
+class TrainingCallback:
+    """Protocol for hooking into the training loop."""
+
+    def on_epoch_end(self, result: EpochResult, state: TrainingState) -> bool:
+        """Called after each epoch. Return True to stop training.
+
+        Args:
+            result: The current epoch's results.
+            state: Mutable training state.
+
+        Returns:
+            True if training should stop, False otherwise.
+        """
+        return False
+
+    def on_train_begin(self, model_type: str, device: str, epochs: int) -> None:
+        """Called before training starts."""
+
+    def on_train_end(self, state: TrainingState) -> None:
+        """Called after training ends."""
+
+
+class MetricsCallback(TrainingCallback):
+    """Publishes metrics to Prometheus/JSON. Only active on rank 0."""
+
+    def __init__(
+        self,
+        model_type: str,
+        rank: int = 0,
+        ray_gauges: dict[str, Any] | None = None,
+    ) -> None:
+        self.model_type = model_type
+        self.rank = rank
+        self.ray_gauges = ray_gauges
+
+    def on_epoch_end(self, result: EpochResult, state: TrainingState) -> bool:
+        if self.rank != 0:
+            return False
+        publish_epoch_metrics(
+            model_type=self.model_type,
+            epoch=result.epoch,
+            train_loss=result.train_loss,
+            val_loss=result.val_loss,
+            metrics=result.metrics,
+            lr=result.lr,
+            ray_gauges=self.ray_gauges,
+        )
+        return False
+
+
+class CheckpointCallback(TrainingCallback):
+    """Saves periodic and best model checkpoints."""
+
+    def __init__(
+        self,
+        checkpoint_dir: str | Path | None,
+        checkpoint_every: int,
+        checkpoint_best: bool,
+    ) -> None:
+        self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
+        self.checkpoint_every = checkpoint_every
+        self.checkpoint_best = checkpoint_best
+        self._best_val_loss = float("inf")
+
+    def on_epoch_end(self, result: EpochResult, state: TrainingState) -> bool:
+        if self.checkpoint_dir is None:
+            return False
+
+        # Periodic checkpoint
+        if self.checkpoint_every > 0 and result.epoch % self.checkpoint_every == 0:
+            ckpt_path = self.checkpoint_dir / f"checkpoint_epoch_{result.epoch}.pth"
+            # Note: actual save happens in _run_training_loop which has model/optimizer refs
+            state._pending_checkpoint_path = str(ckpt_path)  # type: ignore[attr-defined]
+
+        # Best model checkpoint
+        if self.checkpoint_best and result.val_loss < self._best_val_loss:
+            self._best_val_loss = result.val_loss
+            best_path = self.checkpoint_dir / "best_model.pth"
+            state._pending_best_checkpoint_path = str(best_path)  # type: ignore[attr-defined]
+
+        return False
+
+
+class EarlyStoppingCallback(TrainingCallback):
+    """Stops training when validation loss doesn't improve."""
+
+    def __init__(self, patience: int) -> None:
+        self.patience = patience
+        self._best_val_loss = float("inf")
+        self.patience_counter = 0
+
+    def on_epoch_end(self, result: EpochResult, state: TrainingState) -> bool:
+        if result.val_loss < self._best_val_loss:
+            self._best_val_loss = result.val_loss
+            self.patience_counter = 0
+        else:
+            self.patience_counter += 1
+            if self.patience_counter >= self.patience:
+                logger.info(
+                    f"early stopping at epoch {result.epoch}, "
+                    f"val_loss hasn't improved for {self.patience_counter} epochs"
+                )
+                return True
+        return False
+
+
+class LoggingCallback(TrainingCallback):
+    """Structured logging per epoch. Only active on rank 0."""
+
+    def __init__(self, model_type: str, rank: int = 0) -> None:
+        self.model_type = model_type
+        self.rank = rank
+
+    def on_epoch_end(self, result: EpochResult, state: TrainingState) -> bool:
+        if self.rank != 0:
+            return False
+        logger.info(
+            f"[{self.model_type}] [epoch {result.epoch}] completed, "
+            f"val_loss={result.val_loss:.4f}, train_loss={result.train_loss:.4f}, "
+            f"accuracy={result.metrics.accuracy:.4f}, lr={result.lr:.6f}"
+        )
+        return False
+
+    def on_train_begin(self, model_type: str, device: str, epochs: int) -> None:
+        if self.rank != 0:
+            return
+        logger.info(f"[{model_type}] fitting model...")
+        logger.info(f"[{model_type}] epochs={epochs}, device={device}")
+
+
+class RayReportCallback(TrainingCallback):
+    """Reports metrics and checkpoints to Ray Train. All ranks must call."""
+
+    def __init__(self, model_type: str) -> None:
+        self.model_type = model_type
+
+    def on_epoch_end(self, result: EpochResult, state: TrainingState) -> bool:
+        try:
+            import tempfile
+
+            import ray.cloudpickle as pickle
+            from ray import train
+            from ray.train import Checkpoint
+
+            # Note: checkpoint data must be populated by the loop
+            checkpoint_data = getattr(state, "_ray_checkpoint_data", None)
+            if checkpoint_data is not None:
+                with tempfile.TemporaryDirectory() as checkpoint_dir:
+                    with open(os.path.join(checkpoint_dir, "data.pkl"), "wb") as fp:
+                        pickle.dump(checkpoint_data, fp)
+                    checkpoint = Checkpoint.from_directory(checkpoint_dir)
+                    train.report(
+                        {
+                            "train_loss": result.train_loss,
+                            "val_loss": result.val_loss,
+                            "accuracy": result.metrics.accuracy,
+                            "pos_acc": result.metrics.positive_accuracy,
+                            "neg_acc": result.metrics.negative_accuracy,
+                            "precision": result.metrics.precision,
+                            "recall": result.metrics.recall,
+                            "f1": result.metrics.f1,
+                            "cohen_kappa": result.metrics.cohen_kappa,
+                            "mcc": result.metrics.mcc,
+                            "npv": result.metrics.npv,
+                            "macro_f1": result.metrics.macro_f1,
+                            "auc_roc": result.metrics.auc_roc,
+                            "avg_precision": result.metrics.avg_precision,
+                            "tp": result.metrics.tp,
+                            "tn": result.metrics.tn,
+                            "fp": result.metrics.fp,
+                            "fn": result.metrics.fn,
+                            "total": result.metrics.total,
+                            "epoch": result.epoch,
+                            "lr": result.lr,
+                        },
+                        checkpoint=checkpoint,
+                    )
+            else:
+                train.report(
+                    {
+                        "train_loss": result.train_loss,
+                        "val_loss": result.val_loss,
+                        "accuracy": result.metrics.accuracy,
+                        "epoch": result.epoch,
+                        "lr": result.lr,
+                    }
+                )
+        except (ImportError, RuntimeError):
+            pass
+        return False
+
+
 def compute_epoch_metrics(
     probabilities: np.ndarray,
     targets: np.ndarray,
@@ -270,6 +488,138 @@ def compute_epoch_metrics(
     )
 
 
+def _iter_batches(
+    data_source: DataLoader | Any,
+    batch_size: int,
+    device: str,
+) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
+    """Yield (data, target) tensors regardless of source type.
+
+    Normalizes iteration over both PyTorch DataLoader and Ray dataset shards,
+    ensuring tensors are moved to the correct device with appropriate dtypes.
+
+    Args:
+        data_source: Either a DataLoader or a Ray dataset shard.
+        batch_size: Batch size for Ray dataset iteration.
+        device: Device to move tensors to.
+
+    Yields:
+        Tuples of (data, target) tensors.
+    """
+    if isinstance(data_source, DataLoader):
+        for sent, target in data_source:
+            yield sent.to(device), target.to(device)
+    else:
+        # Ray dataset shard
+        for batch in data_source.iter_torch_batches(batch_size=batch_size):
+            yield batch["data"].long().to(device), batch["target"].float().to(device)
+
+
+def create_model_from_registry(
+    model_type: str,
+    dict_path: str,
+    embeddings_config: Any,
+    model_config: Any | None = None,
+) -> torch.nn.Module:
+    """Create a model using the MODEL_REGISTRY.
+
+    Replaces inline if/elif blocks for model creation in distributed
+    and tuning paths with a unified registry lookup.
+
+    Args:
+        model_type: One of 'rnn', 'encoder', 'decoder'.
+        dict_path: Path to the dictionary file.
+        embeddings_config: EmbeddingsConfig instance.
+        model_config: Optional model-specific config (for tuning).
+
+    Returns:
+        The created model instance.
+
+    Raises:
+        ValueError: If model_type is not in the registry.
+    """
+    from sentimentizer.models.base import get_model_registry
+
+    registry = get_model_registry()
+    if model_type not in registry:
+        raise ValueError(f"no matching model for {model_type}")
+
+    entry = registry[model_type]
+    new_model_func = entry["new_model"]
+
+    kwargs: dict[str, Any] = {
+        "dict_path": dict_path,
+        "embeddings_config": embeddings_config,
+    }
+    if model_config is not None:
+        kwargs["model_config"] = model_config
+
+    return new_model_func(**kwargs)
+
+
+def _create_training_components(
+    model: torch.nn.Module,
+    model_type: str,
+    device: str,
+    pos_weight: float = 1.0,
+    lr: float | None = None,
+    betas: tuple[float, float] | None = None,
+    weight_decay: float | None = None,
+) -> tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LRScheduler, Callable]:
+    """Create optimizer, scheduler, and loss function for a model.
+
+    Extracts the optimizer/scheduler/loss setup that was duplicated in
+    new_trainer() and _train_func() into a single factory function.
+
+    Args:
+        model: The model to create components for.
+        model_type: Model type string.
+        device: Device to place tensors on.
+        pos_weight: Positive class weight for BCEWithLogitsLoss.
+        lr: Optional learning rate override.
+        betas: Optional AdamW betas override.
+        weight_decay: Optional weight decay override.
+
+    Returns:
+        Tuple of (optimizer, scheduler, loss_function).
+    """
+    opt_params = _get_opt_params(model_type)
+    sched_params = _get_sched_params(model_type)
+
+    # Use overrides if provided, otherwise use defaults
+    lr = lr if lr is not None else opt_params.lr
+    betas = betas if betas is not None else opt_params.betas
+    weight_decay = weight_decay if weight_decay is not None else opt_params.weight_decay
+
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=lr,
+        betas=betas,
+        weight_decay=weight_decay,
+    )
+
+    # Use warmup+cosine for transformer models, simple cosine for RNN
+    is_transformer = isinstance(sched_params, (EncoderSchedulerParams, DecoderSchedulerParams))
+    if is_transformer and sched_params.warmup_epochs > 0:
+        scheduler = _LinearWarmupCosineScheduler(
+            optimizer,
+            warmup_steps=sched_params.warmup_epochs,
+            total_steps=sched_params.T_max,
+            eta_min=sched_params.eta_min,
+        )
+    else:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=sched_params.T_max,
+            eta_min=sched_params.eta_min,
+            last_epoch=sched_params.last_epoch,
+        )
+
+    loss_function = torch.nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight]).to(device))
+
+    return optimizer, scheduler, loss_function
+
+
 def _new_loaders(
     train_data: CorpusDataset, val_data: CorpusDataset, cfg: TrainerConfig
 ) -> tuple[DataLoader, DataLoader]:
@@ -308,7 +658,10 @@ class Trainer:
     scheduler: optim.lr_scheduler.LRScheduler
     cfg: TrainerConfig
     model_type: str
-    losses: list[float] = field(default_factory=list)
+    losses: deque[float] = field(default_factory=lambda: deque(maxlen=1000))
+    _recent_losses: deque[float] = field(default_factory=lambda: deque(maxlen=120), repr=False)
+    total_train_loss: float = 0.0
+    train_step_count: int = 0
     val_loss: float = float("inf")
     latest_train_loss: float = 0.0
     latest_epoch: int = 0
@@ -330,8 +683,11 @@ class Trainer:
 
             i += len(target)
             self.losses.append(loss_val)
+            self._recent_losses.append(loss_val)
+            self.total_train_loss += loss_val
+            self.train_step_count += 1
             if i % (self.cfg.batch_size * 250) == 0:
-                current_loss = float(np.mean(self.losses[-120:]))
+                current_loss = float(np.mean(self._recent_losses))
                 logger.info(
                     f"[{self.model_type}] [epoch {epoch}] {i / n:.2f} of rows completed in "
                     f"{j + 1} cycles, current loss at {current_loss:.4f}"
@@ -448,7 +804,9 @@ class Trainer:
         metrics = compute_epoch_metrics(probabilities, targets, self.model_type)
 
         self.val_loss = float(np.mean(losses))
-        self.latest_train_loss = float(np.mean(self.losses)) if self.losses else 0.0
+        self.latest_train_loss = (
+            self.total_train_loss / self.train_step_count if self.train_step_count > 0 else 0.0
+        )
         self.latest_epoch = epoch
         self.latest_metrics = metrics
 
@@ -462,6 +820,124 @@ class Trainer:
             lr=self.optimizer.param_groups[0]["lr"],
             ray_gauges=_get_ray_gauges(self.model_type),
         )
+
+
+def _run_training_loop(
+    model: torch.nn.Module,
+    train_iter: Iterator[tuple[torch.Tensor, torch.Tensor]],
+    val_iter: Iterator[tuple[torch.Tensor, torch.Tensor]],
+    epochs: int,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler.LRScheduler | None,
+    loss_function: Callable,
+    callbacks: list[TrainingCallback],
+    model_type: str,
+    device: str,
+) -> TrainingState:
+    """Unified training loop used by all three paths (single-node, distributed, tuning).
+
+    Args:
+        model: The model to train.
+        train_iter: Iterator yielding (data, target) batches for training.
+        val_iter: Iterator yielding (data, target) batches for validation.
+        epochs: Number of epochs to train.
+        optimizer: Optimizer for training.
+        scheduler: Optional LR scheduler.
+        loss_function: Loss function.
+        callbacks: List of TrainingCallback instances.
+        model_type: Model type string for logging.
+        device: Device string.
+
+    Returns:
+        TrainingState with final training state.
+    """
+    state = TrainingState()
+
+    for cb in callbacks:
+        cb.on_train_begin(model_type, device, epochs)
+
+    for epoch in range(1, epochs + 1):
+        # Training
+        model.train()
+        epoch_losses = []
+        for data, target in train_iter:
+            loss_val = train_step(
+                model,
+                data=data,
+                target=target,
+                optimizer=optimizer,
+                loss_function=loss_function,
+            )
+            epoch_losses.append(loss_val)
+            state.running_loss_mean = (
+                (state.running_loss_mean * state.steps + loss_val) / (state.steps + 1)
+                if state.steps > 0
+                else loss_val
+            )
+            state.steps += 1
+
+        train_loss = float(np.mean(epoch_losses)) if epoch_losses else 0.0
+        state.latest_train_loss = train_loss
+
+        # Validation
+        model.eval()
+        val_losses = []
+        all_probs = []
+        all_targets = []
+        with torch.no_grad():
+            for data, target in val_iter:
+                output = model(data)
+                loss_val = loss_function(output, target)
+                val_losses.append(loss_val.item())
+
+                all_probs.append(torch.sigmoid(output).cpu())
+                all_targets.append(target.cpu())
+
+        val_loss = float(np.mean(val_losses)) if val_losses else 0.0
+        probabilities = torch.cat(all_probs).numpy() if all_probs else np.array([])
+        targets = torch.cat(all_targets).numpy() if all_targets else np.array([])
+
+        metrics = compute_epoch_metrics(probabilities, targets, model_type)
+
+        lr = optimizer.param_groups[0]["lr"]
+        result = EpochResult(
+            epoch=epoch,
+            train_loss=train_loss,
+            val_loss=val_loss,
+            metrics=metrics,
+            lr=lr,
+        )
+
+        state.val_loss = val_loss
+        state.latest_epoch = epoch
+        state.latest_metrics = metrics
+
+        if scheduler is not None:
+            scheduler.step()
+
+        # Callbacks
+        should_stop = False
+        for cb in callbacks:
+            if cb.on_epoch_end(result, state):
+                should_stop = True
+                break
+
+        # Handle checkpointing signaled by CheckpointCallback
+        if hasattr(state, "_pending_checkpoint_path"):
+            save_checkpoint(model, optimizer, epoch, state._pending_checkpoint_path)
+            delattr(state, "_pending_checkpoint_path")
+
+        if hasattr(state, "_pending_best_checkpoint_path"):
+            save_checkpoint(model, optimizer, epoch, state._pending_best_checkpoint_path)
+            delattr(state, "_pending_best_checkpoint_path")
+
+        if should_stop:
+            break
+
+    for cb in callbacks:
+        cb.on_train_end(state)
+
+    return state
 
 
 def _get_opt_params(
@@ -518,37 +994,11 @@ def new_trainer(
     cfg: TrainerConfig,
     model_type: str,
 ) -> Trainer:
-    opt = _get_opt_params(model_type)
-    sched = _get_sched_params(model_type)
-
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=opt.lr,
-        betas=opt.betas,
-        weight_decay=opt.weight_decay,
-    )
-
-    # Use warmup+cosine for transformer models, simple cosine for RNN
-    is_transformer = isinstance(sched, (EncoderSchedulerParams, DecoderSchedulerParams))
-    if is_transformer and sched.warmup_epochs > 0:
-        warmup_steps = sched.warmup_epochs
-        total_steps = sched.T_max
-        scheduler = _LinearWarmupCosineScheduler(
-            optimizer,
-            warmup_steps=warmup_steps,
-            total_steps=total_steps,
-            eta_min=sched.eta_min,
-        )
-    else:
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer,
-            T_max=sched.T_max,
-            eta_min=sched.eta_min,
-            last_epoch=sched.last_epoch,
-        )
-
-    loss_function = torch.nn.BCEWithLogitsLoss(
-        pos_weight=torch.tensor([cfg.pos_weight]).to(cfg.device)
+    optimizer, scheduler, loss_function = _create_training_components(
+        model=model,
+        model_type=model_type,
+        device=cfg.device,
+        pos_weight=cfg.pos_weight,
     )
 
     trainer = Trainer(

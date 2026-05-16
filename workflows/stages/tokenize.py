@@ -12,9 +12,17 @@ from workflows.lifecycle import State, _ensure_ray_initialized, logger
 
 
 def run_tokenize(state: State, *, resume: bool = False) -> None:
-    """Build/update dictionary and write processed parquet."""
+    """Build/update dictionary and write processed parquet.
+
+    Unified single-path implementation using DataSource abstraction.
+    Collapses the previous 4-branch logic (new/update × Ray/no-Ray) into
+    one code path that works with both pandas and Ray backends.
+    """
+    from gensim import corpora
+
     from sentimentizer.config import DriverConfig, TokenizerConfig
-    from sentimentizer.tokenizer import Tokenizer, regex_tokenize
+    from sentimentizer.data_source import read_parquet
+    from sentimentizer.tokenizer import Tokenizer
     from workflows.lifecycle import is_ray_available
 
     _ensure_ray_initialized()
@@ -27,91 +35,32 @@ def run_tokenize(state: State, *, resume: bool = False) -> None:
         logger.info(f"skipping tokenize: {existing_rows} rows already exist (need {stop})")
         return
 
+    use_ray = is_ray_available()
+
+    # --- Read raw data as DataSource (unified I/O) -------------------------
+    data_source = read_parquet(DriverConfig.files.raw_reviews_file_path, use_ray=use_ray)
+
     if state.run_type == "new":
+        # Always build dictionary (matching old behavior where from_data/from_dataset
+        # was called regardless of skip_data)
+        tokenizer = Tokenizer.build_dictionary(data_source)
         if skip_data:
             logger.info(f"skipping data creation: {existing_rows} rows already exist (need {stop})")
-        if is_ray_available():
-            import ray
-
-            reviews_data = ray.data.read_parquet(DriverConfig.files.raw_reviews_file_path)
-            tokenizer = Tokenizer.from_dataset(reviews_data)
-
-            if not skip_data:
-                processed_ds = tokenizer.transform_dataset(reviews_data)
-                _remove_path(DriverConfig.files.processed_reviews_file_path)
-                processed_ds.write_parquet(DriverConfig.files.processed_reviews_file_path)
-        else:
-            import os
-
-            import pandas as pd
-
-            reviews_data = pd.read_parquet(DriverConfig.files.raw_reviews_file_path)
-            tokenizer = Tokenizer.from_data(reviews_data)
-
-            if not skip_data:
-                processed_df = tokenizer.transform_dataframe(reviews_data)
-                _remove_path(DriverConfig.files.processed_reviews_file_path)
-                os.makedirs(
-                    os.path.dirname(DriverConfig.files.processed_reviews_file_path), exist_ok=True
-                )
-                processed_df.to_parquet(
-                    DriverConfig.files.processed_reviews_file_path, engine="pyarrow"
-                )
 
     elif resume or state.run_type == "update":
-        if is_ray_available():
-            import ray
-            from gensim import corpora
-
-            reviews_data = ray.data.read_parquet(DriverConfig.files.raw_reviews_file_path)
-            dictionary = corpora.Dictionary.load(DriverConfig.files.dictionary_file_path)
-            tokenizer = Tokenizer(dictionary=dictionary)
-            if resume:
-                logger.info(
-                    f"resuming from checkpoint: updating dictionary from "
-                    f"{DriverConfig.files.dictionary_file_path}"
-                )
-                tokenizer.update_from_dataset(reviews_data)
-
-            processed_ds = tokenizer.transform_dataset(reviews_data)
-            _remove_path(DriverConfig.files.processed_reviews_file_path)
-            processed_ds.write_parquet(DriverConfig.files.processed_reviews_file_path)
-        else:
-            import os
-
-            import pandas as pd
-            from gensim import corpora
-
-            reviews_data = pd.read_parquet(DriverConfig.files.raw_reviews_file_path)
-            dictionary = corpora.Dictionary.load(DriverConfig.files.dictionary_file_path)
-            tokenizer = Tokenizer(dictionary=dictionary)
-            if resume:
-                logger.info(
-                    f"resuming from checkpoint: updating dictionary from "
-                    f"{DriverConfig.files.dictionary_file_path}"
-                )
-                t_cfg = TokenizerConfig()
-                texts = reviews_data[t_cfg.text_col].apply(
-                    lambda x: (
-                        x
-                        if isinstance(x, list)
-                        else list(x) if hasattr(x, "__iter__") else regex_tokenize(str(x))
-                    )
-                )
-                dictionary.add_documents(texts)
-                if t_cfg.save_dictionary:
-                    dictionary.save(DriverConfig.files.dictionary_file_path)
-                    logger.info(
-                        f"updated dictionary saved to {DriverConfig.files.dictionary_file_path}..."
-                    )
-
-            processed_df = tokenizer.transform_dataframe(reviews_data)
-            _remove_path(DriverConfig.files.processed_reviews_file_path)
-            os.makedirs(
-                os.path.dirname(DriverConfig.files.processed_reviews_file_path), exist_ok=True
+        dictionary = corpora.Dictionary.load(DriverConfig.files.dictionary_file_path)
+        tokenizer = Tokenizer(dictionary=dictionary)
+        if resume:
+            logger.info(
+                f"resuming from checkpoint: updating dictionary from "
+                f"{DriverConfig.files.dictionary_file_path}"
             )
-            processed_df.to_parquet(
-                DriverConfig.files.processed_reviews_file_path, engine="pyarrow"
-            )
+            tokenizer.update_dictionary(data_source)
     else:
         raise ValueError(f"invalid run_type: {state.run_type}")
+
+    # --- Transform and write (unified for both paths) ----------------------
+    if not skip_data:
+        processed = tokenizer.transform(data_source)
+        _remove_path(DriverConfig.files.processed_reviews_file_path)
+        processed.write_parquet(DriverConfig.files.processed_reviews_file_path)

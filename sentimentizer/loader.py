@@ -16,6 +16,7 @@ except ImportError:
 
 from sentimentizer import new_logger
 from sentimentizer.config import DEFAULT_LOG_LEVEL
+from sentimentizer.data_source import read_parquet
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
@@ -216,4 +217,35 @@ def load_train_val_ray_datasets(
         train_ds = _balance_ray_dataset(train_ds, target_col="target", random_state=random_state)
 
     logger.info(f"loaded ray datasets: train={train_ds.count()}, val={val_ds.count()}")
+    return train_ds, val_ds
+
+
+def load_train_val_datasets(
+    data_path: str,
+    use_ray: bool = False,
+    test_size: float = 0.2,
+    balance_classes: bool = False,
+    random_state: int = 42,
+) -> tuple[object, object]:
+    """Load processed parquet as DataSource, split into train/val.
+
+    Unified entry point that replaces both corpus and Ray variants.
+    Callers unwrap the returned DataSource via ``.to_pandas()`` or ``.to_ray()``.
+
+    Args:
+        data_path: Path to processed parquet file.
+        use_ray: If True, returns RayDataSource; otherwise PandasDataSource.
+        test_size: Fraction for validation set.
+        balance_classes: Whether to undersample majority class in training set.
+        random_state: Seed for reproducibility.
+
+    Returns:
+        Tuple of (train_data_source, val_data_source).
+    """
+    data_source = read_parquet(data_path, use_ray=use_ray)
+    train_ds, val_ds = data_source.train_test_split(test_size=test_size, random_state=random_state)
+
+    if balance_classes:
+        train_ds = train_ds.balance(target_col="target", random_state=random_state)
+
     return train_ds, val_ds

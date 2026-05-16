@@ -360,8 +360,6 @@ def test_run_tokenize_new_skips_data_when_rows_exist(
     monkeypatch: pytest.MonkeyPatch, tmp_path: str
 ) -> None:
     """run_type='new' should create dictionary but skip data when parquet has enough rows."""
-    import pandas as pd
-
     from sentimentizer.config import DriverConfig
     from workflows.driver import State
 
@@ -377,35 +375,46 @@ def test_run_tokenize_new_skips_data_when_rows_exist(
 
     calls: list[str] = []
 
+    class FakeDataSource:
+        def filter(self, **kwargs):
+            return self
+
+        def map_batches(self, *args, **kwargs):
+            return self
+
+        def write_parquet(self, path):
+            calls.append("write_parquet")
+
+    monkeypatch.setattr(
+        "sentimentizer.data_source.read_parquet",
+        lambda path, use_ray=False: FakeDataSource(),
+    )
+
     class FakeTokenizer:
         @classmethod
-        def from_data(cls, data):
-            calls.append("from_data")
+        def build_dictionary(cls, data_source, cfg=None):
+            calls.append("build_dictionary")
             return cls()
 
-        def transform_dataframe(self, data):
-            calls.append("transform_dataframe")
+        def transform(self, data_source):
+            calls.append("transform")
+            return data_source
 
     monkeypatch.setattr("sentimentizer.tokenizer.Tokenizer", FakeTokenizer)
-
-    fake_raw_df = pd.DataFrame({"tokens": ["hello world"] * 50, "stars": [5] * 50})
-    monkeypatch.setattr(pd, "read_parquet", lambda p: fake_raw_df)
 
     from workflows.stages.tokenize import run_tokenize
 
     state = State(model="rnn", device="cpu", run_type="new")
     run_tokenize(state)
 
-    assert "from_data" in calls, "Dictionary should have been created"
-    assert "transform_dataframe" not in calls, "Data should not have been transformed"
+    assert "build_dictionary" in calls, "Dictionary should have been created"
+    assert "transform" not in calls, "Data should not have been transformed"
 
 
 def test_run_tokenize_new_creates_data_when_rows_insufficient(
     monkeypatch: pytest.MonkeyPatch, tmp_path: str
 ) -> None:
     """run_type='new' should create both dictionary and data when rows are insufficient."""
-    import pandas as pd
-
     from sentimentizer.config import DriverConfig
     from workflows.driver import State
 
@@ -422,29 +431,41 @@ def test_run_tokenize_new_creates_data_when_rows_insufficient(
 
     calls: list[str] = []
 
+    class FakeDataSource:
+        def filter(self, **kwargs):
+            return self
+
+        def map_batches(self, *args, **kwargs):
+            return self
+
+        def write_parquet(self, path):
+            calls.append("write_parquet")
+
+    monkeypatch.setattr(
+        "sentimentizer.data_source.read_parquet",
+        lambda path, use_ray=False: FakeDataSource(),
+    )
+
     class FakeTokenizer:
         @classmethod
-        def from_data(cls, data):
-            calls.append("from_data")
+        def build_dictionary(cls, data_source, cfg=None):
+            calls.append("build_dictionary")
             return cls()
 
-        def transform_dataframe(self, data):
-            calls.append("transform_dataframe")
-            return pd.DataFrame()
+        def transform(self, data_source):
+            calls.append("transform")
+            return data_source
 
     monkeypatch.setattr("sentimentizer.tokenizer.Tokenizer", FakeTokenizer)
-
-    fake_raw_df = pd.DataFrame({"tokens": ["hello world"] * 50, "stars": [5] * 50})
-    monkeypatch.setattr(pd, "read_parquet", lambda p: fake_raw_df)
-    monkeypatch.setattr(pd.DataFrame, "to_parquet", lambda self, *a, **kw: None)
 
     from workflows.stages.tokenize import run_tokenize
 
     state = State(model="rnn", device="cpu", run_type="new")
     run_tokenize(state)
 
-    assert "from_data" in calls, "Dictionary should have been created"
-    assert "transform_dataframe" in calls, "Data should have been transformed"
+    assert "build_dictionary" in calls, "Dictionary should have been created"
+    assert "transform" in calls, "Data should have been transformed"
+    assert "write_parquet" in calls, "Data should have been written"
 
 
 def test_run_tokenize_update_skips_when_rows_exist(
