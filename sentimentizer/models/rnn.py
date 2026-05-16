@@ -1,6 +1,5 @@
 from pathlib import Path
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -15,6 +14,7 @@ from sentimentizer.config import (
     weights_path_for,
 )
 from sentimentizer.extractor import new_embedding_weights
+from sentimentizer.models.base import BaseSentimentModel
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
@@ -22,7 +22,7 @@ logger = new_logger(DEFAULT_LOG_LEVEL)
 _DEFAULT_RNN_CONFIG = RNNConfig()
 
 
-class RNN(nn.Module):
+class RNN(BaseSentimentModel):
     """Bidirectional LSTM for sentiment classification.
 
     Uses pre-trained GloVe embeddings, a multi-layer bidirectional LSTM that
@@ -150,21 +150,6 @@ class RNN(nn.Module):
 
         logits = self.classifier(hidden_cat)  # (B, 1)
         return torch.squeeze(logits)  # (B,)
-
-    def predict(self, converted_text: np.ndarray) -> torch.Tensor:
-        """Run inference with sigmoid activation.
-
-        Args:
-            converted_text: Token IDs as numpy array
-
-        Returns:
-            Sentiment score between 0 (negative) and 1 (positive)
-        """
-        with torch.no_grad():
-            self.eval()
-            device = next(self.parameters()).device
-            output = torch.from_numpy(converted_text).to(device)
-            return torch.sigmoid(self.forward(output))
 
 
 def new_model(

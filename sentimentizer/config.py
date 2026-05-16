@@ -60,28 +60,28 @@ class OptimizationParams:
 
 
 @dataclass
-class EncoderOptimizationParams:
+class EncoderOptimizationParams(OptimizationParams):
     """Optimization params for Transformer models (Encoder, Decoder).
 
     Uses lower LR and AdamW-style weight decay for stable training.
+    Inherits betas from OptimizationParams; overrides lr and weight_decay.
     """
 
     lr: float = 0.0005
-    betas: tuple[float, float] = (0.9, 0.999)
     weight_decay: float = 0.01
 
 
 @dataclass
-class DecoderOptimizationParams:
+class DecoderOptimizationParams(OptimizationParams):
     """Optimization params for Decoder model.
 
     The decoder has more parameters than the encoder due to cross-attention
     layers, so it uses a lower LR and higher weight decay to prevent
     overfitting on the sentiment classification task.
+    Inherits betas from OptimizationParams; overrides lr and weight_decay.
     """
 
     lr: float = 0.0003
-    betas: tuple[float, float] = (0.9, 0.999)
     weight_decay: float = 0.02
 
 
@@ -98,30 +98,31 @@ class SchedulerParams:
 
 
 @dataclass
-class EncoderSchedulerParams:
+class EncoderSchedulerParams(SchedulerParams):
     """Scheduler params for Encoder model.
 
     Includes warmup_epochs for linear LR warmup at the start of training.
+    Inherits eta_min and last_epoch from SchedulerParams; overrides T_max
+    and adds warmup_epochs.
     """
 
     T_max: int = 8
-    eta_min: float = 1e-6
-    last_epoch: int = -1
     warmup_epochs: int = 1  # linear warmup for this many epochs
 
 
 @dataclass
-class DecoderSchedulerParams:
+class DecoderSchedulerParams(SchedulerParams):
     """Scheduler params for Decoder model.
 
     Uses a longer warmup and higher minimum LR than the encoder because
     the decoder has more parameters and is more prone to overfitting
     during early training.
+    Inherits last_epoch from SchedulerParams; overrides T_max, eta_min,
+    and adds warmup_epochs.
     """
 
     T_max: int = 8
     eta_min: float = 1e-5
-    last_epoch: int = -1
     warmup_epochs: int = 2  # longer warmup for stable decoder training
 
 
