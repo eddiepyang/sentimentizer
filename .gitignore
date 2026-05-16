@@ -44,6 +44,12 @@ checkpoints/
 .bsp/
 *.egg-info/
 
+# ONNX export artifacts
+onnx_artifacts/
+
+# SetFit router model output
+models/router/
+
 
 # Ray Grafana dashboards (copied from installed package)
 # Keep custom dashboards, only ignore generated Ray ones

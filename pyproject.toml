@@ -46,6 +46,17 @@ ray = [
     "ray[tune]>=2.55.1,<2.56.0",
     "optuna>=4.8.0",
 ]
+router = [
+    "setfit>=1.1.0",
+    "datasets",
+    "requests",
+]
+onnx = [
+    "onnx",
+    "onnxruntime",
+    # optimum-onnx[onnxruntime] is needed for SetFit ONNX export (v2)
+    # but conflicts with numpy>=2.4.0; use optimum[onnxruntime]<2.0.0 if needed
+]
 dev = [
     "black>=26.3.0",
     "bumpver>=2025.1131",

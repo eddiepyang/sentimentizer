@@ -54,49 +54,91 @@ Each module exposes `get_trained_model(device, model_config=...)` to load pre-tr
 
 > **Note:** Serving requires the `ray` extra: `uv add "sentimentizer[ray]"`
 
-The `sentimentizer/serve.py` entry point deploys a Ray Serve application that loads **all three models** (RNN, Encoder, Decoder) at startup. You can select which model to use per request via the `model` field.
+The `sentimentizer serve` command deploys a unified Ray Serve application that loads **all three sentiment models** (RNN, Encoder, Decoder) and the **SetFit router** at startup. Both services share the same port with route-based dispatch.
 
 ```bash
-uv run serve run sentimentizer.serve:app --host 0.0.0.0 --port 8000
+sentimentizer serve --model-path models/router --port 8080
 ```
 
-Send a prediction request (defaults to RNN):
+#### Sentiment analysis endpoints
 
 ```bash
-curl -X POST http://localhost:8000 \
+# Single prediction (defaults to RNN)
+curl -X POST http://localhost:8080/predict \
   -H "Content-Type: application/json" \
   -d '{"text": "the food was terrific"}'
-```
 
-Use a specific model:
-
-```bash
-# Transformer Encoder (recommended)
-curl -X POST http://localhost:8000 \
+# Use a specific model
+curl -X POST http://localhost:8080/predict \
   -H "Content-Type: application/json" \
   -d '{"text": "the food was terrific", "model": "encoder"}'
 
-# Encoder-Decoder Transformer
-curl -X POST http://localhost:8000 \
+# Batch prediction
+curl -X POST http://localhost:8080/batch \
   -H "Content-Type: application/json" \
-  -d '{"text": "the food was terrific", "model": "decoder"}'
+  -d '{"texts": ["great pizza!", "terrible service"], "model": "encoder"}'
+
+# Tokenize text without inference
+curl -X POST http://localhost:8080/tokenize \
+  -H "Content-Type: application/json" \
+  -d '{"text": "the food was terrific"}'
+
+# List sentiment models
+curl http://localhost:8080/models
 ```
 
-Response:
+Sentiment response:
 
 ```json
 {
   "text": "the food was terrific",
-  "model": "encoder",
-  "sentiment_score": 0.9701,
-  "prediction": "positive"
+  "prediction": {
+    "model": "encoder",
+    "sentiment_score": 0.9701,
+    "label": "positive"
+  },
+  "latency_s": 0.0043
 }
 ```
 
-List all available models:
+#### Router (review categorization) endpoints
 
 ```bash
-curl http://localhost:8000/models
+# Classify a single review
+curl -X POST http://localhost:8080/router/predict \
+  -H "Content-Type: application/json" \
+  -d '{"text": "They were so careful with my celiac needs"}'
+
+# Classify multiple reviews
+curl -X POST http://localhost:8080/router/batch \
+  -H "Content-Type: application/json" \
+  -d '{"texts": ["Great gluten-free options!", "The waiter was rude", "Decent pizza"]}'
+
+# Router model metadata
+curl http://localhost:8080/router/models
+```
+
+Router response:
+
+```json
+{
+  "text": "They were so careful with my celiac needs",
+  "prediction": {
+    "category": "dietary",
+    "categories": {"0": "dietary", "1": "service", "2": "general"}
+  },
+  "latency_s": 0.0031
+}
+```
+
+#### Shared endpoints
+
+```bash
+# Health check
+curl http://localhost:8080/health
+
+# Request metrics (both sentiment and router)
+curl http://localhost:8080/metrics
 ```
 
 ### Go CLI Client
@@ -412,7 +454,7 @@ The pipeline consists of three stages, all powered by Ray:
 2. **Transform** — Converts tokens to numeric sequences using `ray.data.map_batches()` and writes processed parquet
 3. **Train** — Fits the model using either single-node PyTorch or distributed Ray Train with `TorchTrainer`
 
-Inference is served via Ray Serve (see `serve.py` and `sentimentizer/serve.py`).
+Inference is served via a unified Ray Serve deployment (see `sentimentizer/serve.py`) that handles both sentiment analysis and review routing.
 
 ## Docker
 
@@ -478,6 +520,73 @@ conda install pip
 pip install -e .
 ```
 
+## ONNX Export
+
+Export trained models to ONNX format for CPU-optimized inference (INT8 quantization for AVX-512):
+
+```bash
+# Export RNN with quantization (recommended)
+sentimentizer export --model rnn --quantize
+
+# Export Encoder
+sentimentizer export --model encoder --quantize
+
+# Export Decoder (no quantization)
+sentimentizer export --model decoder --no-quantize
+
+# Custom output directory
+sentimentizer export --model encoder --output-dir my_onnx_models/
+```
+
+ONNX artifacts are saved to `onnx_artifacts/` (gitignored) with metadata JSON alongside each model.
+
+> **Note:** ONNX export requires the `onnx` extra: `pip install -e ".[onnx]"`
+
+**Tolerances**: RNN uses `1e-2` (relaxed, due to masked LSTM fallback), Encoder/Decoder use `1e-4`.
+
+## SetFit Router
+
+A routing classifier that categorizes Yelp reviews into three categories:
+
+| Label | Category | Description |
+|-------|----------|-------------|
+| 0 | Dietary | Food allergies, celiac, FODMAP, ingredient safety |
+| 1 | Service | Wait times, staff behavior, reservation issues |
+| 2 | General | Ambiance, price, general food quality |
+
+### Training
+
+> **Note:** Router training requires the `router` extra: `pip install -e ".[router]"`
+
+```bash
+# 1. Augment seed utterances with GLM 5.1 (requires Ollama running)
+sentimentizer router augment --output augmented_yelp.jsonl
+
+# 2. Train the router
+sentimentizer router train --data augmented_yelp.jsonl
+
+# 3. Evaluate (similarity matrix + threshold calibration)
+sentimentizer router evaluate --model-path models/router --data augmented_yelp.jsonl
+```
+
+The `augment` command supports options for model, variations per seed, and Ollama URL:
+
+```bash
+# Customize augmentation
+sentimentizer router augment --model glm-5.1:cloud --variations 30 --output my_data.jsonl
+
+# Point to a remote Ollama instance
+sentimentizer router augment --ollama-url http://remote:11434/api/generate
+```
+
+**Evaluation targets**: inter-class similarity < 0.65, intra-class similarity > 0.85.
+
+The default base model is `BAAI/bge-base-en-v1.5` (109M params, 768-dim embeddings, strong MTEB scores). Switch to `mxbai-embed-large-v1` only if evaluation thresholds are not met:
+
+```bash
+sentimentizer router train --data augmented_yelp.jsonl --base-model mxbai-embed-large-v1
+```
+
 ## Testing
 
 ```bash
@@ -503,7 +612,8 @@ sentimentizer/
 ├── tokenizer.py         # Text tokenizer with pre-trained support
 ├── trainer.py           # Training logic
 ├── tuner.py             # Ray Tune + Optuna hyperparameter search
-├── serve.py             # Ray Serve deployment app
+├── serve.py             # Unified Ray Serve deployment (sentiment + router)
+├── serve_base.py         # Shared serve infrastructure (metrics, response builders)
 ├── hf.py                # Hugging Face Hub push/pull + model card generation
 ├── data/                # Training data (Yelp, GloVe)
 ├── agent/               # LLM-guided tuning agent
@@ -517,6 +627,14 @@ sentimentizer/
 │   ├── nodes.py         # LangGraph node functions (analyze, decide, tune, evaluate)
 │   ├── graph.py         # LangGraph StateGraph + run_agent_tuning() entry point
 │   └── skill.py         # TuningRun skill (tune → train → validate → retry pipeline)
+├── router/               # SetFit router module
+│   ├── __init__.py      # Package exports
+│   ├── config.py        # SetFitConfig, RouteLabels, AugmentConfig
+│   ├── seeds.py         # Golden example utterances per category
+│   ├── augment.py       # GLM 5.1 augmentation via Ollama
+│   ├── dataset.py       # JSONL dataset loader, train/test split
+│   ├── train_router.py  # SetFit training with compat shims
+│   └── evaluate.py      # Similarity heatmap, threshold calibration
 └── models/
     ├── __init__.py
     ├── rnn.py           # RNN model with GloVe embeddings

@@ -22,6 +22,7 @@ from sentimentizer.agent.loader import load_agent_config
 from sentimentizer.agent.models import AgentRunResult, AnalysisResult, TuningDecision, TuningResult
 from sentimentizer.agent.state import AgentState
 from sentimentizer.config import DEFAULT_LOG_LEVEL
+from sentimentizer.prompts import load_prompt
 from sentimentizer.tuner import load_search_space
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
@@ -48,7 +49,7 @@ async def analyze(state: AgentState) -> dict[str, Any]:
     )
 
     iteration = state.get("iteration", 0)
-    prompt = f"Analyze the tuning results after iteration {iteration}."
+    prompt = load_prompt("analyze_node").format(iteration=iteration)
     if state.get("history"):
         prompt += " Use get_previous_results and get_current_metrics to examine the data."
 
@@ -100,7 +101,7 @@ async def decide(state: AgentState) -> dict[str, Any]:
         search_space_defaults=default_space,
     )
 
-    prompt = "Based on the analysis, decide the next tuning strategy."
+    prompt = load_prompt("decide_node")
     if state.get("current_analysis"):
         prompt += f" The analysis found: {state['current_analysis'].summary}"
 
