@@ -37,64 +37,11 @@ from sentimentizer.config import (
 )
 from sentimentizer.loader import CorpusDataset
 from sentimentizer.metrics import ClassificationMetrics
+from sentimentizer.metrics_publisher import publish_epoch_metrics, write_epoch_metrics_to_file
 
-# ---------------------------------------------------------------------------
-# Shared metrics persistence helpers
-# ---------------------------------------------------------------------------
-
-
-def _write_epoch_metrics_to_file(
-    *,
-    model_type: str,
-    epoch: int,
-    train_loss: float,
-    val_loss: float,
-    metrics: ClassificationMetrics,
-    lr: float | None = None,
-) -> None:
-    """Write current epoch metrics to the per-model JSON file.
-
-    Each model type writes to its own file
-    (``/tmp/sentimentizer_metrics/{model_type}_metrics.json``) so concurrent
-    training processes never race on a shared JSON file.  The standalone
-    exporter discovers the file directly by model type.
-    """
-    import contextlib
-    import json
-    import time
-    from pathlib import Path
-
-    metrics_dir = Path("/tmp/sentimentizer_metrics")
-    with contextlib.suppress(OSError):
-        metrics_dir.mkdir(parents=True, exist_ok=True)
-
-    path = metrics_dir / f"{model_type}_metrics.json"
-
-    auc_roc = metrics.auc_roc
-    avg_precision = metrics.avg_precision
-    data = {
-        "train_loss": float(train_loss),
-        "val_loss": float(val_loss),
-        "accuracy": float(metrics.accuracy),
-        "precision": float(metrics.precision),
-        "recall": float(metrics.recall),
-        "f1": float(metrics.f1),
-        "cohen_kappa": float(metrics.cohen_kappa),
-        "mcc": float(metrics.mcc),
-        "npv": float(metrics.npv),
-        "macro_f1": float(metrics.macro_f1),
-        "auc_roc": float(auc_roc) if auc_roc is not None else None,
-        "avg_precision": float(avg_precision) if avg_precision is not None else None,
-        "positive_accuracy": float(metrics.positive_accuracy),
-        "negative_accuracy": float(metrics.negative_accuracy),
-        "epoch": int(epoch),
-        "lr": float(lr) if lr is not None else None,
-        "_written_by": model_type,
-        "_written_at": time.time(),
-    }
-
-    with contextlib.suppress(OSError):
-        path.write_text(json.dumps(data, indent=2))
+# Backward-compatible alias — existing code imports _write_epoch_metrics_to_file
+# from this module.  The canonical location is now metrics_publisher.
+_write_epoch_metrics_to_file = write_epoch_metrics_to_file
 
 
 # ---------------------------------------------------------------------------
@@ -283,6 +230,46 @@ def val_step(
     return loss.item()
 
 
+def compute_epoch_metrics(
+    probabilities: np.ndarray,
+    targets: np.ndarray,
+    model_type: str,
+) -> ClassificationMetrics:
+    """Compute classification metrics from raw probabilities and targets.
+
+    Handles NaN replacement in probabilities before computing metrics.
+    This is the shared post-processing logic that was previously duplicated
+    in both Trainer.evaluate() and _train_func().
+
+    Args:
+        probabilities: Raw sigmoid output, shape (N,). May contain NaN values.
+        targets: Ground truth labels, shape (N,).
+        model_type: Model type label for logging.
+
+    Returns:
+        ClassificationMetrics with all standard classification metrics.
+    """
+    # Replace NaN probabilities with 0.5 (can result from extreme logit values)
+    nan_mask = np.isnan(probabilities)
+    if nan_mask.any():
+        nan_count = int(nan_mask.sum())
+        logger.warning(
+            f"[{model_type}] nan_in_probabilities",
+            message=f"Found {nan_count} NaN values in probabilities, replacing with 0.5",
+        )
+        probabilities = np.where(nan_mask, 0.5, probabilities)
+
+    predictions = (probabilities >= 0.5).astype(int)
+
+    from sentimentizer.metrics import compute_classification_metrics
+
+    return compute_classification_metrics(
+        predictions=predictions,
+        targets=targets,
+        probabilities=probabilities,
+    )
+
+
 def _new_loaders(
     train_data: CorpusDataset, val_data: CorpusDataset, cfg: TrainerConfig
 ) -> tuple[DataLoader, DataLoader]:
@@ -458,123 +445,22 @@ class Trainer:
         probabilities = torch.cat(all_probs).numpy()
         targets = torch.cat(all_targets).numpy()
 
-        # Replace NaN probabilities with 0.5 (can result from extreme logit values)
-        nan_mask = np.isnan(probabilities)
-        if nan_mask.any():
-            nan_count = int(nan_mask.sum())
-            logger.warning(
-                f"[{self.model_type}] nan_in_probabilities",
-                message=f"Found {nan_count} NaN values in probabilities, replacing with 0.5",
-            )
-            probabilities = np.where(nan_mask, 0.5, probabilities)
-
-        predictions = (probabilities >= 0.5).astype(int)
-
-        from sentimentizer.metrics import compute_classification_metrics
-
-        metrics = compute_classification_metrics(
-            predictions=predictions,
-            targets=targets,
-            probabilities=probabilities,
-        )
+        metrics = compute_epoch_metrics(probabilities, targets, self.model_type)
 
         self.val_loss = float(np.mean(losses))
         self.latest_train_loss = float(np.mean(self.losses)) if self.losses else 0.0
         self.latest_epoch = epoch
         self.latest_metrics = metrics
-        gauges = _get_ray_gauges(self.model_type)
-        if gauges is not None:
-            gauges["train_loss"].set(self.latest_train_loss)
-            gauges["val_loss"].set(self.val_loss)
-            gauges["val_accuracy"].set(float(metrics.accuracy))
-            gauges["val_precision"].set(float(metrics.precision))
-            gauges["val_recall"].set(float(metrics.recall))
-            gauges["val_f1"].set(float(metrics.f1))
-            gauges["val_cohen_kappa"].set(float(metrics.cohen_kappa))
-            gauges["val_mcc"].set(float(metrics.mcc))
-            gauges["val_npv"].set(float(metrics.npv))
-            gauges["val_macro_f1"].set(float(metrics.macro_f1))
-            if metrics.auc_roc is not None:
-                gauges["val_auc_roc"].set(float(metrics.auc_roc))
-            if metrics.avg_precision is not None:
-                gauges["val_avg_precision"].set(float(metrics.avg_precision))
-            gauges["val_positive_accuracy"].set(float(metrics.positive_accuracy))
-            gauges["val_negative_accuracy"].set(float(metrics.negative_accuracy))
-            gauges["epoch"].set(epoch)
-            gauges["lr"].set(float(self.optimizer.param_groups[0]["lr"]))
 
-        # Also push to the standalone Prometheus exporter gauges
-        try:
-            from sentimentizer.exporter import (
-                TRAINING_EPOCH,
-                TRAINING_LR,
-                TRAINING_TRAIN_LOSS,
-                TRAINING_VAL_ACCURACY,
-                TRAINING_VAL_AUC_ROC,
-                TRAINING_VAL_AVG_PRECISION,
-                TRAINING_VAL_COHEN_KAPPA,
-                TRAINING_VAL_F1,
-                TRAINING_VAL_LOSS,
-                TRAINING_VAL_MACRO_F1,
-                TRAINING_VAL_MCC,
-                TRAINING_VAL_NEGATIVE_ACCURACY,
-                TRAINING_VAL_NPV,
-                TRAINING_VAL_POSITIVE_ACCURACY,
-                TRAINING_VAL_PRECISION,
-                TRAINING_VAL_RECALL,
-            )
-
-            lbl = {"model_type": self.model_type}
-            TRAINING_TRAIN_LOSS.labels(**lbl).set(self.latest_train_loss)
-            TRAINING_VAL_LOSS.labels(**lbl).set(self.val_loss)
-            TRAINING_VAL_ACCURACY.labels(**lbl).set(float(metrics.accuracy))
-            TRAINING_VAL_PRECISION.labels(**lbl).set(float(metrics.precision))
-            TRAINING_VAL_RECALL.labels(**lbl).set(float(metrics.recall))
-            TRAINING_VAL_F1.labels(**lbl).set(float(metrics.f1))
-            TRAINING_VAL_COHEN_KAPPA.labels(**lbl).set(float(metrics.cohen_kappa))
-            TRAINING_VAL_MCC.labels(**lbl).set(float(metrics.mcc))
-            TRAINING_VAL_NPV.labels(**lbl).set(float(metrics.npv))
-            TRAINING_VAL_MACRO_F1.labels(**lbl).set(float(metrics.macro_f1))
-            if metrics.auc_roc is not None:
-                TRAINING_VAL_AUC_ROC.labels(**lbl).set(float(metrics.auc_roc))
-            if metrics.avg_precision is not None:
-                TRAINING_VAL_AVG_PRECISION.labels(**lbl).set(float(metrics.avg_precision))
-            TRAINING_VAL_POSITIVE_ACCURACY.labels(**lbl).set(float(metrics.positive_accuracy))
-            TRAINING_VAL_NEGATIVE_ACCURACY.labels(**lbl).set(float(metrics.negative_accuracy))
-            TRAINING_EPOCH.labels(**lbl).set(epoch)
-            TRAINING_LR.labels(**lbl).set(float(self.optimizer.param_groups[0]["lr"]))
-        except ImportError:
-            pass
-
-        # Write current metrics to the JSON file so the standalone exporter
-        # serves up-to-date data in the dashboard table panel.
-        _write_epoch_metrics_to_file(
+        # Publish metrics to all backends (Ray gauges, Prometheus, JSON, logger)
+        publish_epoch_metrics(
             model_type=self.model_type,
             epoch=epoch,
             train_loss=self.latest_train_loss,
             val_loss=self.val_loss,
             metrics=metrics,
             lr=self.optimizer.param_groups[0]["lr"],
-        )
-
-        logger.info(  # type: ignore[call-arg]
-            f"[{self.model_type}] [epoch {epoch}] evaluation complete",
-            model_type=self.model_type,
-            val_loss=round(self.val_loss, 4),
-            accuracy=round(metrics.accuracy, 4),
-            precision=round(metrics.precision, 4),
-            recall=round(metrics.recall, 4),
-            f1=round(metrics.f1, 4),
-            cohen_kappa=round(metrics.cohen_kappa, 4),
-            mcc=round(metrics.mcc, 4),
-            npv=round(metrics.npv, 4),
-            macro_f1=round(metrics.macro_f1, 4),
-            auc_roc=(round(metrics.auc_roc, 4) if metrics.auc_roc is not None else None),
-            avg_precision=(
-                round(metrics.avg_precision, 4) if metrics.avg_precision is not None else None
-            ),
-            pos_acc=round(metrics.positive_accuracy, 4),
-            neg_acc=round(metrics.negative_accuracy, 4),
+            ray_gauges=_get_ray_gauges(self.model_type),
         )
 
 
@@ -689,8 +575,13 @@ def _train_func(config: dict) -> None:
     Reports metrics and checkpoints back to Ray Train.
     """
 
-    # Suppress smart_open verbose docstring logging in Ray workers
-    os.environ.setdefault("SMART_OPEN_QUIET", "1")
+    # Suppress smart_open verbose docstring logging in Ray workers.
+    # smart_open prints its module docstring via logging.info on import,
+    # which floods Ray worker logs. Set the logger level to WARNING before
+    # any library imports smart_open.
+    import logging
+
+    logging.getLogger("smart_open").setLevel(logging.WARNING)
 
     # Unpack training config (resolve -1 to model-specific default)
     epochs = config["epochs"]
@@ -820,128 +711,22 @@ def _train_func(config: dict) -> None:
         val_loss = float(np.mean(val_losses)) if val_losses else 0.0
         train_loss = float(np.mean(epoch_losses)) if epoch_losses else 0.0
 
-        from sentimentizer.metrics import compute_classification_metrics
-
         probabilities = torch.cat(all_probs).numpy()
         targets = torch.cat(all_targets).numpy()
 
-        # Replace NaN probabilities with 0.5 (can result from extreme logit values)
-        nan_mask = np.isnan(probabilities)
-        if nan_mask.any():
-            nan_count = int(nan_mask.sum())
-            logger.warning(
-                f"[{model_type}] nan_in_probabilities",
-                message=f"Found {nan_count} NaN values in probabilities, replacing with 0.5",
-            )
-            probabilities = np.where(nan_mask, 0.5, probabilities)
+        metrics = compute_epoch_metrics(probabilities, targets, model_type)
 
-        predictions = (probabilities >= 0.5).astype(int)
-
-        metrics = compute_classification_metrics(
-            predictions=predictions,
-            targets=targets,
-            probabilities=probabilities,
-        )
-
-        # Update Ray custom metrics gauges from rank 0 to prevent worker collisions
+        # Publish metrics from rank 0 to prevent worker collisions
         if train.get_context().get_world_rank() == 0:
-            gauges = _get_ray_gauges(model_type)
-            if gauges is not None:
-                gauges["train_loss"].set(float(train_loss))
-                gauges["val_loss"].set(float(val_loss))
-                gauges["val_accuracy"].set(float(metrics.accuracy))
-                gauges["val_precision"].set(float(metrics.precision))
-                gauges["val_recall"].set(float(metrics.recall))
-                gauges["val_f1"].set(float(metrics.f1))
-                gauges["val_cohen_kappa"].set(float(metrics.cohen_kappa))
-                gauges["val_mcc"].set(float(metrics.mcc))
-                gauges["val_npv"].set(float(metrics.npv))
-                gauges["val_macro_f1"].set(float(metrics.macro_f1))
-                if metrics.auc_roc is not None:
-                    gauges["val_auc_roc"].set(float(metrics.auc_roc))
-                if metrics.avg_precision is not None:
-                    gauges["val_avg_precision"].set(float(metrics.avg_precision))
-                gauges["val_positive_accuracy"].set(float(metrics.positive_accuracy))
-                gauges["val_negative_accuracy"].set(float(metrics.negative_accuracy))
-                gauges["epoch"].set(epoch)
-                gauges["lr"].set(float(optimizer.param_groups[0]["lr"]))
-
-        # Also push to standalone Prometheus exporter gauges from rank 0
-        try:
-            from sentimentizer.exporter import (
-                TRAINING_EPOCH,  # noqa: E402
-                TRAINING_LR,
-                TRAINING_TRAIN_LOSS,
-                TRAINING_VAL_ACCURACY,
-                TRAINING_VAL_AUC_ROC,
-                TRAINING_VAL_AVG_PRECISION,
-                TRAINING_VAL_COHEN_KAPPA,
-                TRAINING_VAL_F1,
-                TRAINING_VAL_LOSS,
-                TRAINING_VAL_MACRO_F1,
-                TRAINING_VAL_MCC,
-                TRAINING_VAL_NEGATIVE_ACCURACY,
-                TRAINING_VAL_NPV,
-                TRAINING_VAL_POSITIVE_ACCURACY,
-                TRAINING_VAL_PRECISION,
-                TRAINING_VAL_RECALL,
-            )
-
-            if train.get_context().get_world_rank() == 0:
-                lbl = {"model_type": model_type}
-                TRAINING_TRAIN_LOSS.labels(**lbl).set(float(train_loss))
-                TRAINING_VAL_LOSS.labels(**lbl).set(float(val_loss))
-                TRAINING_VAL_ACCURACY.labels(**lbl).set(float(metrics.accuracy))
-                TRAINING_VAL_PRECISION.labels(**lbl).set(float(metrics.precision))
-                TRAINING_VAL_RECALL.labels(**lbl).set(float(metrics.recall))
-                TRAINING_VAL_F1.labels(**lbl).set(float(metrics.f1))
-                TRAINING_VAL_COHEN_KAPPA.labels(**lbl).set(float(metrics.cohen_kappa))
-                TRAINING_VAL_MCC.labels(**lbl).set(float(metrics.mcc))
-                TRAINING_VAL_NPV.labels(**lbl).set(float(metrics.npv))
-                TRAINING_VAL_MACRO_F1.labels(**lbl).set(float(metrics.macro_f1))
-                if metrics.auc_roc is not None:
-                    TRAINING_VAL_AUC_ROC.labels(**lbl).set(float(metrics.auc_roc))
-                if metrics.avg_precision is not None:
-                    TRAINING_VAL_AVG_PRECISION.labels(**lbl).set(float(metrics.avg_precision))
-                TRAINING_VAL_POSITIVE_ACCURACY.labels(**lbl).set(float(metrics.positive_accuracy))
-                TRAINING_VAL_NEGATIVE_ACCURACY.labels(**lbl).set(float(metrics.negative_accuracy))
-                TRAINING_EPOCH.labels(**lbl).set(epoch)
-                TRAINING_LR.labels(**lbl).set(float(optimizer.param_groups[0]["lr"]))
-        except ImportError:
-            pass
-
-        # Persist metrics to JSON regardless of whether exporter module is
-        # available — the standalone exporter reads this file on port 8081.
-        if train.get_context().get_world_rank() == 0:
-            _write_epoch_metrics_to_file(
+            publish_epoch_metrics(
                 model_type=model_type,
                 epoch=epoch,
                 train_loss=float(train_loss),
                 val_loss=float(val_loss),
                 metrics=metrics,
                 lr=optimizer.param_groups[0]["lr"],
+                ray_gauges=_get_ray_gauges(model_type),
             )
-
-        logger.info(  # type: ignore[call-arg]
-            f"[{model_type}] [epoch {epoch}] completed",
-            model_type=model_type,
-            train_loss=round(train_loss, 4),
-            val_loss=round(val_loss, 4),
-            accuracy=round(metrics.accuracy, 4),
-            precision=round(metrics.precision, 4),
-            recall=round(metrics.recall, 4),
-            f1=round(metrics.f1, 4),
-            cohen_kappa=round(metrics.cohen_kappa, 4),
-            mcc=round(metrics.mcc, 4),
-            npv=round(metrics.npv, 4),
-            macro_f1=round(metrics.macro_f1, 4),
-            auc_roc=(round(metrics.auc_roc, 4) if metrics.auc_roc is not None else None),
-            avg_precision=(
-                round(metrics.avg_precision, 4) if metrics.avg_precision is not None else None
-            ),
-            pos_acc=round(metrics.positive_accuracy, 4),
-            neg_acc=round(metrics.negative_accuracy, 4),
-        )
 
         # Report metrics and checkpoint to Ray Train
         # Ray 2.55+ requires directory-based checkpoints (from_dict removed)

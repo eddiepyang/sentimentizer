@@ -1,7 +1,6 @@
 import math
 from pathlib import Path
 
-import numpy as np
 import torch
 from gensim import corpora
 from torch import nn
@@ -15,6 +14,7 @@ from sentimentizer.config import (
     weights_path_for,
 )
 from sentimentizer.extractor import new_embedding_weights
+from sentimentizer.models.base import BaseSentimentModel
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
@@ -53,7 +53,7 @@ class PositionalEncoding(nn.Module):
         return self.dropout(x)
 
 
-class Encoder(nn.Module):
+class Encoder(BaseSentimentModel):
     """Transformer encoder for sentiment classification.
 
     Uses full self-attention over the token sequence, a learnable CLS token
@@ -166,21 +166,6 @@ class Encoder(nn.Module):
         # Classify
         logits = self.classifier(cls_out)  # (B, 1)
         return torch.squeeze(logits)  # (B,)
-
-    def predict(self, converted_text: np.ndarray) -> torch.Tensor:
-        """Run inference with sigmoid activation.
-
-        Args:
-            converted_text: Token IDs as numpy array
-
-        Returns:
-            Sentiment score between 0 (negative) and 1 (positive)
-        """
-        with torch.no_grad():
-            self.eval()
-            device = next(self.parameters()).device
-            output = torch.from_numpy(converted_text).to(device)
-            return torch.sigmoid(self.forward(output))
 
 
 def new_model(

@@ -852,7 +852,9 @@ class TestMetricsPersistence:
         from pathlib import Path
 
         from sentimentizer.metrics import ClassificationMetrics
-        from sentimentizer.trainer import _write_epoch_metrics_to_file
+        from sentimentizer.metrics_publisher import (
+            write_epoch_metrics_to_file as _write_epoch_metrics_to_file,
+        )
 
         metrics = ClassificationMetrics(
             accuracy=0.8,
@@ -937,6 +939,53 @@ class TestMetricsPersistence:
         assert data["macro_f1"] == 0.65
         assert data["avg_precision"] == 0.78
         path.unlink(missing_ok=True)
+
+    def test_publish_epoch_metrics_no_type_error_with_standard_logger(self) -> None:
+        """publish_epoch_metrics must not raise TypeError with standard logger.
+
+        Regression test: publish_epoch_metrics used keyword arguments
+        (model_type=, val_loss=, etc.) with logging.getLogger(), which only
+        accepts exc_info, extra, stack_info, and stacklevel. This caused
+        ``TypeError: Logger._log() got an unexpected keyword argument 'model_type'``
+        in distributed training (Ray workers use standard logging, not structlog).
+        """
+        from unittest.mock import patch
+
+        from sentimentizer.metrics import ClassificationMetrics
+        from sentimentizer.metrics_publisher import publish_epoch_metrics
+
+        metrics = ClassificationMetrics(
+            accuracy=0.8,
+            precision=0.75,
+            recall=0.7,
+            f1=0.72,
+            cohen_kappa=0.5,
+            mcc=0.4,
+            npv=0.6,
+            macro_f1=0.65,
+            auc_roc=0.85,
+            avg_precision=0.78,
+            positive_accuracy=0.8,
+            negative_accuracy=0.7,
+            tp=4,
+            tn=3,
+            fp=1,
+            fn=1,
+            total=9,
+        )
+
+        # publish_epoch_metrics must not raise TypeError
+        # (or any other exception) when called with standard logger
+        with patch("sentimentizer.metrics_publisher._set_prometheus_gauges"):
+            publish_epoch_metrics(
+                model_type="test_logger",
+                epoch=1,
+                train_loss=0.42,
+                val_loss=0.55,
+                metrics=metrics,
+                lr=0.001,
+                ray_gauges=None,
+            )
 
     def test_evaluate_sets_train_loss_ray_gauge(self) -> None:
         """Trainer.evaluate() must set the train_loss Ray gauge.

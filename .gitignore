@@ -14,7 +14,8 @@
 *.parquet
 *.pth
 *.dictionary
-
+*.jsonl
+*.pt
 PKG-INFO
 
 /.ipynb_checkpoints/*
