@@ -282,6 +282,8 @@ class TestSearchSpaceBuilding:
 
     def test_build_search_space_rnn(self):
         """Building RNN search space should produce valid Ray Tune domains."""
+        pytest.importorskip("ray")
+
         from sentimentizer.tuner import build_search_space
 
         space = build_search_space("rnn")
@@ -293,6 +295,8 @@ class TestSearchSpaceBuilding:
 
     def test_build_search_space_encoder(self):
         """Building encoder search space should include transformer params."""
+        pytest.importorskip("ray")
+
         from sentimentizer.tuner import build_search_space
 
         space = build_search_space("encoder")
@@ -302,6 +306,8 @@ class TestSearchSpaceBuilding:
 
     def test_build_search_space_with_overrides(self):
         """Overrides should replace default search space entries."""
+        pytest.importorskip("ray")
+
         from sentimentizer.tuner import build_search_space
 
         overrides = {
@@ -312,6 +318,8 @@ class TestSearchSpaceBuilding:
 
     def test_build_search_space_invalid_model(self):
         """Building search space for invalid model should raise ValueError."""
+        pytest.importorskip("ray")
+
         from sentimentizer.tuner import build_search_space
 
         with pytest.raises(ValueError):
