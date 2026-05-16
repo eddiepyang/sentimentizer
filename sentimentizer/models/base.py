@@ -1,7 +1,7 @@
 """Base class and registry for sentiment analysis models.
 
 Provides:
-- BaseSentimentModel: Shared predict() method for inference
+- BaseSentimentModel: Shared predict() and predict_text() methods for inference
 - MODEL_REGISTRY: Dict mapping model_type → (model_class, config_class, new_model_func)
 - get_trained_model: Unified model loading from registry (replaces per-file duplicates)
 """
@@ -9,7 +9,7 @@ Provides:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
@@ -17,18 +17,27 @@ import torch.nn as nn
 
 from sentimentizer.config import VALID_DEVICES
 
+if TYPE_CHECKING:
+    from sentimentizer.tokenizer import Tokenizer
+
 
 class BaseSentimentModel(nn.Module):
     """Base class for all sentiment analysis models.
 
-    Provides the shared predict() method that was previously duplicated
-    across RNN, Encoder, and Decoder. Subclasses must implement forward().
+    Provides the shared predict() and predict_text() methods that were
+    previously duplicated across RNN, Encoder, and Decoder. Subclasses
+    must implement forward().
 
     The predict() method:
     1. Disables gradient computation (torch.no_grad)
     2. Sets the model to eval mode
     3. Moves input to the model's device
     4. Returns sigmoid(forward(x)) — a probability in [0, 1]
+
+    The predict_text() method combines tokenization and prediction:
+    1. Tokenizes raw text using the provided Tokenizer
+    2. Calls predict() on the resulting token IDs
+    3. Returns a float sentiment score
     """
 
     def predict(self, converted_text: np.ndarray) -> torch.Tensor:
@@ -45,6 +54,23 @@ class BaseSentimentModel(nn.Module):
             device = next(self.parameters()).device
             output = torch.from_numpy(converted_text).to(device)
             return torch.sigmoid(self.forward(output))
+
+    def predict_text(self, text: str, tokenizer: Tokenizer) -> float:
+        """Tokenize raw text and run sentiment prediction in one call.
+
+        Combines tokenization and model inference, eliminating the need
+        to call tokenizer.tokenize_text() and model.predict() separately.
+
+        Args:
+            text: Raw text string to classify.
+            tokenizer: A Tokenizer instance with a loaded dictionary.
+
+        Returns:
+            Sentiment score between 0.0 (negative) and 1.0 (positive).
+        """
+        token_ids = tokenizer.tokenize_text(text)
+        score = self.predict(token_ids).item()
+        return score
 
 
 # ──────────────────────────────────────────────

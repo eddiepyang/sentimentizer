@@ -171,7 +171,6 @@ class Decoder(BaseSentimentModel):
         logits = self.classifier(query_out)  # (B, 1)
         return torch.squeeze(logits)  # (B,)
 
-
 def new_model(
     dict_path: str,
     embeddings_config: EmbeddingsConfig,

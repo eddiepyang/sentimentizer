@@ -76,6 +76,7 @@ sentimentizer/
   metrics.py        — ClassificationMetrics dataclass + compute functions
   export_onnx.py    — Unified ONNX export, quantization, validation (_RNNOnnxWrapper)
   models/
+    base.py          — BaseSentimentModel with predict() and predict_text()
     rnn.py          — Bidirectional LSTM (with onnx_export flag)
     encoder.py      — Transformer encoder with CLS token
     decoder.py      — Encoder-decoder transformer
@@ -176,6 +177,7 @@ Grafana only reads provisioned dashboard files on **startup**, so a restart is r
 - `prometheus_client` gauges must NOT be created at module import time for Ray workers — use lazy init via `_get_ray_gauges()`
 - `ray.init(ignore_reinit_error=True)` in tests; `ray.shutdown()` in cleanup
 - All function signatures need type hints
+- **Always run lint before tests after code changes**: `make test-lint` (runs `ruff check .` then `pytest`). Alternatively, run `make lint` first, fix any findings, then `make test`. Never skip lint — it catches issues that tests won't.
 - When iterating over DataFrame or batch columns containing token lists, use `list(doc_tokens)` with a `TypeError` catch — never `str(doc_tokens)`. Numpy arrays from parquet are iterable but not `isinstance(x, list)`, and `str()` produces array representations with wrapping quotes
 - Scheduler `T_max` must match `default_epochs()` for the model type — otherwise LR decays to minimum before training finishes
 - _LinearWarmupCosineScheduler warmup must use `(step + 1) / warmup_steps` to avoid zero LR at step 0
@@ -186,6 +188,7 @@ Grafana only reads provisioned dashboard files on **startup**, so a restart is r
 - `torchmetrics.BinaryCohenKappa` returns `nan` for single-class targets — always wrap with `_safe_item()` to coerce `nan→0.0` for Prometheus gauge compatibility
 - Single-class Cohen's kappa is `0.0` (not `1.0`) — this is a behavioral change from the previous custom implementation
 - Empty arrays must be guarded before calling torchmetrics (it crashes on empty input) — use the `if total == 0` early return in `compute_classification_metrics()`
+- **`predict_text(text, tokenizer)` is the preferred way to do single-text inference** — it combines tokenization and model prediction into one call, returning a `float` score. Use `predict(np.ndarray)` only when you already have tokenized input (e.g., batch processing). Never call `tokenizer.tokenize_text()` → `model.predict()` → `.item()` manually when `predict_text()` would suffice — the combined method ensures `torch.no_grad()` and `model.eval()` are always applied correctly.
 
 ### ONNX Export
 

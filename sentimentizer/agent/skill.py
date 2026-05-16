@@ -601,7 +601,6 @@ class TuningRun:
             results is a list of per-example validation details, and
             metrics is a dict of ClassificationMetrics fields.
         """
-        import torch
 
         from sentimentizer.metrics import compute_metrics_from_examples
 
@@ -653,14 +652,8 @@ class TuningRun:
             text = example["text"]
             expected = example["expected"]
 
-            # Tokenize
-            token_ids = tokenizer.tokenize_text(text)
-            input_tensor = torch.from_numpy(token_ids).long().to(device)
-
-            # Predict
-            with torch.no_grad():
-                logit = model(input_tensor)
-                score = torch.sigmoid(logit).item()
+            # Tokenize and predict in one call
+            score = model.predict_text(text, tokenizer)
 
             # Determine if prediction is correct
             is_correct = score > 0.5 if expected == "positive" else score < 0.5
