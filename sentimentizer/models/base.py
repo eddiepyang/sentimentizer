@@ -40,6 +40,10 @@ class BaseSentimentModel(nn.Module):
     3. Returns a float sentiment score
     """
 
+    def __init__(self, tokenizer: Tokenizer | None = None) -> None:
+        super().__init__()
+        self.tokenizer = tokenizer  # Tokenizer will be set externally after model creation
+
     def predict(self, converted_text: np.ndarray) -> torch.Tensor:
         """Run inference with sigmoid activation.
 
@@ -55,7 +59,7 @@ class BaseSentimentModel(nn.Module):
             output = torch.from_numpy(converted_text).to(device)
             return torch.sigmoid(self.forward(output))
 
-    def predict_text(self, text: str, tokenizer: Tokenizer) -> float:
+    def predict_text(self, text: str) -> float:
         """Tokenize raw text and run sentiment prediction in one call.
 
         Combines tokenization and model inference, eliminating the need
@@ -68,7 +72,7 @@ class BaseSentimentModel(nn.Module):
         Returns:
             Sentiment score between 0.0 (negative) and 1.0 (positive).
         """
-        token_ids = tokenizer.tokenize_text(text)
+        token_ids = self.tokenizer.tokenize_text(text)
         score = self.predict(token_ids).item()
         return score
 

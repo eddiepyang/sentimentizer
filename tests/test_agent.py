@@ -413,7 +413,7 @@ class TestGraphConstruction:
         """Building the graph should produce a compiled graph."""
         from sentimentizer.agent.graph import build_graph
 
-        graph = build_graph(model_type="rnn")
+        graph = build_graph()
         assert graph is not None
 
     def test_create_initial_state(self):

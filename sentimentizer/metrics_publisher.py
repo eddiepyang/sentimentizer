@@ -111,7 +111,6 @@ def write_epoch_metrics_to_file(
 
 def _set_ray_gauges(
     gauges: dict[str, Any],
-    model_type: str,
     epoch: int,
     train_loss: float,
     val_loss: float,
@@ -122,7 +121,6 @@ def _set_ray_gauges(
 
     Args:
         gauges: Dict of gauge name → Ray Gauge object (from _get_ray_gauges).
-        model_type: Model type label for logging.
         epoch: Current epoch number.
         train_loss: Average training loss for the epoch.
         val_loss: Average validation loss for the epoch.
@@ -245,7 +243,6 @@ def publish_epoch_metrics(
     if ray_gauges is not None:
         _set_ray_gauges(
             gauges=ray_gauges,
-            model_type=model_type,
             epoch=epoch,
             train_loss=train_loss,
             val_loss=val_loss,

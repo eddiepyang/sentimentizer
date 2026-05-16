@@ -155,7 +155,6 @@ class RNN(BaseSentimentModel):
 def new_model(
     dict_path: str,
     embeddings_config: EmbeddingsConfig,
-    input_len: int,
     model_config: RNNConfig = _DEFAULT_RNN_CONFIG,
 ) -> RNN:
     """Create a new RNN model with pre-trained GloVe embeddings.
@@ -163,7 +162,6 @@ def new_model(
     Args:
         dict_path: Path to the gensim dictionary file
         embeddings_config: Configuration for GloVe embeddings
-        input_len: Maximum sequence length
         model_config: RNN architecture configuration (defaults from RNNConfig)
     """
     dict_yelp = corpora.Dictionary.load(dict_path)

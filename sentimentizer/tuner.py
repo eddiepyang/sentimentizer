@@ -153,11 +153,11 @@ class TunePrometheusCallback(TuneCallback):
     # Ray Tune callback interface methods
     def on_trial_result(
         self,
-        iteration: int,
-        trials: list,
+        _iteration: int,
+        _trials: list,
         trial: Any,
         result: dict,
-        **kwargs: Any,
+        **_kwargs: Any,
     ) -> None:
         """Called after each trial reports intermediate results.
 
@@ -170,7 +170,7 @@ class TunePrometheusCallback(TuneCallback):
         )
         self._update_trial_gauges(trial_id, result)
 
-    def on_trial_complete(self, iteration: int, trials: list, trial: Any, **kwargs: Any) -> None:
+    def on_trial_complete(self, _iteration: int, trials: list, _trial: Any, **_kwargs: Any) -> None:
         """Called when a trial completes."""
         self._completed_trials += 1
         try:
@@ -182,7 +182,7 @@ class TunePrometheusCallback(TuneCallback):
         except ImportError:
             pass
 
-    def on_trial_start(self, iteration: int, trials: list, trial: Any, **kwargs: Any) -> None:
+    def on_trial_start(self, _iteration: int, trials: list, _trial: Any, **_kwargs: Any) -> None:
         """Called when a trial starts."""
         self._total_trials = len(trials) if trials else 0
         try:
@@ -381,7 +381,6 @@ def _trainable_wrapper(config: dict, train_dataset: Any = None, val_dataset: Any
     - 'dict_path': str
     - 'embeddings_model_name': str
     - 'embeddings_emb_length': int
-    - 'input_len': int
     """
     from ray import tune
 
@@ -394,7 +393,6 @@ def _trainable_wrapper(config: dict, train_dataset: Any = None, val_dataset: Any
         model_name=config["embeddings_model_name"],
         emb_length=config["embeddings_emb_length"],
     )
-    input_len = config["input_len"]
     device = config.get("device", "cpu")
 
     # Validate d_model divisible by n_heads for transformer models
@@ -422,7 +420,6 @@ def _trainable_wrapper(config: dict, train_dataset: Any = None, val_dataset: Any
     model = new_model(
         dict_path=dict_path,
         embeddings_config=embeddings_config,
-        input_len=input_len,
         model_config=model_config,
     )
 
@@ -583,7 +580,6 @@ def tune_model(
     search_space["dict_path"] = DriverConfig.files.dictionary_file_path
     search_space["embeddings_model_name"] = DriverConfig.embeddings.model_name
     search_space["embeddings_emb_length"] = DriverConfig.embeddings.emb_length
-    search_space["input_len"] = DriverConfig.tokenizer.max_len
     search_space["balance_classes"] = balance_classes
     search_space["balance_seed"] = balance_seed
     search_space["pos_weight"] = pos_weight
@@ -670,7 +666,6 @@ def tune_model(
         "dict_path",
         "embeddings_model_name",
         "embeddings_emb_length",
-        "input_len",
         "balance_classes",
         "balance_seed",
     }

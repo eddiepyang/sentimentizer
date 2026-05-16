@@ -765,7 +765,7 @@ class TuningRun:
 # ---------------------------------------------------------------------------
 
 
-def diagnose_training_issues(model_type: str) -> dict[str, Any]:
+def diagnose_training_issues(model_type: str = "") -> dict[str, Any]:
     """Run diagnostic checks to detect common training issues.
 
     Checks for problems that cause incorrect or "whacky" predictions,
@@ -1163,7 +1163,6 @@ def _create_model(model_type: str, model_config: Any) -> Any:
     """Create a model instance from the model type and config."""
     embeddings_config = EmbeddingsConfig()
     dict_path = DriverConfig.files.dictionary_file_path
-    input_len = DriverConfig.tokenizer.max_len
 
     if model_type == "rnn":
         from sentimentizer.models.rnn import new_model
@@ -1171,7 +1170,6 @@ def _create_model(model_type: str, model_config: Any) -> Any:
         return new_model(
             dict_path=dict_path,
             embeddings_config=embeddings_config,
-            input_len=input_len,
             model_config=model_config,
         )
     elif model_type == "encoder":
@@ -1180,7 +1178,6 @@ def _create_model(model_type: str, model_config: Any) -> Any:
         return new_model(
             dict_path=dict_path,
             embeddings_config=embeddings_config,
-            input_len=input_len,
             model_config=model_config,
         )
     elif model_type == "decoder":
@@ -1189,7 +1186,6 @@ def _create_model(model_type: str, model_config: Any) -> Any:
         return new_model(
             dict_path=dict_path,
             embeddings_config=embeddings_config,
-            input_len=input_len,
             model_config=model_config,
         )
     else:
@@ -1227,7 +1223,6 @@ def _load_trained_model(model_type: str, model_path: str, device: str) -> Any:
 
         d_model = weights["proj.weight"].shape[0]
         model = Encoder(
-            input_len=200,
             emb_weights=torch.zeros(emb_shape),
             d_model=d_model,
         )
@@ -1236,7 +1231,6 @@ def _load_trained_model(model_type: str, model_path: str, device: str) -> Any:
 
         d_model = weights["proj.weight"].shape[0]
         model = Decoder(
-            input_len=200,
             emb_weights=torch.zeros(emb_shape),
             d_model=d_model,
         )
