@@ -849,16 +849,29 @@ class TestMetricsPersistence:
 
     def test_write_epoch_metrics_writes_train_loss(self) -> None:
         """train_loss must be persisted to the per-model JSON file."""
-        from sentimentizer.metrics import ClassificationMetrics
-        from sentimentizer.trainer import _write_epoch_metrics_to_file
         from pathlib import Path
 
+        from sentimentizer.metrics import ClassificationMetrics
+        from sentimentizer.trainer import _write_epoch_metrics_to_file
+
         metrics = ClassificationMetrics(
-            accuracy=0.8, precision=0.75, recall=0.7, f1=0.72,
-            cohen_kappa=0.5, mcc=0.4, npv=0.6, macro_f1=0.65,
-            auc_roc=0.85, avg_precision=0.78,
-            positive_accuracy=0.8, negative_accuracy=0.7,
-            tp=4, tn=3, fp=1, fn=1, total=9,
+            accuracy=0.8,
+            precision=0.75,
+            recall=0.7,
+            f1=0.72,
+            cohen_kappa=0.5,
+            mcc=0.4,
+            npv=0.6,
+            macro_f1=0.65,
+            auc_roc=0.85,
+            avg_precision=0.78,
+            positive_accuracy=0.8,
+            negative_accuracy=0.7,
+            tp=4,
+            tn=3,
+            fp=1,
+            fn=1,
+            total=9,
         )
 
         _write_epoch_metrics_to_file(
@@ -882,16 +895,29 @@ class TestMetricsPersistence:
 
     def test_write_epoch_metrics_includes_all_new_metrics(self) -> None:
         """mcc, npv, macro_f1, avg_precision must be in the persisted JSON."""
-        from sentimentizer.metrics import ClassificationMetrics
-        from sentimentizer.trainer import _write_epoch_metrics_to_file
         from pathlib import Path
 
+        from sentimentizer.metrics import ClassificationMetrics
+        from sentimentizer.trainer import _write_epoch_metrics_to_file
+
         metrics = ClassificationMetrics(
-            accuracy=0.8, precision=0.75, recall=0.7, f1=0.72,
-            cohen_kappa=0.5, mcc=0.4, npv=0.6, macro_f1=0.65,
-            auc_roc=0.85, avg_precision=0.78,
-            positive_accuracy=0.8, negative_accuracy=0.7,
-            tp=4, tn=3, fp=1, fn=1, total=9,
+            accuracy=0.8,
+            precision=0.75,
+            recall=0.7,
+            f1=0.72,
+            cohen_kappa=0.5,
+            mcc=0.4,
+            npv=0.6,
+            macro_f1=0.65,
+            auc_roc=0.85,
+            avg_precision=0.78,
+            positive_accuracy=0.8,
+            negative_accuracy=0.7,
+            tp=4,
+            tn=3,
+            fp=1,
+            fn=1,
+            total=9,
         )
 
         _write_epoch_metrics_to_file(
@@ -918,8 +944,9 @@ class TestMetricsPersistence:
         Regression test: train_loss gauge was defined but never set,
         so ray_sentimentizer_live_train_loss was always empty.
         """
-        from sentimentizer.trainer import Trainer, TrainerConfig
         from unittest.mock import MagicMock, patch
+
+        from sentimentizer.trainer import Trainer, TrainerConfig
 
         mock_model = MagicMock()
         mock_loader = MagicMock()
@@ -935,12 +962,27 @@ class TestMetricsPersistence:
             model_type="rnn",
         )
 
-        mock_gauges = {key: MagicMock() for key in [
-            "train_loss", "val_loss", "val_accuracy", "val_precision",
-            "val_recall", "val_f1", "val_cohen_kappa", "val_mcc",
-            "val_npv", "val_macro_f1", "val_auc_roc", "val_avg_precision",
-            "val_positive_accuracy", "val_negative_accuracy", "epoch", "lr",
-        ]}
+        mock_gauges = {
+            key: MagicMock()
+            for key in [
+                "train_loss",
+                "val_loss",
+                "val_accuracy",
+                "val_precision",
+                "val_recall",
+                "val_f1",
+                "val_cohen_kappa",
+                "val_mcc",
+                "val_npv",
+                "val_macro_f1",
+                "val_auc_roc",
+                "val_avg_precision",
+                "val_positive_accuracy",
+                "val_negative_accuracy",
+                "epoch",
+                "lr",
+            ]
+        }
 
         with (
             patch("sentimentizer.trainer._get_ray_gauges", return_value=mock_gauges),
@@ -975,9 +1017,10 @@ class TestMetricsPersistence:
         Regression test: verify train_loss is persisted to JSON for the
         standalone exporter to read.
         """
-        from sentimentizer.trainer import Trainer, TrainerConfig
-        from unittest.mock import MagicMock, patch
         from pathlib import Path
+        from unittest.mock import MagicMock, patch
+
+        from sentimentizer.trainer import Trainer, TrainerConfig
 
         mock_model = MagicMock()
         mock_loader = MagicMock()
@@ -993,12 +1036,27 @@ class TestMetricsPersistence:
             model_type="test_json",
         )
 
-        mock_gauges = {key: MagicMock() for key in [
-            "train_loss", "val_loss", "val_accuracy", "val_precision",
-            "val_recall", "val_f1", "val_cohen_kappa", "val_mcc",
-            "val_npv", "val_macro_f1", "val_auc_roc", "val_avg_precision",
-            "val_positive_accuracy", "val_negative_accuracy", "epoch", "lr",
-        ]}
+        mock_gauges = {
+            key: MagicMock()
+            for key in [
+                "train_loss",
+                "val_loss",
+                "val_accuracy",
+                "val_precision",
+                "val_recall",
+                "val_f1",
+                "val_cohen_kappa",
+                "val_mcc",
+                "val_npv",
+                "val_macro_f1",
+                "val_auc_roc",
+                "val_avg_precision",
+                "val_positive_accuracy",
+                "val_negative_accuracy",
+                "epoch",
+                "lr",
+            ]
+        }
 
         with (
             patch("sentimentizer.trainer._get_ray_gauges", return_value=mock_gauges),

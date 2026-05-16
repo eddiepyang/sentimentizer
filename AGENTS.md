@@ -74,16 +74,25 @@ sentimentizer/
   exporter.py       — Standalone Prometheus exporter (port 8081), all gauge definitions
   tuner.py          — Ray Tune integration with TunePrometheusCallback
   metrics.py        — ClassificationMetrics dataclass + compute functions
+  export_onnx.py    — Unified ONNX export, quantization, validation (_RNNOnnxWrapper)
   models/
-    rnn.py          — Bidirectional LSTM
+    rnn.py          — Bidirectional LSTM (with onnx_export flag)
     encoder.py      — Transformer encoder with CLS token
     decoder.py      — Encoder-decoder transformer
+  router/           — SetFit router module (avoids shadowing setfit library)
+    config.py        — SetFitConfig, RouteLabels, AugmentConfig dataclasses
+    seeds.py         — Golden example utterances per category (10 per category)
+    augment.py       — GLM 5.1 augmentation via Ollama API
+    dataset.py       — JSONL dataset loader, train/test split
+    train_router.py  — SetFit training script with compat shims
+    evaluate.py      — Validation: similarity heatmap, threshold calibration
 
 workflows/
   driver.py         — CLI entry point
   stages/
     train.py        — run_train(), _run_fit_single(), _run_fit_distributed(), _reset_stale_metrics()
     tune.py          — Ray Tune orchestration
+    export.py         — ONNX export workflow stage
   lifecycle.py       — State, logger, Ray init/cleanup
   helpers.py         — Model loading, config utilities
 
@@ -93,6 +102,8 @@ tests/
   test_dictionary_lifecycle.py — Dictionary save/load, _count_vocab_batch with numpy arrays
   test_rnn.py                — RNN/Encoder model integration + Ray distributed tests
   test_skill.py      — Agent/tuning config tests
+  test_export_onnx.py — ONNX export, quantization, validation, _RNNOnnxWrapper
+  test_router.py      — SetFit config, labels, seeds, dataset, augmentation
 ```
 
 ## Metrics Pipeline
@@ -175,3 +186,28 @@ Grafana only reads provisioned dashboard files on **startup**, so a restart is r
 - `torchmetrics.BinaryCohenKappa` returns `nan` for single-class targets — always wrap with `_safe_item()` to coerce `nan→0.0` for Prometheus gauge compatibility
 - Single-class Cohen's kappa is `0.0` (not `1.0`) — this is a behavioral change from the previous custom implementation
 - Empty arrays must be guarded before calling torchmetrics (it crashes on empty input) — use the `if total == 0` early return in `compute_classification_metrics()`
+
+### ONNX Export
+
+- **RNN `onnx_export` flag**: `RNN.forward(inputs, onnx_export=True)` bypasses `pack_padded_sequence` (ONNX-incompatible) with a masked fallback that extracts hidden states from `lstm_out`. The standard path (default `onnx_export=False`) is unchanged for training and inference.
+- **`_RNNOnnxWrapper`**: Wraps RNN to call `forward(inputs, onnx_export=True)` during `torch.onnx.export()` tracing, since `torch.onnx.export()` calls `model(*args)` internally and cannot pass keyword arguments.
+- **RNN ONNX tolerance**: Use `1e-2` for RNN ONNX validation (masked fallback has padding drift), `1e-4` for Encoder/Decoder.
+- **ONNX opset version**: Use 17 (stable, well-tested). Opset 18+ requires `dynamo_export` which is still preview.
+- **Quantization**: Use `onnxruntime.quantization.quantize_dynamic` with `QuantType.QInt8` for INT8 dynamic quantization (FP32 activations, INT8 weights — optimal for AVX-512).
+- **`optimum-onnx[onnxruntime]`**: Use this package (not `optimum[onnxruntime]`) — `optimum` v2.0+ moved ONNX to a separate package.
+- **ONNX artifacts** go in `onnx_artifacts/` (gitignored). Metadata JSON files are saved alongside each `.onnx` file with model_type, opset_version, input_shape, dictionary path, and validation results.
+- **Export CLI**: `sentimentizer export --model rnn --quantize` (also `encoder`, `decoder`)
+
+### SetFit Router
+
+- **Router module**: `sentimentizer/router/` — named `router` to avoid shadowing the `setfit` library.
+- **Base model**: Default is `BAAI/bge-base-en-v1.5` (109M params, 768-dim embeddings, strong MTEB scores). Switch to `mxbai-embed-large-v1` (335M params) only if evaluation thresholds are not met.
+- **Categories**: Dietary (0), Service (1), General (2) — defined in `RouteLabels` dataclass.
+- **Seed utterances**: 10 per category in `sentimentizer/router/seeds.py` — expanded via `augment.py` (GLM 5.1 via Ollama, default model `glm-5.1:cloud`).
+- **Training**: `sentimentizer router augment` to generate data, `sentimentizer router train --data augmented_yelp.jsonl` to train — uses `setfit>=1.1.0` with `Trainer` (not deprecated `SetFitTrainer`).
+- **Evaluation**: `sentimentizer router evaluate --model-path models/router` — similarity matrix (inter-class < 0.65, intra-class > 0.85) and tau threshold calibration.
+- **Router ONNX export**: Deferred to v2 — router uses Python `setfit` inference for now.
+- **Optional dependencies**: `pip install -e ".[router]"` for SetFit training, `pip install -e ".[onnx]"` for ONNX export, `pip install -e ".[router,onnx]"` for both.
+- **setfit/transformers compatibility**: `setfit 1.1.x` imports `default_logdir` from `transformers.training_args`, which was removed in `transformers 5.x`. The `sentimentizer/compat.py` module includes a monkey-patch shim that injects `default_logdir` if missing. This must be imported BEFORE `import setfit`. The shim is applied automatically by `sentimentizer/router/__init__.py` and `sentimentizer/router/train_router.py`.
+- **setfit/config_setfit.json 404**: Sentence-transformer models like `BAAI/bge-base-en-v1.5` don't have `config_setfit.json` on HuggingFace Hub. `huggingface_hub>=1.0` raises a hard 404 error. The `_load_setfit_model()` function in `train_router.py` catches this and falls back to loading via `SentenceTransformer(model_id)` then wrapping with `SetFitModel(model_body=...)`.
+- **setfit model_head is None**: When loading a sentence-transformer model as a SetFit backbone (no `config_setfit.json`), `SetFitModel(model_body=...)` does NOT auto-create a classification head. `_load_setfit_model()` creates a `LogisticRegression(max_iter=1000, solver="lbfgs")` head explicitly and sets `model.labels` to the route category names (`["dietary", "service", "general"]`).

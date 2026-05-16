@@ -1,25 +1,38 @@
-import threading
+"""Serve the Sentimentizer pipeline via Ray Serve.
+
+Provides a unified REST API for:
+  - Sentiment analysis (RNN, Encoder, Decoder models)
+  - Review routing (Dietary, Service, General categories)
+
+Usage:
+    ray serve run sentimentizer.serve:app
+
+Endpoints:
+  Sentiment analysis:
+    POST /predict         — Classify a single text
+    POST /batch           — Classify multiple texts
+    POST /tokenize        — Tokenize text without inference
+    GET  /models          — Sentiment model metadata
+    GET  /health          — Health check
+    GET  /metrics          — Request metrics
+
+  Router (review categorization):
+    POST /router/predict  — Route a single text
+    POST /router/batch     — Route multiple texts
+    GET  /router/models    — Router model metadata
+"""
+
+import os
 import time
+from pathlib import Path
 from typing import Any
 
 import torch
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-try:
-    from ray import serve
-
-    RAY_SERVE_AVAILABLE = True
-except ImportError:
-    RAY_SERVE_AVAILABLE = False
-
-    # Dummy serve decorator if ray is missing
-    class _DummyServe:
-        def deployment(self, *args: Any, **kwargs: Any) -> Any:
-            return lambda cls: cls
-
-    serve = _DummyServe()
-
+# Apply transformers compatibility shim BEFORE importing setfit
+import sentimentizer.compat  # noqa: F401
 from sentimentizer import logger
 from sentimentizer.config import auto_detect_device
 from sentimentizer.models.decoder import Decoder
@@ -28,10 +41,20 @@ from sentimentizer.models.encoder import Encoder
 from sentimentizer.models.encoder import get_trained_model as get_encoder
 from sentimentizer.models.rnn import RNN
 from sentimentizer.models.rnn import get_trained_model as get_rnn
+from sentimentizer.router.config import RouteLabels, SetFitConfig
+from sentimentizer.router.train_router import _load_setfit_model
+from sentimentizer.serve_base import (
+    ServiceMetrics,
+    build_batch_response,
+    build_error_response,
+    build_health_response,
+    build_predict_response,
+    serve,
+)
 from sentimentizer.tokenizer import Tokenizer, get_trained_tokenizer, regex_tokenize, text_sequencer
 
 # ---------------------------------------------------------------------------
-# Model registry — maps model names to their loader functions and classes
+# Model registries
 # ---------------------------------------------------------------------------
 
 MODEL_REGISTRY: dict[str, dict[str, Any]] = {
@@ -67,58 +90,26 @@ MODEL_REGISTRY: dict[str, dict[str, Any]] = {
 DEFAULT_MODEL = "rnn"
 
 # ---------------------------------------------------------------------------
-# Metrics helpers (lightweight Prometheus-compatible counters/histograms)
+# Metrics (separate prefixes for sentiment vs router)
 # ---------------------------------------------------------------------------
 
-
-class Metrics:
-    """Simple in-memory metrics collector with thread-safe counters."""
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self.request_count: int = 0
-        self.error_count: int = 0
-        self.total_latency_s: float = 0.0
-
-    def record_request(self, latency_s: float, error: bool = False) -> None:
-        with self._lock:
-            self.request_count += 1
-            self.total_latency_s += latency_s
-            if error:
-                self.error_count += 1
-
-    def to_prometheus(self) -> str:
-        with self._lock:
-            lines = [
-                "# HELP sentimentizer_request_total Total requests processed",
-                "# TYPE sentimentizer_request_total counter",
-                f"sentimentizer_request_total {self.request_count}",
-                "# HELP sentimentizer_error_total Total errors",
-                "# TYPE sentimentizer_error_total counter",
-                f"sentimentizer_error_total {self.error_count}",
-                "# HELP sentimentizer_latency_seconds_total Cumulative latency in seconds",
-                "# TYPE sentimentizer_latency_seconds_total counter",
-                f"sentimentizer_latency_seconds_total {self.total_latency_s:.6f}",
-            ]
-            return "\n".join(lines) + "\n"
-
-
-metrics = Metrics()
-
+sentiment_metrics = ServiceMetrics(prefix="sentimentizer")
+router_metrics = ServiceMetrics(prefix="router")
 
 # ---------------------------------------------------------------------------
-# Shared health state — set by deployment __init__, read by /health route
+# Health state
 # ---------------------------------------------------------------------------
 
 _health_state: dict = {
     "loaded": False,
     "device": "unknown",
     "models": list(MODEL_REGISTRY.keys()),
+    "router_loaded": False,
+    "router_model_path": None,
 }
 
-
 # ---------------------------------------------------------------------------
-# Model deployment — handles /, /predict, /batch, /tokenize, /models
+# Combined deployment
 # ---------------------------------------------------------------------------
 
 
@@ -130,17 +121,22 @@ _health_state: dict = {
         "target_num_ongoing_requests_per_replica": 5,
         "metrics_interval_s": 10,
     },
-    max_ongoing_requests=10,
-    ray_actor_options={"num_cpus": 1, "num_gpus": 0},
+    max_ongoing_requests=20,
+    ray_actor_options={"num_cpus": 2, "num_gpus": 0},
 )
-class SentimentDeployment:
-    """Deployment server for all sentiment models (RNN, Encoder, Decoder)."""
+class SentimentizerDeployment:
+    """Unified deployment serving both sentiment analysis and review routing.
 
-    def __init__(self) -> None:
+    Routes:
+        /predict, /batch, /tokenize, /models   -> Sentiment analysis
+        /router/predict, /router/batch          -> Review categorization
+        /health, /metrics                         -> Shared infrastructure
+    """
+
+    def __init__(self, router_model_path: str | None = None) -> None:
+        # --- Sentiment models ---
         self.device: str = auto_detect_device()
         self.tokenizer: Tokenizer = get_trained_tokenizer()
-
-        # Load all models at startup
         self.models: dict[str, torch.nn.Module] = {}
         for model_name, registry_entry in MODEL_REGISTRY.items():
             loader = registry_entry["loader"]
@@ -149,41 +145,91 @@ class SentimentDeployment:
             model.eval()
             self.models[model_name] = model
 
-        # Update shared health state
+        # --- Router model ---
+        if router_model_path is None:
+            router_model_path = os.environ.get("ROUTER_MODEL_PATH", "models/router")
+        self.router_model_path = Path(router_model_path)
+
+        from setfit import SetFitModel
+
+        if self.router_model_path.exists():
+            logger.info(f"Loading router model from {self.router_model_path}")
+            self.router = SetFitModel.from_pretrained(str(self.router_model_path))
+        else:
+            logger.info("Loading router base model with classification head")
+            config = SetFitConfig()
+            self.router = _load_setfit_model(
+                config.base_model, num_classes=RouteLabels.num_classes()
+            )
+
+        # --- Update health state ---
         _health_state["loaded"] = True
         _health_state["device"] = self.device
+        _health_state["router_loaded"] = True
+        _health_state["router_model_path"] = str(self.router_model_path)
+
+    # ---- Sentiment prediction logic ----------------------------------------
 
     def _get_model(self, model_name: str | None) -> tuple[torch.nn.Module, str]:
-        """Resolve the model to use, returning (model, resolved_name).
-
-        Falls back to DEFAULT_MODEL if model_name is None or unknown.
-        """
+        """Resolve the sentiment model, falling back to DEFAULT_MODEL."""
         name = (model_name or DEFAULT_MODEL).lower().strip()
         if name not in self.models:
             name = DEFAULT_MODEL
         return self.models[name], name
 
-    # ---- Core prediction logic ------------------------------------------------
-
-    def _predict_single(self, text: str, model_name: str | None = None) -> dict:
-        """Run inference on a single text string."""
+    def _predict_sentiment(self, text: str, model_name: str | None = None) -> dict:
+        """Run sentiment analysis on a single text."""
         model, resolved_name = self._get_model(model_name)
         processed_input = self.tokenizer.tokenize_text(text)
-        prediction_tensor = model.predict(processed_input)
-        score = prediction_tensor.item()
+        score = model.predict(processed_input).item()
         return {
-            "text": text,
             "model": resolved_name,
             "sentiment_score": score,
-            "prediction": "positive" if score > 0.5 else "negative",
+            "label": "positive" if score > 0.5 else "negative",
         }
 
-    # ---- Route handlers -------------------------------------------------------
+    # ---- Router prediction logic --------------------------------------------
+
+    def _classify_single(self, text: str) -> dict:
+        """Classify a single text into a route category."""
+        predictions = self.router.predict([text])
+        label = predictions[0] if isinstance(predictions, (list, tuple)) else predictions
+        if isinstance(label, (int, float)):
+            label = RouteLabels.label_names().get(int(label), str(label))
+        return {"category": label, "categories": RouteLabels.label_names()}
+
+    def _classify_batch(self, texts: list[str]) -> list[dict]:
+        """Classify a batch of texts into route categories."""
+        predictions = self.router.predict(texts)
+        results = []
+        for text, pred in zip(texts, predictions, strict=False):
+            label = (
+                pred
+                if isinstance(pred, str)
+                else RouteLabels.label_names().get(int(pred), str(pred))
+            )
+            results.append({"text": text, "prediction": {"category": label}})
+        return results
+
+    # ---- Request dispatch ---------------------------------------------------
 
     async def __call__(self, http_request: Request) -> JSONResponse:
-        """Dispatch requests based on URL path."""
+        """Dispatch requests to sentiment or router handlers."""
         path = http_request.url.path.rstrip("/")
 
+        # Router routes
+        router_path = path.removeprefix("/router") if path.startswith("/router") else None
+        if router_path is not None:
+            if router_path in ("", "/predict"):
+                return await self._handle_router_predict(http_request)
+            elif router_path == "/batch":
+                return await self._handle_router_batch(http_request)
+            elif router_path == "/models":
+                return await self._handle_router_models(http_request)
+            else:
+                return build_error_response(f"Unknown router path: {path}", status_code=404)
+
+        # Sentiment routes
         if path in ("", "/predict"):
             return await self._handle_predict(http_request)
         elif path == "/batch":
@@ -197,10 +243,12 @@ class SentimentDeployment:
         elif path == "/metrics":
             return await self._handle_metrics(http_request)
         else:
-            return JSONResponse({"error": f"Unknown path: {path}"}, status_code=404)
+            return build_error_response(f"Unknown path: {path}", status_code=404)
+
+    # ---- Sentiment handlers -------------------------------------------------
 
     async def _handle_predict(self, http_request: Request) -> JSONResponse:
-        """POST / or /predict — single text prediction."""
+        """POST /predict — single text sentiment analysis."""
         start = time.perf_counter()
         try:
             json_input = await http_request.json()
@@ -208,38 +256,31 @@ class SentimentDeployment:
             model_name = json_input.get("model")
 
             if not text or not isinstance(text, str):
-                return JSONResponse(
-                    {"error": "No text provided or text is not a string"}, status_code=400
-                )
+                return build_error_response("No text provided or text is not a string")
 
-            # Validate model name if provided
             if model_name and model_name.lower().strip() not in MODEL_REGISTRY:
                 available = list(MODEL_REGISTRY.keys())
-                return JSONResponse(
-                    {"error": f"Unknown model: {model_name}. Available: {available}"},
-                    status_code=400,
-                )
+                return build_error_response(f"Unknown model: {model_name}. Available: {available}")
 
-            result = self._predict_single(text, model_name)
+            prediction = self._predict_sentiment(text, model_name)
             latency = time.perf_counter() - start
-            metrics.record_request(latency)
-            logger.info(  # type: ignore[call-arg]
-                "prediction completed",
-                model=result["model"],
-                input_length=len(text),
-                prediction=result["prediction"],
-                score=result["sentiment_score"],
-                latency_s=f"{latency:.4f}",
+            return build_predict_response(
+                text=text,
+                prediction=prediction,
+                latency_s=latency,
+                metrics=sentiment_metrics,
+                model=prediction["model"],
+                label=prediction["label"],
+                score=prediction["sentiment_score"],
             )
-            return JSONResponse(result)
         except Exception as exc:
             latency = time.perf_counter() - start
-            metrics.record_request(latency, error=True)
-            logger.exception("prediction failed")
-            return JSONResponse({"error": f"Internal error: {exc}"}, status_code=500)
+            sentiment_metrics.record_request(latency, error=True)
+            logger.exception("sentiment prediction failed")
+            return build_error_response(f"Internal error: {exc}", status_code=500)
 
     async def _handle_batch(self, http_request: Request) -> JSONResponse:
-        """POST /batch — batch prediction for multiple texts."""
+        """POST /batch — batch sentiment analysis."""
         start = time.perf_counter()
         try:
             json_input = await http_request.json()
@@ -247,34 +288,27 @@ class SentimentDeployment:
             model_name = json_input.get("model")
 
             if not isinstance(texts, list) or len(texts) == 0:
-                return JSONResponse(
-                    {"error": "No texts provided or texts is not a non-empty list"},
-                    status_code=400,
-                )
+                return build_error_response("No texts provided or texts is not a non-empty list")
 
-            # Validate model name if provided
             if model_name and model_name.lower().strip() not in MODEL_REGISTRY:
                 available = list(MODEL_REGISTRY.keys())
-                return JSONResponse(
-                    {"error": f"Unknown model: {model_name}. Available: {available}"},
-                    status_code=400,
-                )
+                return build_error_response(f"Unknown model: {model_name}. Available: {available}")
 
-            results = [self._predict_single(t, model_name) for t in texts]
+            results = [
+                {"text": t, "prediction": self._predict_sentiment(t, model_name)} for t in texts
+            ]
             latency = time.perf_counter() - start
-            metrics.record_request(latency)
-            logger.info(  # type: ignore[call-arg]
-                "batch prediction completed",
-                model=results[0]["model"] if results else "unknown",
-                batch_size=len(texts),
-                latency_s=f"{latency:.4f}",
+            return build_batch_response(
+                results=results,
+                latency_s=latency,
+                metrics=sentiment_metrics,
+                model=model_name or DEFAULT_MODEL,
             )
-            return JSONResponse({"results": results, "count": len(results)})
         except Exception as exc:
             latency = time.perf_counter() - start
-            metrics.record_request(latency, error=True)
-            logger.exception("batch prediction failed")
-            return JSONResponse({"error": f"Internal error: {exc}"}, status_code=500)
+            sentiment_metrics.record_request(latency, error=True)
+            logger.exception("sentiment batch failed")
+            return build_error_response(f"Internal error: {exc}", status_code=500)
 
     async def _handle_tokenize(self, http_request: Request) -> JSONResponse:
         """POST /tokenize — standalone tokenization without inference."""
@@ -283,9 +317,7 @@ class SentimentDeployment:
             text = json_input.get("text", "")
 
             if not text or not isinstance(text, str):
-                return JSONResponse(
-                    {"error": "No text provided or text is not a string"}, status_code=400
-                )
+                return build_error_response("No text provided or text is not a string")
 
             tokens = regex_tokenize(text)
             token_ids = text_sequencer(
@@ -302,10 +334,10 @@ class SentimentDeployment:
             )
         except Exception as exc:
             logger.exception("tokenization failed")
-            return JSONResponse({"error": f"Internal error: {exc}"}, status_code=500)
+            return build_error_response(f"Internal error: {exc}", status_code=500)
 
     async def _handle_models(self, http_request: Request) -> JSONResponse:
-        """GET /models — metadata about all available models."""
+        """GET /models — sentiment model metadata."""
         models_info = {}
         for name, registry_entry in MODEL_REGISTRY.items():
             model = self.models[name]
@@ -318,7 +350,6 @@ class SentimentDeployment:
                 "parameters": param_count,
                 "status": "loaded",
             }
-            # Add model-specific metadata
             if name == "rnn":
                 info["hidden_size"] = registry_entry["hidden_size"]
                 info["num_layers"] = registry_entry["num_layers"]
@@ -333,29 +364,92 @@ class SentimentDeployment:
                 info["n_decoder_layers"] = registry_entry["n_decoder_layers"]
             models_info[name] = info
 
+        return JSONResponse({"models": models_info, "default": DEFAULT_MODEL})
+
+    # ---- Router handlers ----------------------------------------------------
+
+    async def _handle_router_predict(self, http_request: Request) -> JSONResponse:
+        """POST /router/predict — classify a single text into a route."""
+        start = time.perf_counter()
+        try:
+            json_input = await http_request.json()
+            text = json_input.get("text", "")
+
+            if not text or not isinstance(text, str):
+                return build_error_response("No text provided or text is not a string")
+
+            prediction = self._classify_single(text)
+            latency = time.perf_counter() - start
+            return build_predict_response(
+                text=text,
+                prediction=prediction,
+                latency_s=latency,
+                metrics=router_metrics,
+                log_name="router prediction",
+                category=prediction["category"],
+            )
+        except Exception as exc:
+            latency = time.perf_counter() - start
+            router_metrics.record_request(latency, error=True)
+            logger.exception("router prediction failed")
+            return build_error_response(f"Internal error: {exc}", status_code=500)
+
+    async def _handle_router_batch(self, http_request: Request) -> JSONResponse:
+        """POST /router/batch — classify multiple texts into routes."""
+        start = time.perf_counter()
+        try:
+            json_input = await http_request.json()
+            texts = json_input.get("texts", [])
+
+            if not isinstance(texts, list) or len(texts) == 0:
+                return build_error_response("No texts provided or texts is not a non-empty list")
+
+            results = self._classify_batch(texts)
+            latency = time.perf_counter() - start
+            return build_batch_response(
+                results=results,
+                latency_s=latency,
+                metrics=router_metrics,
+                log_name="router batch",
+            )
+        except Exception as exc:
+            latency = time.perf_counter() - start
+            router_metrics.record_request(latency, error=True)
+            logger.exception("router batch failed")
+            return build_error_response(f"Internal error: {exc}", status_code=500)
+
+    async def _handle_router_models(self, http_request: Request) -> JSONResponse:
+        """GET /router/models — router model metadata."""
         return JSONResponse(
             {
-                "models": models_info,
-                "default": DEFAULT_MODEL,
+                "model_path": str(self.router_model_path),
+                "categories": RouteLabels.label_names(),
+                "status": "loaded",
             }
         )
 
+    # ---- Shared infrastructure handlers -------------------------------------
+
     async def _handle_health(self, http_request: Request) -> JSONResponse:
-        """GET /health — K8s liveness / readiness probe target."""
-        if _health_state["loaded"]:
-            return JSONResponse({"status": "healthy", **_health_state})
-        return JSONResponse({"status": "unhealthy", **_health_state}, status_code=503)
+        """GET /health — liveness / readiness probe."""
+        return build_health_response(**_health_state)
 
     async def _handle_metrics(self, http_request: Request) -> JSONResponse:
-        """GET /metrics — Prometheus-compatible metrics."""
+        """GET /metrics — combined metrics for sentiment and router."""
         return JSONResponse(
             {
-                "prometheus": metrics.to_prometheus(),
-                "request_count": metrics.request_count,
-                "error_count": metrics.error_count,
-                "avg_latency_s": (
-                    metrics.total_latency_s / metrics.request_count if metrics.request_count else 0
-                ),
+                "sentiment": {
+                    "prometheus": sentiment_metrics.to_prometheus(),
+                    "request_count": sentiment_metrics.request_count,
+                    "error_count": sentiment_metrics.error_count,
+                    "avg_latency_s": sentiment_metrics.avg_latency_s,
+                },
+                "router": {
+                    "prometheus": router_metrics.to_prometheus(),
+                    "request_count": router_metrics.request_count,
+                    "error_count": router_metrics.error_count,
+                    "avg_latency_s": router_metrics.avg_latency_s,
+                },
             }
         )
 
@@ -364,4 +458,4 @@ class SentimentDeployment:
 # Build the Serve application
 # ---------------------------------------------------------------------------
 
-app = SentimentDeployment.bind()
+app = SentimentizerDeployment.bind()

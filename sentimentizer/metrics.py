@@ -189,9 +189,7 @@ def compute_classification_metrics(
     cohen_kappa = _safe_item(BinaryCohenKappa()(preds_t, targets_t))
     mcc = _safe_item(BinaryMatthewsCorrCoef()(preds_t, targets_t))
     npv = _safe_item(BinaryNegativePredictiveValue()(preds_t, targets_t))
-    macro_f1 = _safe_item(
-        MulticlassF1Score(num_classes=2, average="macro")(preds_t, targets_t)
-    )
+    macro_f1 = _safe_item(MulticlassF1Score(num_classes=2, average="macro")(preds_t, targets_t))
 
     # AUC-ROC and Average Precision (optional, require probability scores)
     auc_roc: float | None = None
@@ -340,9 +338,7 @@ def compute_metrics_from_examples(
     cohen_kappa = _safe_item(BinaryCohenKappa()(preds_t, targets_t))
     mcc = _safe_item(BinaryMatthewsCorrCoef()(preds_t, targets_t))
     npv = _safe_item(BinaryNegativePredictiveValue()(preds_t, targets_t))
-    macro_f1 = _safe_item(
-        MulticlassF1Score(num_classes=2, average="macro")(preds_t, targets_t)
-    )
+    macro_f1 = _safe_item(MulticlassF1Score(num_classes=2, average="macro")(preds_t, targets_t))
 
     # AUC-ROC and Average Precision require probability scores ('score')
     probabilities = np.array([r.get("score", 0.5) for r in results])

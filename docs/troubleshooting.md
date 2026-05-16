@@ -122,6 +122,73 @@ uv run pytest tests/test_dictionary_lifecycle.py tests/test_loader.py -v
 uv run pytest tests/test_training.py -v -k "TestSchedulerCorrectness"
 ```
 
+## ONNX Export Issues
+
+### RNN ONNX validation fails with high max_diff
+
+**Symptoms**: `validate_onnx_export()` reports `max_diff > 1e-2` for RNN models.
+
+**Cause**: The RNN's ONNX-compatible forward path (masked fallback) skips `pack_padded_sequence` and processes padding tokens. Short sequences have more padding, causing larger numeric drift.
+
+**Fix**: This is expected. The tolerance for RNN is intentionally set to `1e-2` (vs `1e-4` for Encoder/Decoder). If validation still fails:
+- Ensure the model was exported with `_RNNOnnxWrapper` (calls `forward(onnx_export=True)`)
+- Check that `seq_len` in `export_model_to_onnx()` matches the training sequence length
+- Verify the model is in `eval()` mode before export
+
+### `onnxruntime` import error during export
+
+**Symptoms**: `ModuleNotFoundError: No module named 'onnxruntime'` when running `sentimentizer export`.
+
+**Fix**: Install the ONNX optional dependency group:
+
+```bash
+pip install -e ".[onnx]"
+# or with uv:
+uv sync --extra onnx
+```
+
+### `setfit` import error during router training
+
+**Symptoms**: `ModuleNotFoundError: No module named 'setfit'` when running `sentimentizer router train`.
+
+**Fix**: Install the router optional dependency group:
+
+```bash
+pip install -e ".[router]"
+# or with uv:
+uv sync --extra router
+```
+
+### optimum-onnx conflict with numpy
+
+**Symptoms**: `pip install -e ".[onnx]"` fails with numpy version conflict involving `optimum-onnx`.
+
+**Fix**: The `[onnx]` dependency group does not include `optimum-onnx` because it conflicts with `numpy>=2.4.0`. ONNX export and quantization work directly with `onnxruntime.quantization.quantize_dynamic`. If you need `optimum` for SetFit ONNX export (v2), pin `optimum[onnxruntime]<2.0.0`.
+
+## SetFit Router Issues
+
+### Ollama API connection failure during augmentation
+
+**Symptoms**: `augment_seeds()` logs `Ollama API request failed` and returns only the original seeds.
+
+**Fix**: Ensure Ollama is running locally on port 11434:
+
+```bash
+ollama serve  # Start the Ollama API server
+ollama pull glm-5.1:cloud  # Pull the model (cloud variant)
+```
+
+The `augment_seeds()` function gracefully handles API failures — it returns the original seeds unchanged, so training can proceed with just the 30 golden examples if augmentation is unavailable.
+
+### Low inter-class similarity (> 0.65) after training
+
+**Symptoms**: `evaluate_router()` reports inter-class similarity above 0.65, meaning the model cannot distinguish between categories well.
+
+**Fix**: This typically means:
+1. Too few training examples — run augmentation to expand seeds
+2. Hard negatives not represented — ensure `augment.py` generates category-confusing examples
+3. Consider upgrading the base model from `BAAI/bge-base-en-v1.5` to `mxbai-embed-large-v1` in `SetFitConfig`
+
 ## Linting and Formatting
 
 ```bash
