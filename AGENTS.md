@@ -72,9 +72,9 @@ Sentimentizer is a PyTorch-based sentiment analysis pipeline with three model ar
 
 **Solution**: Switched from a single shared JSON file (`/tmp/sentimentizer_training_metrics.json`) to per-model-type JSON files (`/tmp/sentimentizer_metrics/{model_type}_metrics.json`). Each model type writes to its own file, so concurrent training processes never race. The standalone exporter discovers all three files and zeroes gauges for any model type whose file is missing or stale. Added `_written_by` and `_written_at` trace fields to every write, and `_trace.reset_by` / `_trace.reset_at` to reset files, so debugging future issues is trivial: just `cat` the file to see which model_type wrote it and when.
 
-**Important**: `_reset_stale_metrics(model_type)` zeroes **all three** model types (rnn, encoder, decoder), not just the current one, because starting a new training run makes all previous metrics stale — regardless of which model produced them. Otherwise old RNN metrics linger on the dashboard when training encoder. Each zeroed-out file includes `_reset: true` and `_trace.reset_by` to distinguish stale resets from real training data.
+**Important**: `_reset_stale_metrics(model_type)` writes zeroed-out JSON files for **all three** model types (rnn, encoder, decoder) so the standalone exporter can clear stale values, but only resets **Prometheus gauges for the current model type**. Other model types' gauges retain their last real values — the exporter skips `_reset: true` files so untrained models don't show `epoch=0` on the dashboard. Each zeroed-out file includes `_reset: true` and `_trace.reset_by` to distinguish stale resets from real training data.
 
-**Tests**: `TestResetStaleMetrics` in `tests/test_training.py` (6 tests covering JSON file cleanup for all model types, stale cross-model-type data overwrite, missing/corrupt files, Prometheus gauge reset for all model types, and Ray gauge cache invalidation).
+**Tests**: `TestResetStaleMetrics` in `tests/test_training.py` (6 tests covering JSON file cleanup for all model types, stale cross-model-type data overwrite, missing/corrupt files, Prometheus gauge reset for current model type only, and Ray gauge cache invalidation).
 
 **Key files changed**:
 - `workflows/stages/train.py` — added `_reset_stale_metrics()` function and call in `run_train()`

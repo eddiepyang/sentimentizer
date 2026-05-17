@@ -28,12 +28,14 @@ _ALL_MODEL_TYPES = ("rnn", "encoder", "decoder")
 
 
 def _reset_stale_metrics(model_type: str) -> None:
-    """Clear stale persisted metrics and reset Prometheus gauges for ALL model types.
+    """Clear stale persisted metrics and reset Prometheus gauges.
 
-    When a new training run starts for *model_type*, metrics from previous runs of
-    any model type (including the current one) are stale.  We zero out all three
-    per-model JSON files and all Prometheus gauge labels so the dashboard only
-    shows fresh data from the new run.
+    When a new training run starts for *model_type*, metrics from previous runs
+    are stale.  We zero out all three per-model JSON files (so the exporter can
+    clear stale gauge values) but only reset Prometheus gauges for the *current*
+    model type.  Other model types' gauges are left untouched — the exporter
+    will handle them when it reads their ``_reset: true`` JSON files and skips
+    them, leaving their gauges at whatever the last real training run set.
     """
     import time
 
@@ -83,7 +85,7 @@ def _reset_stale_metrics(model_type: str) -> None:
     except OSError as exc:
         logger.warning("failed_to_clear_stale_metrics_file: %s", exc)
 
-    # --- 2. prometheus_client gauges (zero all model types) ---
+    # --- 2. prometheus_client gauges (zero current model type only) ---
     try:
         from sentimentizer.exporter import (
             TRAINING_EPOCH,
@@ -112,35 +114,34 @@ def _reset_stale_metrics(model_type: str) -> None:
             TRAINING_VAL_WEIGHTED_F1,
         )
 
-        for mt in _ALL_MODEL_TYPES:
-            lbl = {"model_type": mt}
-            for gauge in (
-                TRAINING_TRAIN_LOSS,
-                TRAINING_VAL_LOSS,
-                TRAINING_VAL_ACCURACY,
-                TRAINING_VAL_BALANCED_ACCURACY,
-                TRAINING_VAL_NEGATIVE_PRECISION,
-                TRAINING_VAL_NEGATIVE_RECALL,
-                TRAINING_VAL_NEGATIVE_F1,
-                TRAINING_VAL_NEUTRAL_PRECISION,
-                TRAINING_VAL_NEUTRAL_RECALL,
-                TRAINING_VAL_NEUTRAL_F1,
-                TRAINING_VAL_POSITIVE_PRECISION,
-                TRAINING_VAL_POSITIVE_RECALL,
-                TRAINING_VAL_POSITIVE_F1,
-                TRAINING_VAL_COHEN_KAPPA,
-                TRAINING_VAL_MCC,
-                TRAINING_VAL_MACRO_F1,
-                TRAINING_VAL_WEIGHTED_F1,
-                TRAINING_VAL_NEUTRAL_TO_POSITIVE_RATE,
-                TRAINING_VAL_NEUTRAL_TO_NEGATIVE_RATE,
-                TRAINING_VAL_PRED_NEUTRAL_FRAC,
-                TRAINING_EPOCH,
-                TRAINING_LR,
-            ):
-                gauge.labels(**lbl).set(0)
-            TRAINING_VAL_NEUTRAL_AUC_ROC.labels(**lbl).set(0)
-            TRAINING_VAL_NEUTRAL_AVG_PRECISION.labels(**lbl).set(0)
+        lbl = {"model_type": model_type}
+        for gauge in (
+            TRAINING_TRAIN_LOSS,
+            TRAINING_VAL_LOSS,
+            TRAINING_VAL_ACCURACY,
+            TRAINING_VAL_BALANCED_ACCURACY,
+            TRAINING_VAL_NEGATIVE_PRECISION,
+            TRAINING_VAL_NEGATIVE_RECALL,
+            TRAINING_VAL_NEGATIVE_F1,
+            TRAINING_VAL_NEUTRAL_PRECISION,
+            TRAINING_VAL_NEUTRAL_RECALL,
+            TRAINING_VAL_NEUTRAL_F1,
+            TRAINING_VAL_POSITIVE_PRECISION,
+            TRAINING_VAL_POSITIVE_RECALL,
+            TRAINING_VAL_POSITIVE_F1,
+            TRAINING_VAL_COHEN_KAPPA,
+            TRAINING_VAL_MCC,
+            TRAINING_VAL_MACRO_F1,
+            TRAINING_VAL_WEIGHTED_F1,
+            TRAINING_VAL_NEUTRAL_TO_POSITIVE_RATE,
+            TRAINING_VAL_NEUTRAL_TO_NEGATIVE_RATE,
+            TRAINING_VAL_PRED_NEUTRAL_FRAC,
+            TRAINING_EPOCH,
+            TRAINING_LR,
+        ):
+            gauge.labels(**lbl).set(0)
+        TRAINING_VAL_NEUTRAL_AUC_ROC.labels(**lbl).set(0)
+        TRAINING_VAL_NEUTRAL_AVG_PRECISION.labels(**lbl).set(0)
     except ImportError:
         pass
 

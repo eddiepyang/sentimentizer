@@ -561,6 +561,39 @@ def _update_training_metrics() -> None:
             if not isinstance(data, dict):
                 continue
 
+            # Skip reset placeholder files — they contain zeros from
+            # _reset_stale_metrics() and are not real training data.
+            if data.get("_reset"):
+                _ZERO_GAUGES = [
+                    TRAINING_TRAIN_LOSS,
+                    TRAINING_VAL_LOSS,
+                    TRAINING_VAL_ACCURACY,
+                    TRAINING_VAL_BALANCED_ACCURACY,
+                    TRAINING_VAL_NEGATIVE_PRECISION,
+                    TRAINING_VAL_NEGATIVE_RECALL,
+                    TRAINING_VAL_NEGATIVE_F1,
+                    TRAINING_VAL_NEUTRAL_PRECISION,
+                    TRAINING_VAL_NEUTRAL_RECALL,
+                    TRAINING_VAL_NEUTRAL_F1,
+                    TRAINING_VAL_POSITIVE_PRECISION,
+                    TRAINING_VAL_POSITIVE_RECALL,
+                    TRAINING_VAL_POSITIVE_F1,
+                    TRAINING_VAL_MACRO_F1,
+                    TRAINING_VAL_WEIGHTED_F1,
+                    TRAINING_VAL_COHEN_KAPPA,
+                    TRAINING_VAL_MCC,
+                    TRAINING_VAL_NEUTRAL_TO_POSITIVE_RATE,
+                    TRAINING_VAL_NEUTRAL_TO_NEGATIVE_RATE,
+                    TRAINING_VAL_PRED_NEUTRAL_FRAC,
+                    TRAINING_VAL_NEUTRAL_AUC_ROC,
+                    TRAINING_VAL_NEUTRAL_AVG_PRECISION,
+                    TRAINING_EPOCH,
+                    TRAINING_LR,
+                ]
+                for g in _ZERO_GAUGES:
+                    g.labels(**lbl).set(0)
+                continue
+
             # Sanity check -- the file name should match _written_by trace field
             written_by = data.get("_written_by", model_type)
             if written_by != model_type:

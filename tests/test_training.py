@@ -752,10 +752,10 @@ class TestResetStaleMetrics:
         assert rnn_data.get("_reset") is True
         assert rnn_data["_trace"]["reset_by"] == "encoder"
 
-    def test_resets_prometheus_gauges_all_model_types(
+    def test_resets_prometheus_gauges_current_model_type_only(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """_reset_stale_metrics resets prometheus_client gauges for ALL model types to 0."""
+        """_reset_stale_metrics resets prometheus_client gauges for the current model type only."""
         from workflows.stages.train import _reset_stale_metrics
 
         monkeypatch.setattr("workflows.stages.train._METRICS_DIR", tmp_path)
@@ -770,13 +770,19 @@ class TestResetStaleMetrics:
 
         _reset_stale_metrics("encoder")
 
-        # Both should be zeroed — not just encoder
-        for mt in ("encoder", "rnn", "decoder"):
-            value = REGISTRY.get_sample_value(
-                "sentimentizer_training_val_accuracy",
-                {"model_type": mt},
-            )
-            assert value == 0.0, f"{mt} accuracy gauge should be 0"
+        # Only the current model type (encoder) should be zeroed
+        encoder_val = REGISTRY.get_sample_value(
+            "sentimentizer_training_val_accuracy",
+            {"model_type": "encoder"},
+        )
+        assert encoder_val == 0.0, "encoder accuracy gauge should be 0"
+
+        # Other model types should retain their previous values
+        rnn_val = REGISTRY.get_sample_value(
+            "sentimentizer_training_val_accuracy",
+            {"model_type": "rnn"},
+        )
+        assert rnn_val == 0.88, "rnn accuracy gauge should retain its value"
 
     def test_clears_ray_gauges_cache_all_model_types(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

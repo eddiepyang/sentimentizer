@@ -279,7 +279,7 @@ def patch_default_dashboard(data: dict) -> dict:
         fallback_max = {
             "exemplar": True,
             "expr": (
-                "sum(ray_node_cpu_count" '{SessionName=~"$SessionName",ray_io_cluster=~"$Cluster"})'
+                'sum(ray_node_cpu_count{SessionName=~"$SessionName",ray_io_cluster=~"$Cluster"})'
             ),
             "interval": "",
             "legendFormat": "MAX (fallback)",
@@ -571,11 +571,15 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
                 "datasource": _DS,
                 "gridPos": {"h": 8, "w": 4, "x": 0, "y": 8},
                 "targets": [
-                    _table_target(
-                        "sentimentizer_training_epoch",
-                        "Epoch ({{model_type}})",
-                        "A",
-                    )
+                    {
+                        "datasource": _DS,
+                        "expr": (
+                            'max(sentimentizer_training_epoch{model_type=~"$model_type"})'
+                            ' or max(ray_sentimentizer_live_epoch{model_type=~"$model_type"})'
+                        ),
+                        "legendFormat": "Epoch",
+                        "refId": "A",
+                    }
                 ],
                 "fieldConfig": {
                     "defaults": {
@@ -855,32 +859,49 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
                     _table_target("sentimentizer_training_val_accuracy", "Accuracy", "D"),
                     _table_target(
                         "sentimentizer_training_val_balanced_accuracy",
-                        "Balanced Acc", "E",
+                        "Balanced Acc",
+                        "E",
                     ),
                     _table_target("sentimentizer_training_val_macro_f1", "Macro F1", "F"),
                     _table_target("sentimentizer_training_val_weighted_f1", "Weighted F1", "G"),
                     _table_target("sentimentizer_training_val_cohen_kappa", "Kappa", "H"),
                     _table_target("sentimentizer_training_val_mcc", "MCC", "I"),
-                    _table_target("sentimentizer_training_val_neutral_avg_precision", "Neutral Avg Precision", "J"),
                     _table_target(
-                        "sentimentizer_training_val_negative_precision", "Neg Prec", "K",
+                        "sentimentizer_training_val_neutral_avg_precision",
+                        "Neutral Avg Precision",
+                        "J",
                     ),
                     _table_target(
-                        "sentimentizer_training_val_negative_recall", "Neg Recall", "L",
+                        "sentimentizer_training_val_negative_precision",
+                        "Neg Prec",
+                        "K",
+                    ),
+                    _table_target(
+                        "sentimentizer_training_val_negative_recall",
+                        "Neg Recall",
+                        "L",
                     ),
                     _table_target("sentimentizer_training_val_negative_f1", "Neg F1", "M"),
                     _table_target(
-                        "sentimentizer_training_val_neutral_precision", "Neutral Prec", "N",
+                        "sentimentizer_training_val_neutral_precision",
+                        "Neutral Prec",
+                        "N",
                     ),
                     _table_target(
-                        "sentimentizer_training_val_neutral_recall", "Neutral Recall", "O",
+                        "sentimentizer_training_val_neutral_recall",
+                        "Neutral Recall",
+                        "O",
                     ),
                     _table_target("sentimentizer_training_val_neutral_f1", "Neutral F1", "P"),
                     _table_target(
-                        "sentimentizer_training_val_positive_precision", "Pos Prec", "Q",
+                        "sentimentizer_training_val_positive_precision",
+                        "Pos Prec",
+                        "Q",
                     ),
                     _table_target(
-                        "sentimentizer_training_val_positive_recall", "Pos Recall", "R",
+                        "sentimentizer_training_val_positive_recall",
+                        "Pos Recall",
+                        "R",
                     ),
                     _table_target("sentimentizer_training_val_positive_f1", "Pos F1", "S"),
                     _table_target("sentimentizer_training_lr", "LR", "T"),
@@ -988,7 +1009,8 @@ def generate_tune_metrics_dashboard() -> tuple[str, None]:
                 "targets": [
                     _target(
                         "sentimentizer_tune_best_val_balanced_accuracy",
-                        "Best Balanced Acc", "A",
+                        "Best Balanced Acc",
+                        "A",
                     )
                 ],
                 "options": {
@@ -1045,7 +1067,8 @@ def generate_tune_metrics_dashboard() -> tuple[str, None]:
                 "targets": [
                     _target_trial(
                         "sentimentizer_tune_val_balanced_accuracy",
-                        "Trial {{trial_id}}", "A",
+                        "Trial {{trial_id}}",
+                        "A",
                     )
                 ],
                 "fieldConfig": {
@@ -1083,7 +1106,8 @@ def generate_tune_metrics_dashboard() -> tuple[str, None]:
                 "targets": [
                     _target_trial(
                         "sentimentizer_tune_val_balanced_accuracy",
-                        "Trial {{trial_id}}", "A",
+                        "Trial {{trial_id}}",
+                        "A",
                     )
                 ],
                 "fieldConfig": {
@@ -1101,9 +1125,7 @@ def generate_tune_metrics_dashboard() -> tuple[str, None]:
                 "type": "timeseries",
                 "datasource": _DS,
                 "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
-                "targets": [
-                    _target_trial("sentimentizer_tune_val_mcc", "Trial {{trial_id}}", "A")
-                ],
+                "targets": [_target_trial("sentimentizer_tune_val_mcc", "Trial {{trial_id}}", "A")],
                 "fieldConfig": {
                     "defaults": {
                         "custom": {"drawStyle": "line", "lineWidth": 2},
@@ -1121,7 +1143,9 @@ def generate_tune_metrics_dashboard() -> tuple[str, None]:
                 "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
                 "targets": [
                     _target_trial(
-                        "sentimentizer_tune_val_macro_f1", "Trial {{trial_id}}", "A",
+                        "sentimentizer_tune_val_macro_f1",
+                        "Trial {{trial_id}}",
+                        "A",
                     )
                 ],
                 "fieldConfig": {
@@ -1158,15 +1182,11 @@ def generate_tune_metrics_dashboard() -> tuple[str, None]:
                 "datasource": _DS,
                 "gridPos": {"h": 8, "w": 12, "x": 0, "y": 32},
                 "targets": [
-                    _target_trial(
-                        "sentimentizer_tune_val_negative_f1", "Neg F1 {{trial_id}}", "A"
-                    ),
+                    _target_trial("sentimentizer_tune_val_negative_f1", "Neg F1 {{trial_id}}", "A"),
                     _target_trial(
                         "sentimentizer_tune_val_neutral_f1", "Neutral F1 {{trial_id}}", "B"
                     ),
-                    _target_trial(
-                        "sentimentizer_tune_val_positive_f1", "Pos F1 {{trial_id}}", "C"
-                    ),
+                    _target_trial("sentimentizer_tune_val_positive_f1", "Pos F1 {{trial_id}}", "C"),
                 ],
                 "fieldConfig": {
                     "defaults": {

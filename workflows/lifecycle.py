@@ -195,7 +195,12 @@ def _ensure_ray_initialized() -> bool:
 
     if ray.is_initialized():
         return True
+    # Suppress smart_open verbose logging that floods Ray worker output.
+    import logging
+
     from sentimentizer.env import ensure_nvidia_ld_library_path
+
+    logging.getLogger("smart_open").setLevel(logging.WARNING)
 
     ld_path = ensure_nvidia_ld_library_path()
     runtime_env: dict[str, Any] = {}

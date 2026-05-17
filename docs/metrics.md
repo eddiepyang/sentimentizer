@@ -250,8 +250,8 @@ When training starts for a model type (e.g., `encoder`), any residual metrics fr
 
 **Fix:** `_reset_stale_metrics(model_type)` in `workflows/stages/train.py` is called at the start of `run_train()` (both single-node and distributed paths). It:
 
-1. Writes a **zeroed-out entry** for *all* model types in their respective JSON files (sets all metrics to 0, epoch to 0). Each file gets a `_reset: true` flag and a `_trace.reset_by` field documenting which model type triggered the reset. This is essential because the standalone exporter only updates gauge labels for model types present in the file — deleting the entry would leave the exporter serving stale values from its in-process gauges.
-2. Resets all 24 `sentimentizer_training_*` Prometheus gauges for that `model_type` to `0` (per-class metrics: 3×3 per-class P/R/F1 + balanced_accuracy + macro_f1 + weighted_f1 + cohen_kappa + mcc + neutral_auc_roc + neutral_avg_precision + neutral_to_positive_rate + neutral_to_negative_rate + pred_neutral_frac).
+1. Writes a **zeroed-out entry** for *all* model types in their respective JSON files (sets all metrics to 0, epoch to 0). Each file gets a `_reset: true` flag and a `_trace.reset_by` field documenting which model type triggered the reset. The standalone exporter skips `_reset: true` files so untrained models don't show `epoch=0` on the dashboard.
+2. Resets all 24 `sentimentizer_training_*` Prometheus gauges for the **current** `model_type` only (not all model types). Other model types retain their last real values to avoid showing misleading zeros for untrained models.
 3. Invalidates the `_RAY_GAUGES` cache entry for that `model_type`, forcing lazy re-creation in the current worker context.
 
 Other model types' entries in the JSON file are left untouched — they'll naturally be updated when those model types are trained next.
@@ -402,9 +402,9 @@ This is usually one of three problems:
 If you train the RNN model and then train the encoder model, the dashboard may briefly show RNN metrics alongside encoder metrics. This happens because `prometheus_client` gauges retain their last-set values until explicitly overwritten.
 
 **This is now handled automatically.** `_reset_stale_metrics(model_type)` is called at the start of every training run and:
-1. Writes a zeroed-out per-model JSON file (`/tmp/sentimentizer_metrics/{model_type}_metrics.json`) with a `_trace` field documenting the reset, so the exporter clear stale values.
-2. Resets all 24 `sentimentizer_training_*` Prometheus gauges for that `model_type` to `0` (per-class metrics: 3×3 per-class P/R/F1 + balanced_accuracy + macro_f1 + weighted_f1 + cohen_kappa + mcc + neutral_auc_roc + neutral_avg_precision + neutral_to_positive_rate + neutral_to_negative_rate + pred_neutral_frac).
-3. Invalidates the Ray gauge cache for that `model_type`.
+1. Writes a zeroed-out per-model JSON file (`/tmp/sentimentizer_metrics/{model_type}_metrics.json`) with a `_reset: true` flag and `_trace` field documenting the reset, so the exporter can clear stale values.
+2. Resets all 24 `sentimentizer_training_*` Prometheus gauges for that `model_type` only (not all model types — other model types retain their last real values).
+3. Invalidates the Ray gauge cache entirely.
 
 Each model type's metrics live in its own file, so concurrent training processes never race.
 

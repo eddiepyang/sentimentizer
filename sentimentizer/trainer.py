@@ -1109,13 +1109,17 @@ def _train_func(config: dict) -> None:
     Reports metrics and checkpoints back to Ray Train.
     """
 
-    # Suppress smart_open verbose docstring logging in Ray workers.
-    # smart_open prints its module docstring via logging.info on import,
-    # which floods Ray worker logs. Set the logger level to WARNING before
-    # any library imports smart_open.
+    # Suppress smart_open verbose logging in Ray workers.
+    # smart_open submodules (s3, http, etc.) log INFO messages during
+    # initialization which flood Ray worker output. Setting the parent
+    # logger suppresses all children that propagate.
     import logging
 
     logging.getLogger("smart_open").setLevel(logging.WARNING)
+    # Also suppress any child loggers that may already exist
+    for _name in list(logging.root.manager.loggerDict):
+        if _name.startswith("smart_open"):
+            logging.getLogger(_name).setLevel(logging.WARNING)
 
     # Unpack training config (resolve -1 to model-specific default)
     epochs = config["epochs"]
