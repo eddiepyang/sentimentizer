@@ -1,9 +1,11 @@
 from typing import Annotated, Any
+
 from pydantic import BaseModel, Field
 
 from sentimentizer.serve.config import load_serve_config
 
 cfg = load_serve_config()
+
 
 class PredictRequest(BaseModel):
     """Single text sentiment prediction request."""
@@ -15,26 +17,12 @@ class PredictRequest(BaseModel):
         "If omitted, uses the default model. "
         "Returns 400 if the requested model is not loaded.",
     )
-    include_scores: bool = Field(
-        default=True,
-        description="Whether to include probabilities for all classes in the response.",
-    )
-    top_k: int | None = Field(
-        default=None,
-        description="If provided, only return the top K classes in the scores dict.",
-    )
 
     model_config = {
         "json_schema_extra": {
             "examples": [
-                {
-                    "text": "The food was terrific!",
-                    "include_scores": True,
-                },
-                {
-                    "text": "Terrible service, would not recommend.",
-                    "top_k": 2,
-                },
+                {"text": "The food was terrific!"},
+                {"text": "Terrible service, would not recommend."},
             ]
         }
     }
@@ -52,14 +40,6 @@ class BatchRequest(BaseModel):
         "If omitted, uses the default model. "
         "Returns 400 if the requested model is not loaded.",
     )
-    include_scores: bool = Field(
-        default=True,
-        description="Whether to include probabilities for all classes in the response.",
-    )
-    top_k: int | None = Field(
-        default=None,
-        description="If provided, only return the top K classes in the scores dict.",
-    )
 
     model_config = {
         "json_schema_extra": {
@@ -69,7 +49,6 @@ class BatchRequest(BaseModel):
                         "Great food!",
                         "Terrible service.",
                     ],
-                    "include_scores": True,
                 },
             ]
         }
@@ -100,21 +79,15 @@ class SentimentPrediction(BaseModel):
 
     label: str = Field(..., description="Predicted sentiment label")
     score: float = Field(..., description="Confidence score for the predicted label")
-    scores: dict[str, float] | None = Field(
-        default=None, description="Probabilities for all classes"
-    )
     token_count: int = Field(..., description="Number of tokens in the input text")
     model: str = Field(..., description="Model name used for prediction")
 
     model_config = {
-        "extra": "allow",
         "json_schema_extra": {
             "examples": [
                 {
                     "label": "positive",
                     "score": 0.92,
-                    "positive": 0.92,
-                    "scores": {"negative": 0.03, "neutral": 0.05, "positive": 0.92},
                     "token_count": 4,
                     "model": "encoder",
                 }
@@ -168,7 +141,6 @@ class BatchResponse(BaseModel):
                             "prediction": {
                                 "label": "positive",
                                 "score": 0.89,
-                                "scores": {"negative": 0.05, "neutral": 0.06, "positive": 0.89},
                                 "token_count": 2,
                                 "model": "encoder",
                             },
@@ -382,5 +354,3 @@ class HealthReadyResponse(BaseModel):
             ]
         }
     }
-
-

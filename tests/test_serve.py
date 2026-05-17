@@ -23,12 +23,11 @@ from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from sentimentizer.serve.models import PredictRequest
-from sentimentizer.serve.app import app
-
 # Access the original unwrapped class (Ray Serve wraps it with @deployment)
 from sentimentizer.serve.app import SentimentizerDeployment as _Deployment
+from sentimentizer.serve.app import app
 from sentimentizer.serve.base import ServiceMetrics
+from sentimentizer.serve.models import PredictRequest
 
 _SentimentizerDeployment = _Deployment.func_or_class
 
@@ -49,16 +48,14 @@ def _mock_predictor(**overrides):
     p.router_error = None
     p.predict_batch.return_value = [
         {
-            "positive": 0.88,
             "label": "positive",
             "score": 0.88,
-            "scores": {"negative": 0.02, "neutral": 0.10, "positive": 0.88},
             "token_count": 5,
             "model": "encoder",
         },
     ]
     p.classify_batch.return_value = [
-        {"text": "hello", "prediction": {"category": "general"}},
+        {"prediction": {"label": "general", "score": 0.95, "token_count": 1}},
     ]
     p.tokenize.return_value = {
         "text": "hello",
@@ -135,11 +132,11 @@ def _run(coro):
 
 class TestDummyServe:
     def test_stubs_exist_in_source(self):
-        from sentimentizer import serve_base
+        from sentimentizer.serve import base
 
-        assert "def start(self" in inspect.getsource(serve_base)
-        assert "def run(self" in inspect.getsource(serve_base)
-        assert "def shutdown(self" in inspect.getsource(serve_base)
+        assert "def start(self" in inspect.getsource(base)
+        assert "def run(self" in inspect.getsource(base)
+        assert "def shutdown(self" in inspect.getsource(base)
 
 
 # ---------------------------------------------------------------------------
@@ -188,8 +185,8 @@ class TestPydanticValidation:
 
     def test_batch_request_rejects_too_many_items(self):
         """BatchRequest with texts exceeding max_batch_size should fail."""
-        from sentimentizer.serve.models import BatchRequest
         from sentimentizer.serve.config import load_serve_config
+        from sentimentizer.serve.models import BatchRequest
 
         cfg = load_serve_config()
         with pytest.raises(ValidationError) as exc_info:
@@ -199,8 +196,8 @@ class TestPydanticValidation:
 
     def test_batch_request_rejects_per_item_text_too_long(self):
         """BatchRequest with an individual text exceeding max_text_length should fail."""
-        from sentimentizer.serve.models import BatchRequest
         from sentimentizer.serve.config import load_serve_config
+        from sentimentizer.serve.models import BatchRequest
 
         cfg = load_serve_config()
         with pytest.raises(ValidationError) as exc_info:
@@ -216,30 +213,16 @@ class TestPydanticValidation:
 
 
 class TestPredictionResponseSchema:
-    """Verify predict_batch returns additive format with both old and new keys."""
+    """Verify predict_batch returns format with label, score, token_count, model."""
 
-    def test_predict_batch_includes_new_fields(self):
+    def test_predict_batch_includes_required_fields(self):
         pred = _mock_predictor()
         results = pred.predict_batch(["hello"])
         result = results[0]
-        # New fields
         assert "label" in result
         assert "score" in result
-        assert "scores" in result
         assert "model" in result
         assert "token_count" in result
-        # Backward compat: dynamic key still present
-        assert result["label"] in result
-        # Dynamic key value matches the explicit score
-        assert result[result["label"]] == result["score"]
-
-    def test_predict_batch_scores_has_all_classes(self):
-        pred = _mock_predictor()
-        results = pred.predict_batch(["hello"])
-        scores = results[0]["scores"]
-        assert "negative" in scores
-        assert "neutral" in scores
-        assert "positive" in scores
 
     def test_predict_batch_token_count_is_int(self):
         pred = _mock_predictor()
@@ -508,80 +491,45 @@ class TestErrorEnvelope:
 
 
 class TestFormatPrediction:
-    """Verify _format_prediction handles include_scores, top_k, and token_count."""
+    """Verify _format_prediction returns label, score, token_count, model."""
 
     def test_format_prediction_full(self):
         prediction = {
-            "positive": 0.88,
             "label": "positive",
             "score": 0.88,
-            "scores": {"negative": 0.02, "neutral": 0.10, "positive": 0.88},
             "token_count": 5,
             "model": "encoder",
         }
-        result = _SentimentizerDeployment._format_prediction(
-            prediction, include_scores=True, top_k=None
-        )
+        result = _SentimentizerDeployment._format_prediction(prediction)
         assert result["label"] == "positive"
         assert result["score"] == 0.88
         assert result["model"] == "encoder"
-        assert result["positive"] == 0.88
-        assert "scores" in result
-        assert result["scores"]["negative"] == 0.02
-        assert result["token_count"] == 5
-
-    def test_format_prediction_no_scores(self):
-        prediction = {
-            "positive": 0.88,
-            "label": "positive",
-            "score": 0.88,
-            "scores": {"negative": 0.02, "neutral": 0.10, "positive": 0.88},
-            "token_count": 5,
-            "model": "encoder",
-        }
-        result = _SentimentizerDeployment._format_prediction(
-            prediction, include_scores=False, top_k=None
-        )
-        assert result["label"] == "positive"
-        assert result["score"] == 0.88
-        assert "scores" not in result
-        # Dynamic key still present
-        assert result["positive"] == 0.88
-        # token_count present even when scores omitted
-        assert result["token_count"] == 5
-
-    def test_format_prediction_top_k(self):
-        prediction = {
-            "positive": 0.88,
-            "label": "positive",
-            "score": 0.88,
-            "scores": {"negative": 0.02, "neutral": 0.10, "positive": 0.88},
-            "token_count": 5,
-            "model": "encoder",
-        }
-        result = _SentimentizerDeployment._format_prediction(
-            prediction, include_scores=True, top_k=2
-        )
-        assert len(result["scores"]) == 2
-        assert "positive" in result["scores"]
-        # Top 2 by score: positive (0.88) and neutral (0.10)
-        assert "neutral" in result["scores"]
         assert result["token_count"] == 5
 
     def test_format_prediction_without_token_count(self):
-        """Old format without token_count should still work."""
+        """Legacy predictions without token_count should omit it."""
+        prediction = {
+            "label": "positive",
+            "score": 0.88,
+            "model": "encoder",
+        }
+        result = _SentimentizerDeployment._format_prediction(prediction)
+        assert "token_count" not in result
+        assert result["label"] == "positive"
+
+    def test_format_prediction_omits_scores_and_dynamic_key(self):
+        """Scores dict and dynamic key should not be in the output."""
         prediction = {
             "positive": 0.88,
             "label": "positive",
             "score": 0.88,
             "scores": {"negative": 0.02, "neutral": 0.10, "positive": 0.88},
+            "token_count": 5,
             "model": "encoder",
         }
-        result = _SentimentizerDeployment._format_prediction(
-            prediction, include_scores=True, top_k=None
-        )
-        assert "token_count" not in result
-        assert result["label"] == "positive"
+        result = _SentimentizerDeployment._format_prediction(prediction)
+        assert "scores" not in result
+        assert "positive" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -590,33 +538,21 @@ class TestFormatPrediction:
 
 
 class TestRequestModelFields:
-    """Verify new request fields (model, include_scores, top_k)."""
+    """Verify request model fields."""
 
     def test_predict_request_defaults(self):
         req = PredictRequest(text="hello")
         assert req.model is None
-        assert req.include_scores is True
-        assert req.top_k is None
 
     def test_predict_request_with_model(self):
         req = PredictRequest(text="hello", model="encoder")
         assert req.model == "encoder"
-
-    def test_predict_request_include_scores_false(self):
-        req = PredictRequest(text="hello", include_scores=False)
-        assert req.include_scores is False
-
-    def test_predict_request_top_k(self):
-        req = PredictRequest(text="hello", top_k=2)
-        assert req.top_k == 2
 
     def test_batch_request_defaults(self):
         from sentimentizer.serve.models import BatchRequest
 
         req = BatchRequest(texts=["hello"])
         assert req.model is None
-        assert req.include_scores is True
-        assert req.top_k is None
 
     def test_batch_request_with_model(self):
         from sentimentizer.serve.models import BatchRequest
@@ -739,10 +675,8 @@ class TestTokenCount:
 
     def test_format_prediction_preserves_token_count(self):
         prediction = {
-            "positive": 0.88,
             "label": "positive",
             "score": 0.88,
-            "scores": {"negative": 0.02, "neutral": 0.10, "positive": 0.88},
             "token_count": 12,
             "model": "encoder",
         }
@@ -752,10 +686,8 @@ class TestTokenCount:
     def test_format_prediction_omits_token_count_when_absent(self):
         """Legacy predictions without token_count should still format correctly."""
         prediction = {
-            "positive": 0.88,
             "label": "positive",
             "score": 0.88,
-            "scores": {"negative": 0.02, "neutral": 0.10, "positive": 0.88},
             "model": "encoder",
         }
         result = _SentimentizerDeployment._format_prediction(prediction)

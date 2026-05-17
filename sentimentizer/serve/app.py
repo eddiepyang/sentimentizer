@@ -43,7 +43,7 @@ import asyncio
 import os
 import time
 import uuid
-from typing import Annotated, Any
+from typing import Any
 
 # Prevent Ray from creating isolated worker venvs via uv.
 # Must be set before Ray imports occur — Ray workers that use uv
@@ -281,38 +281,21 @@ class SentimentizerDeployment:
     @staticmethod
     def _format_prediction(
         prediction: dict[str, Any],
-        include_scores: bool = True,
-        top_k: int | None = None,
     ) -> dict[str, Any]:
         """Format a prediction dict for the response.
 
         The prediction dict has the additive v1 format:
         ``{label: score, "label": label, "score": score,
         "scores": {...}, "token_count": N, "model": model}``.
-        Returns label, score, token_count, model, and optionally scores.
+        Returns label, score, token_count, and model.
         """
         result: dict[str, Any] = {
             "label": prediction["label"],
             "score": prediction["score"],
             "model": prediction["model"],
         }
-        
-        # Add the dynamic key for backward compatibility (e.g. "positive": 0.88)
-        label = prediction["label"]
-        if label in prediction:
-            result[label] = prediction[label]
-            
         if "token_count" in prediction:
             result["token_count"] = prediction["token_count"]
-            
-        if include_scores and "scores" in prediction:
-            scores = prediction["scores"]
-            if top_k is not None and top_k > 0:
-                # Sort descending by score, take top_k
-                sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-                scores = dict(sorted_scores[:top_k])
-            result["scores"] = scores
-            
         return result
 
     # ------------------------------------------------------------------
@@ -373,11 +356,7 @@ class SentimentizerDeployment:
             latency_s=f"{latency:.4f}",
             model=prediction.get("model", ""),
         )
-        formatted = self._format_prediction(
-            prediction,
-            include_scores=body.include_scores,
-            top_k=body.top_k,
-        )
+        formatted = self._format_prediction(prediction)
         return {
             "prediction": formatted,
             "latency_s": round(latency, 4),
@@ -397,11 +376,7 @@ class SentimentizerDeployment:
         raw_predictions = await asyncio.to_thread(self.predictor.predict_batch, body.texts)
         results = [
             {
-                "prediction": self._format_prediction(
-                    pred,
-                    include_scores=body.include_scores,
-                    top_k=body.top_k,
-                ),
+                "prediction": self._format_prediction(pred),
             }
             for pred in raw_predictions
         ]

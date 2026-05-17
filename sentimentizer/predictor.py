@@ -264,21 +264,21 @@ class SentimentPredictor:
             if isinstance(pred, str):
                 category = pred
                 label_idx = (
-                    list(label_names.values()).index(pred)
-                    if pred in label_names.values()
-                    else 0
+                    list(label_names.values()).index(pred) if pred in label_names.values() else 0
                 )
             else:
                 label_idx = int(pred)
                 category = label_names.get(label_idx, str(pred))
             token_count = len(regex_tokenize(text))
-            results.append({
-                "prediction": {
-                    "label": category,
-                    "score": float(probabilities[i, label_idx]),
-                    "token_count": token_count,
-                },
-            })
+            results.append(
+                {
+                    "prediction": {
+                        "label": category,
+                        "score": float(probabilities[i, label_idx]),
+                        "token_count": token_count,
+                    },
+                }
+            )
         return results
 
     # ------------------------------------------------------------------

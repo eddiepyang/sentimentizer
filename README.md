@@ -31,20 +31,20 @@ model.predict_text(review_text, tokenizer)
 # >> {'negative': 0.03, 'neutral': 0.05, 'positive': 0.92}
 ```
 
-`predict_text()` on `BaseSentimentModel` returns all 3 class probabilities. `predict_text()` on `BaseSentimentModel` returns all 3 class probabilities. For the serving API, responses use the additive v1 format with explicit `label`, `score`, `scores`, and `token_count` fields:
+`predict_text()` on `BaseSentimentModel` returns all 3 class probabilities. For the serving API, responses include `label`, `score`, `token_count`, and `model`:
 
 ```python
-from sentimentizer.predictor import SentimentPredictor
+from sentimentizer.predictor import SentimentPredictor         # Predictor (model loading, inference)
+from sentimentizer.predictor import SentimentPredictor             # Predictor (model loading, inference)
 
 predictor = SentimentPredictor(model_name="encoder")
 predictor.predict("amazing restaurant!")
-# >> {"positive": 0.92, "label": "positive", "score": 0.92,
-#     "scores": {"negative": 0.03, "neutral": 0.05, "positive": 0.92},
+# >> {"label": "positive", "score": 0.92,
 #     "token_count": 2, "model": "encoder"}
 
 predictor.predict_batch(["Great food!", "Terrible service."])
-# >> [{"positive": 0.88, "label": "positive", "score": 0.88,
-#      "scores": {...}, "token_count": 2, "model": "encoder"}, ...]
+# >> [{"label": "positive", "score": 0.88,
+#      "token_count": 2, "model": "encoder"}, ...]
 
 For advanced use, you can also call tokenization and prediction separately:
 
@@ -119,18 +119,15 @@ curl http://localhost:8000/v1/models
 curl http://localhost:8000/v1/models/encoder
 ```
 
-Sentiment response (additive v1 format — includes explicit fields plus backward-compat dynamic key):
+Sentiment response:
 
 ```json
 {
-  "text": "the food was terrific",
   "prediction": {
     "label": "positive",
     "score": 0.92,
-    "scores": {"negative": 0.03, "neutral": 0.05, "positive": 0.92},
     "token_count": 4,
-    "model": "encoder",
-    "positive": 0.92
+    "model": "encoder"
   },
   "latency_s": 0.0043
 }
@@ -142,19 +139,15 @@ Batch response:
 {
   "results": [
     {
-      "text": "great pizza!",
       "prediction": {
         "label": "positive", "score": 0.89,
-        "scores": {"negative": 0.02, "neutral": 0.09, "positive": 0.89},
-        "token_count": 2, "model": "encoder", "positive": 0.89
+        "token_count": 2, "model": "encoder"
       }
     },
     {
-      "text": "terrible service",
       "prediction": {
         "label": "negative", "score": 0.94,
-        "scores": {"negative": 0.94, "neutral": 0.04, "positive": 0.02},
-        "token_count": 2, "model": "encoder", "negative": 0.94
+        "token_count": 2, "model": "encoder"
       }
     }
   ],
@@ -184,8 +177,7 @@ Router response:
 
 ```json
 {
-  "text": "They were so careful with my celiac needs",
-  "prediction": {"category": "dietary"},
+  "prediction": {"label": "dietary", "score": 0.95, "token_count": 8},
   "latency_s": 0.0031
 }
 ```
@@ -531,7 +523,7 @@ The pipeline consists of three stages, all powered by Ray:
 2. **Transform** — Converts tokens to numeric sequences using `ray.data.map_batches()` and writes processed parquet
 3. **Train** — Fits the model using either single-node PyTorch or distributed Ray Train with `TorchTrainer`
 
-Inference is served via a Ray Serve deployment with FastAPI routing (see `sentimentizer/serve/app.py`). Endpoints are versioned under `/v1/` (e.g., `/v1/predict`, `/v1/batch`). Health probes are unversioned (`/health/live`, `/health/ready`). The API returns the additive v1 format with explicit `label`, `score`, `scores`, and `token_count` fields. The `predict_text()` method on `BaseSentimentModel` returns all 3 class probabilities (without `token_count`) — a different API surface used for validation and export.
+Inference is served via a Ray Serve deployment with FastAPI routing (see `sentimentizer/serve/app.py`). Endpoints are versioned under `/v1/` (e.g., `/v1/predict`, `/v1/batch`). Health probes are unversioned (`/health/live`, `/health/ready`). The API returns `label`, `score`, `token_count`, and `model` in predictions. The `predict_text()` method on `BaseSentimentModel` returns all 3 class probabilities (without `token_count`) — a different API surface used for validation and export.
 
 ## Docker
 
@@ -698,10 +690,12 @@ sentimentizer/
 ├── losses.py             # FocalCrossEntropyLoss for 3-class training
 ├── metrics.py            # 3-class classification metrics (per-class P/R/F1, balanced accuracy, MCC)
 ├── metrics_publisher.py   # Epoch metrics publishing (Prometheus + JSON)
-├── predictor.py           # SentimentPredictor (model loading, inference, additive v1 format)
-├── serve.py              # Ray Serve deployment: FastAPI + @serve.ingress, /v1/ prefix
-├── serve_base.py          # ServiceMetrics (request/latency tracking), _DummyServe fallback
-├── serve_config.py        # Serve deployment configuration (YAML/env var loading, incl. cors_origins)
+├── predictor.py           # SentimentPredictor (model loading, inference)
+├── serve/                 # Ray Serve deployment: FastAPI + @serve.ingress, /v1/ prefix
+│   ├── app.py             # FastAPI route handlers and deployment class
+│   ├── base.py            # ServiceMetrics (request/latency tracking), _DummyServe fallback
+│   ├── config.py           # Serve deployment configuration (YAML/env var loading, incl. cors_origins)
+│   └── models.py          # Pydantic request/response models for Swagger docs
 ├── tokenizer.py           # Text tokenizer with pre-trained support
 ├── trainer.py             # Training logic
 ├── tuner.py               # Ray Tune + Optuna hyperparameter search
