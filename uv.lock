@@ -3395,7 +3395,7 @@ train = [
 
 [[package]]
 name = "sentimentizer"
-version = "0.210.1"
+version = "0.310.1"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
