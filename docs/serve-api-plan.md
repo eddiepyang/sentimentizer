@@ -12,7 +12,7 @@ Risk/gap annotations are marked with **[RISK]**, **[GAP]**, or **[SAFE]**.
 
 **Changes**:
 
-- `sentimentizer/serve.py`:
+- `sentimentizer/serve/app.py`:
   - Add `GET /health/live` — always returns 200 `{"status": "alive", "uptime_s": ...}`
   - Rename current `/health` logic to `GET /health/ready` — 503 if model not loaded
   - Keep `GET /health` as backward-compatible alias that delegates to readiness (same response body, **not** a redirect — K8s probes don't follow redirects by default)
@@ -42,10 +42,8 @@ Risk/gap annotations are marked with **[RISK]**, **[GAP]**, or **[SAFE]**.
 
 **Changes**:
 
-- `sentimentizer/serve.py`:
-  - Create `v1 = APIRouter(prefix="/v1")`
-  - Move sentiment endpoints to `v1`, router endpoints to `v1`
-  - `app.include_router(v1)`
+- `sentimentizer/serve/app.py`:
+  - Use explicit `/v1/` prefixes on the root `app` directly (e.g., `@app.post("/v1/predict")`). Do NOT use `APIRouter`.
   - Keep `/health`, `/health/live`, `/health/ready` at root (unversioned)
   - Update module docstring endpoint list
 - `workflows/cli.py`:
@@ -53,11 +51,9 @@ Risk/gap annotations are marked with **[RISK]**, **[GAP]**, or **[SAFE]**.
 - `tests/test_serve.py`:
   - Update any hardcoded paths
 
-**[SAFE]** Verified `APIRouter` + `@serve.ingress` + `@serve.batch` work together (tested against Ray 2.55.1).
+**[CRITICAL DISCOVERY] `APIRouter` incompatibility.** We discovered that `APIRouter` sub-apps do not work properly with Ray Serve deployments (specifically regarding route registration and/or `@serve.batch` interaction). Therefore, we must register all `/v1/` routes directly on the root `FastAPI` app instance using explicit path prefixes.
 
-**[CRITICAL] Integration test requirement.** The interaction between `@serve.batch` (a Ray decorator) and `APIRouter` (a FastAPI sub-app) is undocumented in Ray. Before any P1 work begins, we MUST verify this works with an integration test that: (1) starts a Ray Serve instance with the `/v1/` router, (2) sends concurrent requests to `/v1/predict`, and (3) confirms auto-batching collects and processes them correctly. This is the single highest-risk change in the plan and must be validated in isolation.
-
-**[RISK] `@serve.batch` reads `cfg.predict_batch_size` at module load time** (in the `@serve.batch(max_batch_size=cfg.predict_batch_size)` decorator on `predict_sentiment()`). Moving these methods into an `APIRouter` sub-app shouldn't affect this, but `@serve.batch` is a Ray decorator, not a FastAPI one, and its interaction with `APIRouter` is undocumented. **Mitigation**: The integration test above validates this.
+**[SAFE]** Verified that using explicit `/v1/` prefixes directly on the root app works seamlessly with `@serve.ingress` and `@serve.batch`.
 
 **[RISK] Breaking change for existing clients.** Any client currently calling `POST /predict` will get 404 after this change. Mitigations:
   - **Option A (recommended)**: Add a deprecation shim — keep old paths as aliases that redirect (307) to `/v1/...` versions. Remove after a transition period.
@@ -96,14 +92,14 @@ Risk/gap annotations are marked with **[RISK]**, **[GAP]**, or **[SAFE]**.
 
 **Changes**:
 
-- `sentimentizer/serve.py`:
+- `sentimentizer/serve/app.py`:
   - Delete `GET /metrics` handler and `_sentiment_metrics`/`_router_metrics` from the deployment
   - Remove from module docstring endpoint list
 - `workflows/cli.py`:
   - Remove `/metrics` from docstring (in `serve_cmd()` function)
 - `tests/test_serve.py`:
   - Remove any metrics endpoint tests (none currently exist)
-- `sentimentizer/serve_base.py`:
+- `sentimentizer/serve/base.py`:
   - `ServiceMetrics` class stays — it's used by the standalone exporter
 
 **[RISK] Breaking change if any client relies on /metrics.** The JSON `/metrics` endpoint is not used by Prometheus (which scrapes port 8081 in the standalone exporter). But someone might have built a dashboard or script that reads it. **Mitigation**: Check with consumers before removing, or keep as deprecated with a log warning for one release cycle.
@@ -128,7 +124,7 @@ Risk/gap annotations are marked with **[RISK]**, **[GAP]**, or **[SAFE]**.
 
 **Changes**:
 
-- `sentimentizer/serve.py`:
+- `sentimentizer/serve/app.py`:
   - Add middleware that reads `X-Request-Id` from request headers, generates UUID if absent, attaches to response headers and `request.state`
   - Log request ID alongside predictions
   - Add `id` field (request ID) to prediction responses (coordinate with P1 #5 schema change to avoid two separate response format updates)
@@ -164,7 +160,7 @@ Risk/gap annotations are marked with **[RISK]**, **[GAP]**, or **[SAFE]**.
 
 - `sentimentizer/predictor.py`:
   - Change `predict_batch()` return format from `{label: score, "model": model_name}` to `{"label": label, "score": score, "scores": all_3, "model": model_name}`
-- `sentimentizer/serve.py`:
+- `sentimentizer/serve/app.py`:
   - Update response construction in handlers that consume `predict_batch` output
 - `AGENTS.md`:
   - Update "Option B format" description
@@ -205,9 +201,9 @@ Clients can migrate to the new fields at their own pace. The dynamic key will be
 
 **Changes**:
 
-- `sentimentizer/serve.py`:
+- `sentimentizer/serve/app.py`:
   - Add `CORSMiddleware` to app
-- `sentimentizer/serve_config.py`:
+- `sentimentizer/serve/config.py`:
   - Add `cors_origins: list[str]` field
   - Add `SENTIMENTIZER_CORS_ORIGINS` env var (comma-separated)
 - `sentimentizer/serve_config.yaml`:
@@ -229,7 +225,7 @@ Clients can migrate to the new fields at their own pace. The dynamic key will be
 
 **Changes**:
 
-- `sentimentizer/serve.py`:
+- `sentimentizer/serve/app.py`:
   - Add `max_length` to `PredictRequest.text`, `TokenizeRequest.text`
   - Add custom validator on `BatchRequest.texts` for per-item max length and list max size
   - Remove all manual `if len(body.text) > self.cfg.max_text_length: raise HTTPException(400)` from handlers

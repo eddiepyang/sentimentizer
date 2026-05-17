@@ -531,7 +531,7 @@ The pipeline consists of three stages, all powered by Ray:
 2. **Transform** — Converts tokens to numeric sequences using `ray.data.map_batches()` and writes processed parquet
 3. **Train** — Fits the model using either single-node PyTorch or distributed Ray Train with `TorchTrainer`
 
-Inference is served via a Ray Serve deployment with FastAPI routing (see `sentimentizer/serve.py`). Endpoints are versioned under `/v1/` (e.g., `/v1/predict`, `/v1/batch`). Health probes are unversioned (`/health/live`, `/health/ready`). The API returns the additive v1 format with explicit `label`, `score`, `scores`, and `token_count` fields. The `predict_text()` method on `BaseSentimentModel` returns all 3 class probabilities (without `token_count`) — a different API surface used for validation and export.
+Inference is served via a Ray Serve deployment with FastAPI routing (see `sentimentizer/serve/app.py`). Endpoints are versioned under `/v1/` (e.g., `/v1/predict`, `/v1/batch`). Health probes are unversioned (`/health/live`, `/health/ready`). The API returns the additive v1 format with explicit `label`, `score`, `scores`, and `token_count` fields. The `predict_text()` method on `BaseSentimentModel` returns all 3 class probabilities (without `token_count`) — a different API surface used for validation and export.
 
 ## Docker
 

@@ -23,11 +23,12 @@ from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from sentimentizer.serve import PredictRequest, app
+from sentimentizer.serve.models import PredictRequest
+from sentimentizer.serve.app import app
 
 # Access the original unwrapped class (Ray Serve wraps it with @deployment)
-from sentimentizer.serve import SentimentizerDeployment as _Deployment
-from sentimentizer.serve_base import ServiceMetrics
+from sentimentizer.serve.app import SentimentizerDeployment as _Deployment
+from sentimentizer.serve.base import ServiceMetrics
 
 _SentimentizerDeployment = _Deployment.func_or_class
 
@@ -80,7 +81,7 @@ def _mock_predictor(**overrides):
 
 def _mock_deployment(predictor=None):
     """Build a mock ``self`` with the same attrs as SentimentizerDeployment."""
-    from sentimentizer.serve_config import ServeConfig
+    from sentimentizer.serve.config import ServeConfig
 
     dep = MagicMock()
     dep.cfg = ServeConfig()
@@ -167,7 +168,7 @@ class TestPydanticValidation:
 
     def test_predict_request_rejects_text_too_long(self):
         """PredictRequest with text exceeding max_text_length should fail."""
-        from sentimentizer.serve_config import load_serve_config
+        from sentimentizer.serve.config import load_serve_config
 
         cfg = load_serve_config()
         with pytest.raises(ValidationError) as exc_info:
@@ -177,7 +178,7 @@ class TestPydanticValidation:
 
     def test_batch_request_rejects_empty_list(self):
         """BatchRequest with texts=[] should fail validation."""
-        from sentimentizer.serve import BatchRequest
+        from sentimentizer.serve.models import BatchRequest
 
         with pytest.raises(ValidationError) as exc_info:
             BatchRequest(texts=[])
@@ -187,8 +188,8 @@ class TestPydanticValidation:
 
     def test_batch_request_rejects_too_many_items(self):
         """BatchRequest with texts exceeding max_batch_size should fail."""
-        from sentimentizer.serve import BatchRequest
-        from sentimentizer.serve_config import load_serve_config
+        from sentimentizer.serve.models import BatchRequest
+        from sentimentizer.serve.config import load_serve_config
 
         cfg = load_serve_config()
         with pytest.raises(ValidationError) as exc_info:
@@ -198,8 +199,8 @@ class TestPydanticValidation:
 
     def test_batch_request_rejects_per_item_text_too_long(self):
         """BatchRequest with an individual text exceeding max_text_length should fail."""
-        from sentimentizer.serve import BatchRequest
-        from sentimentizer.serve_config import load_serve_config
+        from sentimentizer.serve.models import BatchRequest
+        from sentimentizer.serve.config import load_serve_config
 
         cfg = load_serve_config()
         with pytest.raises(ValidationError) as exc_info:
@@ -412,7 +413,7 @@ class TestRequestIdMiddleware:
     def test_cors_and_request_id_middleware_registered(self):
         """The app should have CORS and request-ID middleware registered."""
 
-        from sentimentizer.serve import app
+        from sentimentizer.serve.app import app
 
         cls_names = [m.cls.__name__ for m in app.user_middleware if hasattr(m, "cls")]
         assert "CORSMiddleware" in cls_names
@@ -610,7 +611,7 @@ class TestRequestModelFields:
         assert req.top_k == 2
 
     def test_batch_request_defaults(self):
-        from sentimentizer.serve import BatchRequest
+        from sentimentizer.serve.models import BatchRequest
 
         req = BatchRequest(texts=["hello"])
         assert req.model is None
@@ -618,7 +619,7 @@ class TestRequestModelFields:
         assert req.top_k is None
 
     def test_batch_request_with_model(self):
-        from sentimentizer.serve import BatchRequest
+        from sentimentizer.serve.models import BatchRequest
 
         req = BatchRequest(texts=["hello"], model="encoder")
         assert req.model == "encoder"
@@ -644,7 +645,7 @@ class TestModelDetailEndpoint:
 class TestBodySizeLimitMiddleware:
     def test_body_size_limit_middleware_registered(self):
         """The _RequestBodySizeLimitMiddleware should be in app middleware."""
-        from sentimentizer.serve import _RequestBodySizeLimitMiddleware
+        from sentimentizer.serve.app import _RequestBodySizeLimitMiddleware
 
         cls_names = [m.cls for m in app.user_middleware if hasattr(m, "cls")]
         assert _RequestBodySizeLimitMiddleware in cls_names
@@ -691,7 +692,7 @@ class TestErrorResponseEnvelope:
 
     def test_http_exception_handler_wraps_string_detail(self):
         """HTTPException with string detail should be wrapped in error envelope."""
-        from sentimentizer.serve import http_exception_handler
+        from sentimentizer.serve.app import http_exception_handler
 
         test_app = FastAPI()
 
@@ -712,7 +713,7 @@ class TestErrorResponseEnvelope:
         assert data["error"]["message"] == "Service unavailable"
 
     def test_status_code_to_error_code_mapping(self):
-        from sentimentizer.serve import _status_code_to_error_code
+        from sentimentizer.serve.app import _status_code_to_error_code
 
         assert _status_code_to_error_code(400) == "bad_request"
         assert _status_code_to_error_code(404) == "not_found"
@@ -770,7 +771,7 @@ class TestServeConfigCorsOrigins:
     """Test ServeConfig cors_origins parsing."""
 
     def test_default_cors_origins(self):
-        from sentimentizer.serve_config import ServeConfig
+        from sentimentizer.serve.config import ServeConfig
 
         cfg = ServeConfig()
         assert cfg.cors_origins == ["*"]
@@ -778,7 +779,7 @@ class TestServeConfigCorsOrigins:
     def test_env_var_cors_origins(self):
         import os
 
-        from sentimentizer.serve_config import load_serve_config
+        from sentimentizer.serve.config import load_serve_config
 
         os.environ["SENTIMENTIZER_CORS_ORIGINS"] = "http://localhost:3000,https://app.example.com"
         try:
@@ -793,7 +794,7 @@ class TestServeConfigCorsOrigins:
     def test_single_cors_origin(self):
         import os
 
-        from sentimentizer.serve_config import load_serve_config
+        from sentimentizer.serve.config import load_serve_config
 
         os.environ["SENTIMENTIZER_CORS_ORIGINS"] = "https://app.example.com"
         try:
@@ -803,7 +804,7 @@ class TestServeConfigCorsOrigins:
             del os.environ["SENTIMENTIZER_CORS_ORIGINS"]
 
     def test_parse_list_helper(self):
-        from sentimentizer.serve_config import _parse_list
+        from sentimentizer.serve.config import _parse_list
 
         assert _parse_list("a,b,c") == ["a", "b", "c"]
         assert _parse_list("a, b , c") == ["a", "b", "c"]
@@ -852,14 +853,14 @@ class TestCORSMiddleware:
     """Test CORS middleware is properly configured."""
 
     def test_cors_middleware_allows_all_origins_by_default(self):
-        from sentimentizer.serve_config import ServeConfig
+        from sentimentizer.serve.config import ServeConfig
 
         cfg = ServeConfig()
         assert cfg.cors_origins == ["*"]
 
     def test_cors_exposes_request_id_header(self):
         """X-Request-Id should be in exposed headers for CORS."""
-        from sentimentizer.serve import app
+        from sentimentizer.serve.app import app
 
         for m in app.user_middleware:
             if hasattr(m, "kwargs") and "expose_headers" in m.kwargs:
@@ -875,6 +876,6 @@ class TestRequestBodySizeLimit:
     """Test the body size limit middleware."""
 
     def test_max_body_size_constant(self):
-        from sentimentizer.serve import MAX_REQUEST_BODY_BYTES
+        from sentimentizer.serve.app import MAX_REQUEST_BODY_BYTES
 
         assert MAX_REQUEST_BODY_BYTES == 1 * 1024 * 1024  # 1 MiB

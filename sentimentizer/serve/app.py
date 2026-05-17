@@ -55,7 +55,6 @@ from collections.abc import Callable, Coroutine
 from fastapi import FastAPI, HTTPException, Path, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import Response as StarletteResponse
@@ -63,8 +62,23 @@ from starlette.responses import Response as StarletteResponse
 import sentimentizer.compat  # noqa: F401
 from sentimentizer import logger
 from sentimentizer.predictor import _MODEL_CONFIGS, SentimentPredictor
-from sentimentizer.serve_base import ServiceMetrics, serve
-from sentimentizer.serve_config import load_serve_config
+from sentimentizer.serve.base import ServiceMetrics, serve
+from sentimentizer.serve.config import load_serve_config
+from sentimentizer.serve.models import (
+    BatchRequest,
+    BatchResponse,
+    HealthLiveResponse,
+    HealthReadyResponse,
+    ModelDetailResponse,
+    ModelsResponse,
+    PredictRequest,
+    PredictResponse,
+    RouterBatchResponse,
+    RouterModelsResponse,
+    RouterPredictResponse,
+    TokenizeRequest,
+    TokenizeResponse,
+)
 
 # ---------------------------------------------------------------------------
 # Load configuration (YAML defaults < env var overrides)
@@ -214,230 +228,6 @@ def _status_code_to_error_code(status_code: int) -> str:
 # ---------------------------------------------------------------------------
 
 
-class PredictRequest(BaseModel):
-    """Single text sentiment prediction request."""
-
-    text: Annotated[str, Field(min_length=1, max_length=cfg.max_text_length)]
-    model: str | None = Field(
-        default=None,
-        description="Model name to use for prediction. "
-        "If omitted, uses the default model. "
-        "Returns 400 if the requested model is not loaded.",
-    )
-
-    model_config = {
-        "json_schema_extra": {
-            "examples": [
-                {"text": "The food was terrific!"},
-                {"text": "Terrible service, would not recommend."},
-            ]
-        }
-    }
-
-
-class BatchRequest(BaseModel):
-    """Multiple text sentiment prediction request."""
-
-    texts: list[Annotated[str, Field(min_length=1, max_length=cfg.max_text_length)]] = Field(
-        ..., min_length=1, max_length=cfg.max_batch_size
-    )
-    model: str | None = Field(
-        default=None,
-        description="Model name to use for prediction. "
-        "If omitted, uses the default model. "
-        "Returns 400 if the requested model is not loaded.",
-    )
-
-    model_config = {
-        "json_schema_extra": {
-            "examples": [
-                {
-                    "texts": [
-                        "Great food!",
-                        "Terrible service.",
-                    ],
-                },
-            ]
-        }
-    }
-
-
-class TokenizeRequest(BaseModel):
-    """Tokenize text without running inference."""
-
-    text: Annotated[str, Field(min_length=1, max_length=cfg.max_text_length)]
-
-    model_config = {
-        "json_schema_extra": {
-            "examples": [
-                {"text": "The food was terrific!"},
-            ]
-        }
-    }
-
-
-# ---------------------------------------------------------------------------
-# Response models for Swagger docs
-# ---------------------------------------------------------------------------
-
-
-class SentimentPrediction(BaseModel):
-    """Single sentiment prediction in the response."""
-
-    label: str = Field(..., description="Predicted sentiment label")
-    score: float = Field(..., description="Confidence score for the predicted label")
-    token_count: int = Field(..., description="Number of tokens in the input text")
-    model: str = Field(..., description="Model name used for prediction")
-
-    model_config = {
-        "json_schema_extra": {
-            "examples": [
-                {
-                    "label": "positive",
-                    "score": 0.92,
-                    "token_count": 4,
-                    "model": "encoder",
-                }
-            ]
-        }
-    }
-
-
-class PredictResponse(BaseModel):
-    """Response from /v1/predict."""
-
-    prediction: SentimentPrediction
-    latency_s: float
-
-    model_config = {
-        "json_schema_extra": {
-            "examples": [
-                {
-                    "prediction": {
-                        "label": "positive",
-                        "score": 0.92,
-                        "token_count": 4,
-                        "model": "encoder",
-                    },
-                    "latency_s": 0.0043,
-                }
-            ]
-        }
-    }
-
-
-class BatchResponse(BaseModel):
-    """Response from /v1/batch."""
-
-    results: list[dict[str, Any]]
-    count: int
-    latency_s: float
-
-    model_config = {
-        "json_schema_extra": {
-            "examples": [
-                {
-                    "results": [
-                        {
-                            "prediction": {
-                                "label": "positive",
-                                "score": 0.89,
-                                "token_count": 2,
-                                "model": "encoder",
-                            },
-                        }
-                    ],
-                    "count": 1,
-                    "latency_s": 0.0031,
-                }
-            ]
-        }
-    }
-
-
-class TokenizeResponse(BaseModel):
-    """Response from /v1/tokenize."""
-
-    text: str
-    tokens: list[str]
-    token_ids: list[int]
-    token_count: int
-
-    model_config = {
-        "json_schema_extra": {
-            "examples": [
-                {
-                    "text": "The food was terrific!",
-                    "tokens": ["the", "food", "was", "terrific"],
-                    "token_ids": [42, 156, 23, 789],
-                    "token_count": 4,
-                }
-            ]
-        }
-    }
-
-
-class ModelsResponse(BaseModel):
-    """Response from /v1/models."""
-
-    models: dict[str, Any]
-    default: str
-
-    model_config = {
-        "json_schema_extra": {
-            "examples": [
-                {
-                    "models": {
-                        "encoder": {
-                            "architecture": "Transformer Encoder (CLS token)",
-                            "device": "cpu",
-                            "status": "loaded",
-                        }
-                    },
-                    "default": "encoder",
-                }
-            ]
-        }
-    }
-
-
-class HealthLiveResponse(BaseModel):
-    """Response from /health/live."""
-
-    status: str = "alive"
-    uptime_s: float
-
-    model_config = {"json_schema_extra": {"examples": [{"status": "alive", "uptime_s": 123.4}]}}
-
-
-class HealthReadyResponse(BaseModel):
-    """Response from /health/ready."""
-
-    status: str
-    device: str
-    version: str
-    uptime_s: float
-    model_loaded: str
-    router_loaded: bool
-    router_error: str | None = None
-
-    model_config = {
-        "json_schema_extra": {
-            "examples": [
-                {
-                    "status": "ready",
-                    "device": "cpu",
-                    "version": "0.211.0",
-                    "uptime_s": 123.4,
-                    "model_loaded": "encoder",
-                    "router_loaded": True,
-                    "router_error": None,
-                }
-            ]
-        }
-    }
-
-
 # ---------------------------------------------------------------------------
 # Deployment
 # ---------------------------------------------------------------------------
@@ -491,21 +281,38 @@ class SentimentizerDeployment:
     @staticmethod
     def _format_prediction(
         prediction: dict[str, Any],
+        include_scores: bool = True,
+        top_k: int | None = None,
     ) -> dict[str, Any]:
         """Format a prediction dict for the response.
 
         The prediction dict has the additive v1 format:
         ``{label: score, "label": label, "score": score,
         "scores": {...}, "token_count": N, "model": model}``.
-        Returns only label, score, token_count, and model.
+        Returns label, score, token_count, model, and optionally scores.
         """
         result: dict[str, Any] = {
             "label": prediction["label"],
             "score": prediction["score"],
             "model": prediction["model"],
         }
+        
+        # Add the dynamic key for backward compatibility (e.g. "positive": 0.88)
+        label = prediction["label"]
+        if label in prediction:
+            result[label] = prediction[label]
+            
         if "token_count" in prediction:
             result["token_count"] = prediction["token_count"]
+            
+        if include_scores and "scores" in prediction:
+            scores = prediction["scores"]
+            if top_k is not None and top_k > 0:
+                # Sort descending by score, take top_k
+                sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+                scores = dict(sorted_scores[:top_k])
+            result["scores"] = scores
+            
         return result
 
     # ------------------------------------------------------------------
@@ -566,7 +373,11 @@ class SentimentizerDeployment:
             latency_s=f"{latency:.4f}",
             model=prediction.get("model", ""),
         )
-        formatted = self._format_prediction(prediction)
+        formatted = self._format_prediction(
+            prediction,
+            include_scores=body.include_scores,
+            top_k=body.top_k,
+        )
         return {
             "prediction": formatted,
             "latency_s": round(latency, 4),
@@ -586,7 +397,11 @@ class SentimentizerDeployment:
         raw_predictions = await asyncio.to_thread(self.predictor.predict_batch, body.texts)
         results = [
             {
-                "prediction": self._format_prediction(pred),
+                "prediction": self._format_prediction(
+                    pred,
+                    include_scores=body.include_scores,
+                    top_k=body.top_k,
+                ),
             }
             for pred in raw_predictions
         ]
@@ -616,7 +431,7 @@ class SentimentizerDeployment:
         models_info = self.predictor.get_sentiment_model_info()
         return {"models": models_info, "default": self.predictor.model_name}
 
-    @app.get("/v1/models/{model_name}")
+    @app.get("/v1/models/{model_name}", response_model=ModelDetailResponse)
     async def model_detail(
         self,
         model_name: str = Path(..., description="Model name: rnn, encoder, or decoder"),
@@ -640,7 +455,7 @@ class SentimentizerDeployment:
     # Router handlers (v1 prefix)
     # ------------------------------------------------------------------
 
-    @app.post("/v1/router/predict")
+    @app.post("/v1/router/predict", response_model=RouterPredictResponse)
     async def router_predict(self, body: PredictRequest) -> dict[str, Any]:
         """POST /v1/router/predict -- classify a single text (auto-batched)."""
         if not self.predictor.router_loaded:
@@ -665,7 +480,7 @@ class SentimentizerDeployment:
             "latency_s": round(latency, 4),
         }
 
-    @app.post("/v1/router/batch")
+    @app.post("/v1/router/batch", response_model=RouterBatchResponse)
     async def router_batch(self, body: BatchRequest) -> dict[str, Any]:
         """POST /v1/router/batch -- classify multiple texts into routes."""
         if not self.predictor.router_loaded:
@@ -690,7 +505,7 @@ class SentimentizerDeployment:
             "latency_s": round(latency, 4),
         }
 
-    @app.get("/v1/router/models")
+    @app.get("/v1/router/models", response_model=RouterModelsResponse)
     async def router_models(self) -> dict[str, Any]:
         """GET /v1/router/models -- router model metadata."""
         return self.predictor.get_router_model_info()
@@ -699,7 +514,7 @@ class SentimentizerDeployment:
     # Infrastructure handlers (unversioned)
     # ------------------------------------------------------------------
 
-    @app.get("/health/live", response_model=None)
+    @app.get("/health/live", response_model=HealthLiveResponse)
     async def health_live(self) -> dict[str, Any]:
         """GET /health/live -- liveness probe (always returns 200)."""
         return {
@@ -707,7 +522,7 @@ class SentimentizerDeployment:
             "uptime_s": round(time.time() - self._started_at, 1),
         }
 
-    @app.get("/health/ready", response_model=None)
+    @app.get("/health/ready", response_model=HealthReadyResponse)
     async def health_ready(self) -> dict[str, Any] | JSONResponse:
         """GET /health/ready -- readiness probe (503 if model not loaded)."""
         body = {
@@ -723,7 +538,7 @@ class SentimentizerDeployment:
             return JSONResponse(status_code=503, content=body)
         return body
 
-    @app.get("/health", response_model=None)
+    @app.get("/health", response_model=HealthReadyResponse)
     async def health(self) -> dict[str, Any] | JSONResponse:
         """GET /health -- backward-compatible alias for /health/ready."""
         return await self.health_ready()
@@ -770,13 +585,3 @@ def main(host: str = "0.0.0.0", port: int = 8000) -> None:
         logger.info("Shutting down Serve")
         serve.shutdown()
         ray.shutdown()
-
-
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Start Sentimentizer Serve")
-    parser.add_argument("--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0.0)")
-    parser.add_argument("--port", type=int, default=8000, help="Port to bind to (default: 8000)")
-    args = parser.parse_args()
-    main(host=args.host, port=args.port)

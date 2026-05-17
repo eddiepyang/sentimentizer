@@ -1,0 +1,386 @@
+from typing import Annotated, Any
+from pydantic import BaseModel, Field
+
+from sentimentizer.serve.config import load_serve_config
+
+cfg = load_serve_config()
+
+class PredictRequest(BaseModel):
+    """Single text sentiment prediction request."""
+
+    text: Annotated[str, Field(min_length=1, max_length=cfg.max_text_length)]
+    model: str | None = Field(
+        default=None,
+        description="Model name to use for prediction. "
+        "If omitted, uses the default model. "
+        "Returns 400 if the requested model is not loaded.",
+    )
+    include_scores: bool = Field(
+        default=True,
+        description="Whether to include probabilities for all classes in the response.",
+    )
+    top_k: int | None = Field(
+        default=None,
+        description="If provided, only return the top K classes in the scores dict.",
+    )
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "text": "The food was terrific!",
+                    "include_scores": True,
+                },
+                {
+                    "text": "Terrible service, would not recommend.",
+                    "top_k": 2,
+                },
+            ]
+        }
+    }
+
+
+class BatchRequest(BaseModel):
+    """Multiple text sentiment prediction request."""
+
+    texts: list[Annotated[str, Field(min_length=1, max_length=cfg.max_text_length)]] = Field(
+        ..., min_length=1, max_length=cfg.max_batch_size
+    )
+    model: str | None = Field(
+        default=None,
+        description="Model name to use for prediction. "
+        "If omitted, uses the default model. "
+        "Returns 400 if the requested model is not loaded.",
+    )
+    include_scores: bool = Field(
+        default=True,
+        description="Whether to include probabilities for all classes in the response.",
+    )
+    top_k: int | None = Field(
+        default=None,
+        description="If provided, only return the top K classes in the scores dict.",
+    )
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "texts": [
+                        "Great food!",
+                        "Terrible service.",
+                    ],
+                    "include_scores": True,
+                },
+            ]
+        }
+    }
+
+
+class TokenizeRequest(BaseModel):
+    """Tokenize text without running inference."""
+
+    text: Annotated[str, Field(min_length=1, max_length=cfg.max_text_length)]
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {"text": "The food was terrific!"},
+            ]
+        }
+    }
+
+
+# ---------------------------------------------------------------------------
+# Response models for Swagger docs
+# ---------------------------------------------------------------------------
+
+
+class SentimentPrediction(BaseModel):
+    """Single sentiment prediction in the response."""
+
+    label: str = Field(..., description="Predicted sentiment label")
+    score: float = Field(..., description="Confidence score for the predicted label")
+    scores: dict[str, float] | None = Field(
+        default=None, description="Probabilities for all classes"
+    )
+    token_count: int = Field(..., description="Number of tokens in the input text")
+    model: str = Field(..., description="Model name used for prediction")
+
+    model_config = {
+        "extra": "allow",
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "label": "positive",
+                    "score": 0.92,
+                    "positive": 0.92,
+                    "scores": {"negative": 0.03, "neutral": 0.05, "positive": 0.92},
+                    "token_count": 4,
+                    "model": "encoder",
+                }
+            ]
+        }
+    }
+
+
+class PredictResponse(BaseModel):
+    """Response from /v1/predict."""
+
+    prediction: SentimentPrediction
+    latency_s: float
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "prediction": {
+                        "label": "positive",
+                        "score": 0.92,
+                        "token_count": 4,
+                        "model": "encoder",
+                    },
+                    "latency_s": 0.0043,
+                }
+            ]
+        }
+    }
+
+
+class BatchResultItem(BaseModel):
+    """Single item in a batch response."""
+
+    prediction: SentimentPrediction
+
+
+class BatchResponse(BaseModel):
+    """Response from /v1/batch."""
+
+    results: list[BatchResultItem]
+    count: int
+    latency_s: float
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "results": [
+                        {
+                            "prediction": {
+                                "label": "positive",
+                                "score": 0.89,
+                                "scores": {"negative": 0.05, "neutral": 0.06, "positive": 0.89},
+                                "token_count": 2,
+                                "model": "encoder",
+                            },
+                        }
+                    ],
+                    "count": 1,
+                    "latency_s": 0.0031,
+                }
+            ]
+        }
+    }
+
+
+class TokenizeResponse(BaseModel):
+    """Response from /v1/tokenize."""
+
+    text: str
+    tokens: list[str]
+    token_ids: list[int]
+    token_count: int
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "text": "The food was terrific!",
+                    "tokens": ["the", "food", "was", "terrific"],
+                    "token_ids": [42, 156, 23, 789],
+                    "token_count": 4,
+                }
+            ]
+        }
+    }
+
+
+class ModelDetailResponse(BaseModel):
+    """Response from /v1/models/{model_name}."""
+
+    model: str
+    info: dict[str, Any]
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "model": "encoder",
+                    "info": {
+                        "architecture": "Transformer Encoder (CLS token)",
+                        "device": "cpu",
+                        "status": "loaded",
+                    },
+                }
+            ]
+        }
+    }
+
+
+class ModelsResponse(BaseModel):
+    """Response from /v1/models."""
+
+    models: dict[str, Any]
+    default: str
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "models": {
+                        "encoder": {
+                            "architecture": "Transformer Encoder (CLS token)",
+                            "device": "cpu",
+                            "status": "loaded",
+                        }
+                    },
+                    "default": "encoder",
+                }
+            ]
+        }
+    }
+
+
+class RouterPrediction(BaseModel):
+    """Single router prediction."""
+
+    label: str = Field(..., description="Predicted route category")
+    score: float = Field(..., description="Confidence score for the predicted route")
+    token_count: int = Field(..., description="Number of tokens in the input text")
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "label": "dietary",
+                    "score": 0.98,
+                    "token_count": 5,
+                }
+            ]
+        }
+    }
+
+
+class RouterPredictResponse(BaseModel):
+    """Response from /v1/router/predict."""
+
+    prediction: RouterPrediction
+    latency_s: float
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "prediction": {
+                        "label": "dietary",
+                        "score": 0.98,
+                        "token_count": 5,
+                    },
+                    "latency_s": 0.0051,
+                }
+            ]
+        }
+    }
+
+
+class RouterBatchResultItem(BaseModel):
+    """Single item in a router batch response."""
+
+    prediction: RouterPrediction
+
+
+class RouterBatchResponse(BaseModel):
+    """Response from /v1/router/batch."""
+
+    results: list[RouterBatchResultItem]
+    count: int
+    latency_s: float
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "results": [
+                        {
+                            "prediction": {
+                                "label": "dietary",
+                                "score": 0.98,
+                                "token_count": 5,
+                            }
+                        }
+                    ],
+                    "count": 1,
+                    "latency_s": 0.0062,
+                }
+            ]
+        }
+    }
+
+
+class RouterModelsResponse(BaseModel):
+    """Response from /v1/router/models."""
+
+    model_path: str
+    categories: list[str]
+    status: str
+    error: str | None = None
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "model_path": "models/router",
+                    "categories": ["dietary", "service", "general"],
+                    "status": "loaded",
+                }
+            ]
+        }
+    }
+
+
+class HealthLiveResponse(BaseModel):
+    """Response from /health/live."""
+
+    status: str = "alive"
+    uptime_s: float
+
+    model_config = {"json_schema_extra": {"examples": [{"status": "alive", "uptime_s": 123.4}]}}
+
+
+class HealthReadyResponse(BaseModel):
+    """Response from /health/ready."""
+
+    status: str
+    device: str
+    version: str
+    uptime_s: float
+    model_loaded: str
+    router_loaded: bool
+    router_error: str | None = None
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "status": "ready",
+                    "device": "cpu",
+                    "version": "0.211.0",
+                    "uptime_s": 123.4,
+                    "model_loaded": "encoder",
+                    "router_loaded": True,
+                    "router_error": None,
+                }
+            ]
+        }
+    }
+
+

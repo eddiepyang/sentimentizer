@@ -501,7 +501,7 @@ class ClassificationMetrics:
 - Update `TunePrometheusCallback._update_trial_gauges()` for new metric keys
 - Update `compute_metrics_from_model()` call to pass 3-class probabilities
 
-### `sentimentizer/serve.py`
+### `sentimentizer/serve/app.py`
 
 - **`_predict_sentiment()`**:
   ```python
@@ -521,7 +521,7 @@ class ClassificationMetrics:
   - Line 187: `"label": "positive" if score > 0.5 else "negative"` → `"label": max(scores, key=scores.get)`
   - Line 273: `score=prediction["sentiment_score"]` → remove or update kwarg passed to `build_predict_response()`
 
-### `sentimentizer/serve_base.py`
+### `sentimentizer/serve/base.py`
 
 - Update `build_predict_response()` to handle dict scores instead of scalar
 - Line 273 caller passes `score=prediction["sentiment_score"]` — after migration, the `score` kwarg becomes `scores=prediction["scores"]` (dict) or remove it from `**log_extra`
