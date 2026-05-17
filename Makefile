@@ -3,7 +3,8 @@
  	   gpu-reset tune tune-rnn tune-encoder tune-decoder tune-standalone \
  	   start-metrics stop-metrics setup-dashboards start-exporter stop-exporter stop-ray \
  	   upload-rnn upload-encoder upload-decoder download-rnn download-encoder download-decoder \
- 	   push-hub pull-hub diagnose diagnose-env diagnose-pipeline
+ 	   push-hub pull-hub diagnose diagnose-env diagnose-pipeline \
+ 	   router-augment router-train router-evaluate router-pipeline upload-router
 
 # Default device: use auto-detect (cuda > mps > cpu)
 DEVICE ?= auto
@@ -145,6 +146,25 @@ tune-no-validate:
 	uv run sentimentizer --model $(MODEL) tune --no-validate --save
 
 # ──────────────────────────────────────────────
+# Router
+# ──────────────────────────────────────────────
+
+## Augment router seed utterances with GLM 5.1 (requires Ollama)
+router-augment:
+	uv run sentimentizer router augment --output augmented_yelp.jsonl
+
+## Train the SetFit router model
+router-train:
+	uv run sentimentizer router train --data augmented_yelp.jsonl
+
+## Evaluate the SetFit router model
+router-evaluate:
+	uv run sentimentizer router evaluate --model-path models/router --data augmented_yelp.jsonl
+
+## Run the full router pipeline (augment -> train -> evaluate)
+router-pipeline: router-augment router-train router-evaluate
+
+# ──────────────────────────────────────────────
 # Hugging Face Hub (push/pull per model)
 # ──────────────────────────────────────────────
 
@@ -160,8 +180,12 @@ upload-encoder:
 upload-decoder:
 	uv run sentimentizer --model decoder hf push
 
+## Upload Router model to Hugging Face Hub
+upload-router:
+	uv run sentimentizer router push
+
 ## Upload all models to Hugging Face Hub
-push-hub: upload-rnn upload-encoder upload-decoder
+push-hub: upload-rnn upload-encoder upload-decoder upload-router
 
 ## Download RNN weights + dictionary from Hugging Face Hub
 download-rnn:
@@ -198,9 +222,9 @@ diagnose:
 # Serving
 # ──────────────────────────────────────────────
 
-## Start Ray Serve with all three models
+## Start Ray Serve with all three models (default: 0.0.0.0:8000)
 serve:
-	uv run serve run sentimentizer.serve:app --host 0.0.0.0 --port 8000
+	uv run --active python -m sentimentizer.serve
 
 # ──────────────────────────────────────────────
 # Testing & Linting

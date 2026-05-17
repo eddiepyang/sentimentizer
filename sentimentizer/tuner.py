@@ -603,7 +603,7 @@ def tune_model(
     from sentimentizer.config import DriverConfig, auto_detect_device
 
     search_space["model_type"] = model_type
-    search_space["device"] = auto_detect_device()
+    search_space["device"] = auto_detect_device("auto")
     search_space["dict_path"] = DriverConfig.files.dictionary_file_path
     search_space["embeddings_model_name"] = DriverConfig.embeddings.model_name
     search_space["embeddings_emb_length"] = DriverConfig.embeddings.emb_length

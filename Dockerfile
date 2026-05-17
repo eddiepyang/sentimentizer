@@ -1,4 +1,4 @@
-FROM python:3.11-slim AS builder
+FROM python:3.12-slim AS builder
 
 WORKDIR /app
 
@@ -18,7 +18,7 @@ RUN uv pip install --system --no-cache-dir \
     --default-index https://pypi.org/simple/ .
 
 # --- Runtime stage ---
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
@@ -31,7 +31,7 @@ RUN useradd -r -s /bin/false -d /app sentimentizer \
     && chown -R sentimentizer:sentimentizer /app
 
 # Copy installed packages and app from builder
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY --from=builder /app /app
 

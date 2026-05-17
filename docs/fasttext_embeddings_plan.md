@@ -1,5 +1,8 @@
 # fastText Embeddings Integration Plan
 
+> **Status: NOT YET IMPLEMENTED** — This is a future plan. The 3-class migration has been completed; this can be implemented independently or bundled with a future embedding upgrade.
+> Current status: Using GloVe-100 embeddings with `NUM_CLASSES=3`, `CrossEntropyLoss`, and `compute_class_weights()`.
+
 ## Background
 
 The pipeline currently uses GloVe Wiki-Gigaword-100 (100-dim, context-free, trained on Wikipedia/news). This has two problems for Yelp sentiment analysis:

@@ -1,5 +1,7 @@
 # Training Loop Unification Plan
 
+> **Status: NOT YET IMPLEMENTED** — This is a future plan. The codebase currently has three separate training loop implementations (single-node, distributed, tuning). All three have been updated for 3-class classification (`CrossEntropyLoss`, `.long()` targets, per-class metrics). This plan describes a future refactoring to unify them.
+
 ## Problem
 
 The codebase has **three** implementations of essentially the same training logic:
@@ -601,9 +603,9 @@ Tests access `trainer.val_loss`, `trainer.losses` after training.
 
 **Severity: LOW**
 
-`pos_weight` tensor is created on different devices in different paths.
+`class_weights` tensor is created on different devices in different paths.
 
-**Mitigation Strategy**: `_create_training_components()` always moves `pos_weight` to the correct device.
+**Mitigation Strategy**: `_create_training_components()` always moves `class_weights` to the correct device.
 
 ### RISK 11: Rank Gating for Metrics and Logging Callbacks
 
@@ -634,7 +636,7 @@ In distributed mode (`_train_func`), PyTorch requires the `Optimizer` to be inst
 | 7 | Unbounded `self.losses` list | LOW | Addressed in Phase 1 by calculating an O(1) iterative running mean |
 | 8 | Tests depend on `Trainer` instance state | MEDIUM | Copy `TrainingState` back to `Trainer` attributes |
 | 9 | Different data iteration patterns | MEDIUM | `_iter_batches()` generator |
-| 10 | Loss function device handling | LOW | `_create_training_components()` factory |
+| 10 | Loss function device handling | LOW | `_create_training_components()` factory moves `class_weights` to correct device |
 | 11 | Rank Gating for Metrics and Logging Callbacks | HIGH | Explictly rank check in `_train_func()` before appending callbacks |
 | 12 | DDP Wrapping vs. Optimizer Instantiation Order | HIGH | Enforce model creation -> `prepare_model()` -> optimizer instantiation order |
 

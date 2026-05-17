@@ -46,7 +46,7 @@ def shared_train_options(func: click.Command) -> click.Command:
             "--num-classes",
             default=3,
             type=int,
-            help="Number of classification classes (2 for binary, 3 for negative/neutral/positive)",
+            help="Number of classification classes (must be 3 for negative/neutral/positive)",
         ),
         click.option(
             "--include-neutral/--no-include-neutral",
@@ -440,6 +440,7 @@ def router_evaluate(ctx: click.Context, model_path: str, data: str | None) -> No
     """Evaluate the SetFit router model."""
     from setfit import SetFitModel
 
+    import sentimentizer.compat  # noqa: F401
     from sentimentizer.router.evaluate import evaluate_router
 
     model = SetFitModel.from_pretrained(model_path)
@@ -450,6 +451,25 @@ def router_evaluate(ctx: click.Context, model_path: str, data: str | None) -> No
         evaluate_router(model, eval_ds)
     else:
         click.echo("No evaluation data provided. Use --data to specify a JSONL file.")
+
+
+@router.command("push")
+@click.option("--model-path", default="models/router", help="Path to trained router model")
+@click.option("--repo-id", default="ryeyoo/sentimentizer-router", help="Hugging Face repository ID")
+@click.pass_context
+def router_push(ctx: click.Context, model_path: str, repo_id: str) -> None:
+    """Push the trained SetFit router model to Hugging Face Hub."""
+    from setfit import SetFitModel
+
+    import sentimentizer.compat  # noqa: F401
+
+    try:
+        model = SetFitModel.from_pretrained(model_path)
+        click.echo(f"Pushing router model to {repo_id}...")
+        model.push_to_hub(repo_id)
+        click.echo(f"Successfully pushed router model to {repo_id}")
+    except Exception as e:
+        click.echo(f"Failed to push router model: {e}", err=True)
 
 
 # ── serve ───────────────────────────────────────
@@ -465,51 +485,25 @@ def serve_cmd(ctx: click.Context, model_path: str, host: str, port: int) -> None
 
     Starts a REST API serving both sentiment analysis and review routing:
 
-    Sentiment endpoints:
-        POST /predict, POST /batch, POST /tokenize, GET /models
+    Sentiment endpoints (v1):
+        POST /v1/predict, POST /v1/batch, POST /v1/tokenize, GET /v1/models
 
-    Router endpoints:
-        POST /router/predict, POST /router/batch, GET /router/models
+    Router endpoints (v1):
+        POST /v1/router/predict, POST /v1/router/batch, GET /v1/router/models
 
-    Shared endpoints:
-        GET /health, GET /metrics
+    Infrastructure endpoints (unversioned):
+        GET /health, GET /health/live, GET /health/ready
 
     Requires the ray extra: pip install -e ".[ray]"
     """
-    import subprocess
-    import sys
+    import os
 
-    click.echo(f"Starting Sentimentizer serve on {host}:{port}...")
-    click.echo(f"Router model path: {model_path}")
-    click.echo("")
-    click.echo("Sentiment endpoints:")
-    click.echo("  POST /predict     — Classify a single text")
-    click.echo("  POST /batch       — Classify multiple texts")
-    click.echo("  POST /tokenize    — Tokenize text without inference")
-    click.echo("  GET  /models      — Sentiment model metadata")
-    click.echo("")
-    click.echo("Router endpoints:")
-    click.echo("  POST /router/predict  — Route a single text")
-    click.echo("  POST /router/batch    — Route multiple texts")
-    click.echo("  GET  /router/models   — Router model metadata")
-    click.echo("")
-    click.echo("Shared endpoints:")
-    click.echo("  GET  /health  — Health check")
-    click.echo("  GET  /metrics — Request metrics")
+    os.environ.setdefault("ROUTER_MODEL_PATH", model_path)
+    os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
 
-    cmd = [
-        sys.executable,
-        "-m",
-        "ray.serve",
-        "run",
-        "sentimentizer.serve:app",
-        "--host",
-        host,
-        "--port",
-        str(port),
-    ]
-    env = {**__import__("os").environ, "ROUTER_MODEL_PATH": model_path}
-    subprocess.run(cmd, env=env)
+    from sentimentizer.serve import main as serve_main
+
+    serve_main(host=host, port=port)
 
 
 # ── diagnose ─────────────────────────────────

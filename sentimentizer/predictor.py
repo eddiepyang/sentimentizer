@@ -1,0 +1,366 @@
+"""Prediction engine for sentiment analysis and review routing.
+
+Encapsulates model loading, inference, and result formatting so that
+serving (HTTP API) and other callers share a single code path.
+
+Usage::
+
+    from sentimentizer.predictor import SentimentPredictor
+
+    predictor = SentimentPredictor(model_name="encoder")
+    result = predictor.predict("This restaurant was amazing!")
+    # {"label": "positive", "score": 0.88,
+    #  "scores": {"negative": 0.02, ...}, "model": "encoder", "positive": 0.88}
+
+    batch = predictor.predict_batch(["Great food!", "Terrible service."])
+    # [{"label": "positive", "score": 0.88, "scores": {...},
+    #  "token_count": 3, "model": "encoder", "positive": 0.88}, ...]
+
+    route = predictor.classify("Is the pasta gluten-free?")
+    # {"text": "Is the pasta gluten-free?", "prediction": {"category": "dietary"}}
+
+    tokens = predictor.tokenize("Hello world")
+    # {"text": "Hello world", "tokens": ["hello", "world"], "token_ids": [...], "token_count": 2}
+"""
+
+from __future__ import annotations
+
+import importlib.metadata
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import torch
+
+from sentimentizer import logger
+from sentimentizer.config import auto_detect_device
+from sentimentizer.models.base import BaseSentimentModel, get_trained_model
+from sentimentizer.tokenizer import Tokenizer, get_trained_tokenizer, regex_tokenize, text_sequencer
+
+# ---------------------------------------------------------------------------
+# Router imports (optional — SetFit may not be installed)
+# ---------------------------------------------------------------------------
+
+try:
+    import sentimentizer.compat  # noqa: F401, I001 — must patch transformers BEFORE setfit import
+
+    from setfit import SetFitModel
+
+    _SETFIT_AVAILABLE = True
+except ImportError:
+    _SETFIT_AVAILABLE = False
+
+try:
+    from sentimentizer.router.config import RouteLabels, SetFitConfig
+    from sentimentizer.router.train_router import _load_setfit_model
+
+    _ROUTER_AVAILABLE = True
+except ImportError:
+    _ROUTER_AVAILABLE = False
+
+
+class SentimentPredictor:
+    """High-level prediction engine wrapping model loading and inference.
+
+    Handles:
+      - Single-text and batch sentiment prediction
+      - Single-text and batch review routing
+      - Standalone tokenization
+      - Model and router lifecycle
+    """
+
+    def __init__(
+        self,
+        model_name: str = "encoder",
+        router_model_path: str | None = None,
+        device: str | None = None,
+    ) -> None:
+        self.device: str = device or auto_detect_device("auto")
+        self.tokenizer: Tokenizer = get_trained_tokenizer()
+
+        # --- Sentiment model ---
+        self.model_name: str = model_name.lower().strip()
+        self.model, self._model_error = self._load_sentiment_model(self.model_name)
+
+        # --- Router model (graceful degradation if unavailable) ---
+        if router_model_path is None:
+            router_model_path = "models/router"
+        self.router, self._router_error = self._load_router_model(router_model_path)
+
+        # --- Version ---
+        self._version = self._detect_version()
+
+    # ------------------------------------------------------------------
+    # Initialization helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _detect_version() -> str:
+        try:
+            return importlib.metadata.version("sentimentizer")
+        except Exception:
+            return "unknown"
+
+    def _load_sentiment_model(self, model_name: str) -> tuple[torch.nn.Module | None, str | None]:
+        """Load a sentiment model. Returns (model, error).
+
+        Returns (None, error_message) on failure so callers can decide
+        whether to crash or degrade gracefully.
+        """
+        try:
+            model = get_trained_model(model_name, device=self.device)
+            model.tokenizer = self.tokenizer
+            model.to(self.device)
+            model.eval()
+            logger.info(f"Loaded sentiment model: {model_name}")
+            return model, None
+        except Exception as exc:
+            logger.exception(f"Failed to load sentiment model: {model_name}")
+            return None, str(exc)
+
+    def _load_router_model(self, router_model_path: str) -> tuple[Any, str | None]:
+        """Load the SetFit router model. Returns (model, error).
+
+        Returns (None, error_message) on failure so callers can return 503
+        instead of crashing the whole deployment.
+        """
+        if not _ROUTER_AVAILABLE or not _SETFIT_AVAILABLE:
+            msg = "setfit package not installed"
+            logger.warning(f"Router not available: {msg}")
+            return None, msg
+
+        path = Path(router_model_path)
+        try:
+            if path.exists():
+                logger.info(f"Loading router model from {path}")
+                model = SetFitModel.from_pretrained(str(path))
+            else:
+                logger.info("Loading router base model with classification head")
+                config = SetFitConfig()
+                model = _load_setfit_model(config.base_model, num_classes=RouteLabels.num_classes())
+            return model, None
+        except Exception as exc:
+            logger.exception("Failed to load router model")
+            return None, str(exc)
+
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
+
+    @property
+    def model_loaded(self) -> bool:
+        """Whether the sentiment model loaded successfully."""
+        return self.model is not None
+
+    @property
+    def router_loaded(self) -> bool:
+        """Whether the router model loaded successfully."""
+        return self.router is not None
+
+    @property
+    def router_error(self) -> str | None:
+        """Error message if router failed to load, else None."""
+        return self._router_error
+
+    @property
+    def model_error(self) -> str | None:
+        """Error message if sentiment model failed to load, else None."""
+        return self._model_error
+
+    @property
+    def version(self) -> str:
+        """Package version string."""
+        return self._version
+
+    # ------------------------------------------------------------------
+    # Sentiment inference
+    # ------------------------------------------------------------------
+
+    def predict(self, text: str) -> dict[str, Any]:
+        """Run sentiment analysis on a single text.
+
+        Returns:
+            Dict with label, score, all class scores, token usage,
+            and model name.
+            Example: ``{"label": "positive", "score": 0.88,
+            "scores": {"negative": 0.02, "neutral": 0.10,
+            "positive": 0.88}, "token_count": 5, "model": "encoder",
+            "positive": 0.88}``
+        """
+        if not self.model_loaded:
+            raise RuntimeError(f"Sentiment model not loaded: {self._model_error}")
+        results = self.predict_batch([text])
+        return results[0]
+
+    def predict_batch(self, texts: list[str]) -> list[dict[str, Any]]:
+        """Run sentiment analysis on multiple texts — single forward pass.
+
+        Tokenizes all texts, stacks into a single ``(B, seq_len)`` array,
+        and runs one forward pass.
+
+        Returns:
+            List of dicts, each with label, score, all class scores,
+            token usage, and the model name. Uses additive format with
+            both the dynamic winning-class key (deprecated) and explicit
+            fields.
+            Example: ``[{"positive": 0.88, "label": "positive",
+            "score": 0.88, "scores": {...}, "token_count": 12,
+            "model": "encoder"}, ...]``
+        """
+        if not self.model_loaded:
+            raise RuntimeError(f"Sentiment model not loaded: {self._model_error}")
+
+        token_arrays = [self.model.tokenizer.tokenize_text(t) for t in texts]
+        token_counts = [len(regex_tokenize(t)) for t in texts]
+        batch = np.concatenate(token_arrays, axis=0)
+        probs = self.model.predict(batch)
+
+        label_names = BaseSentimentModel.LABEL_NAMES
+        label_idx = probs.argmax(dim=1)
+        results: list[dict[str, Any]] = []
+        for i in range(len(texts)):
+            label = label_names[label_idx[i]]
+            score = probs[i, label_idx[i]].item()
+            all_scores = {name: probs[i, j].item() for j, name in enumerate(label_names)}
+            results.append(
+                {
+                    label: score,
+                    "label": label,
+                    "score": score,
+                    "scores": all_scores,
+                    "token_count": token_counts[i],
+                    "model": self.model_name,
+                }
+            )
+        return results
+
+    # ------------------------------------------------------------------
+    # Router inference
+    # ------------------------------------------------------------------
+
+    def classify(self, text: str) -> dict[str, Any]:
+        """Classify a single text into a route category.
+
+        Returns:
+            Dict with key ``prediction`` containing label, score, and token_count.
+        """
+        results = self.classify_batch([text])
+        return results[0]
+
+    def classify_batch(self, texts: list[str]) -> list[dict[str, Any]]:
+        """Classify multiple texts into route categories.
+
+        Returns:
+            List of dicts, each with key ``prediction`` containing label, score, and token_count.
+        """
+        if not self.router_loaded:
+            raise RuntimeError(f"Router model not loaded: {self._router_error}")
+
+        label_names = RouteLabels.label_names()
+        predictions = self.router.predict(texts)
+        probabilities = self.router.predict_proba(texts)
+        results: list[dict[str, Any]] = []
+        for i, (text, pred) in enumerate(zip(texts, predictions, strict=False)):
+            if isinstance(pred, str):
+                category = pred
+                label_idx = (
+                    list(label_names.values()).index(pred) if pred in label_names.values() else 0
+                )
+            else:
+                label_idx = int(pred)
+                category = label_names.get(label_idx, str(pred))
+            token_count = len(regex_tokenize(text))
+            results.append(
+                {
+                    "prediction": {
+                        "label": category,
+                        "score": float(probabilities[i, label_idx]),
+                        "token_count": token_count,
+                    },
+                }
+            )
+        return results
+
+    # ------------------------------------------------------------------
+    # Tokenization
+    # ------------------------------------------------------------------
+
+    def tokenize(self, text: str) -> dict[str, Any]:
+        """Tokenize text without running inference.
+
+        Returns:
+            Dict with keys ``text``, ``tokens``, ``token_ids``, ``token_count``.
+        """
+        tokens = regex_tokenize(text)
+        token_ids = text_sequencer(self.tokenizer.dictionary, tokens, self.tokenizer.cfg.max_len)
+        return {
+            "text": text,
+            "tokens": tokens,
+            "token_ids": token_ids.tolist(),
+            "token_count": len(tokens),
+        }
+
+    # ------------------------------------------------------------------
+    # Model metadata
+    # ------------------------------------------------------------------
+
+    def get_sentiment_model_info(self) -> dict[str, Any]:
+        """Return metadata about the loaded sentiment model."""
+        import dataclasses
+
+        from sentimentizer.config import EmbeddingsConfig
+
+        config_entry = _MODEL_CONFIGS.get(self.model_name)
+        if config_entry is None:
+            return {"model": self.model_name, "status": "unknown_config"}
+
+        cfg = config_entry["config_class"]()
+        cfg_dict = dataclasses.asdict(cfg)
+        param_count = sum(p.numel() for p in self.model.parameters()) if self.model_loaded else 0
+
+        return {
+            self.model_name: {
+                "architecture": config_entry["architecture"],
+                "device": self.device,
+                "max_sequence_length": self.tokenizer.cfg.max_len,
+                "embedding_dim": EmbeddingsConfig.emb_length,
+                "parameters": param_count,
+                "status": "loaded" if self.model_loaded else "error",
+                **cfg_dict,
+            }
+        }
+
+    def get_router_model_info(self) -> dict[str, Any]:
+        """Return metadata about the loaded router model."""
+        info: dict[str, Any] = {
+            "model_path": str(
+                self._router_model_path if hasattr(self, "_router_model_path") else "models/router"
+            ),
+            "categories": RouteLabels.label_names() if _ROUTER_AVAILABLE else [],
+            "status": "loaded" if self.router_loaded else "error",
+        }
+        if self._router_error:
+            info["error"] = self._router_error
+        return info
+
+
+# ---------------------------------------------------------------------------
+# Model config registry — metadata derived from config dataclasses
+# ---------------------------------------------------------------------------
+
+from sentimentizer.config import DecoderConfig, EncoderConfig, RNNConfig  # noqa: E402
+
+_MODEL_CONFIGS: dict[str, dict[str, Any]] = {
+    "rnn": {
+        "architecture": "Bidirectional LSTM",
+        "config_class": RNNConfig,
+    },
+    "encoder": {
+        "architecture": "Transformer Encoder (CLS token)",
+        "config_class": EncoderConfig,
+    },
+    "decoder": {
+        "architecture": "Encoder-Decoder Transformer (cross-attention)",
+        "config_class": DecoderConfig,
+    },
+}

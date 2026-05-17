@@ -28,10 +28,23 @@ tokenizer = get_trained_tokenizer()
 
 review_text = "greatest pie ever, best in town!"
 model.predict_text(review_text, tokenizer)
-# >> 0.9701
+# >> {'negative': 0.03, 'neutral': 0.05, 'positive': 0.92}
 ```
 
-`predict_text()` combines tokenization and inference into one call — it accepts raw text and a tokenizer, and returns a `float` sentiment score.
+`predict_text()` on `BaseSentimentModel` returns all 3 class probabilities. For the serving API, responses include `label`, `score`, `token_count`, and `model`:
+
+```python
+from sentimentizer.predictor import SentimentPredictor         # Predictor (model loading, inference)
+from sentimentizer.predictor import SentimentPredictor             # Predictor (model loading, inference)
+
+predictor = SentimentPredictor(model_name="encoder")
+predictor.predict("amazing restaurant!")
+# >> {"label": "positive", "score": 0.92,
+#     "token_count": 2, "model": "encoder"}
+
+predictor.predict_batch(["Great food!", "Terrible service."])
+# >> [{"label": "positive", "score": 0.88,
+#      "token_count": 2, "model": "encoder"}, ...]
 
 For advanced use, you can also call tokenization and prediction separately:
 
@@ -39,7 +52,7 @@ For advanced use, you can also call tokenization and prediction separately:
 # Two-step: tokenize first, then predict
 positive_ids = tokenizer.tokenize_text(review_text)
 model.predict(positive_ids)
-# >> tensor(0.9701)
+# >> tensor([[0.03, 0.05, 0.92]])  # (1, 3) probability matrix
 
 # Tokenize without inference (for inspection)
 from sentimentizer.tokenizer import regex_tokenize, text_sequencer
@@ -47,7 +60,7 @@ tokens = regex_tokenize(review_text)
 token_ids = text_sequencer(tokenizer.dictionary, tokens, tokenizer.cfg.max_len)
 ```
 
-Scores range from **0** (very negative) to **1** (very positive).
+Models output **3-class probabilities** (negative, neutral, positive) that sum to 1.0 per sample.
 
 ## Models
 
@@ -59,7 +72,7 @@ Three architectures are available:
 | **RNN** | `sentimentizer.models.rnn` | Bidirectional 2-layer LSTM (hidden=256) with GloVe embeddings — solid baseline |
 | **Decoder** | `sentimentizer.models.decoder` | Encoder-Decoder Transformer with learnable query token + cross-attention (2 encoder + 4 decoder layers) |
 
-**Why Encoder?** Self-attention over the full token sequence with a CLS token is the most natural fit for sentence-level classification. The RNN processes tokens sequentially and can miss long-range dependencies, though bidirectionality helps. The Decoder uses cross-attention (a query token attends to encoded text), which is effective but adds encoder overhead — best reserved for cases where you want the Decoder's cross-attention pattern.
+All models output **3-class logits** `(B, 3)` with classes: negative (0), neutral (1), positive (2).
 
 Each module exposes `get_trained_model(device, model_config=...)` to load pre-trained weights.
 
@@ -69,50 +82,77 @@ Each module exposes `get_trained_model(device, model_config=...)` to load pre-tr
 
 > **Note:** Serving requires the `ray` extra: `uv add "sentimentizer[ray]"`
 
-The `sentimentizer serve` command deploys a unified Ray Serve application that loads **all three sentiment models** (RNN, Encoder, Decoder) and the **SetFit router** at startup. Both services share the same port with route-based dispatch.
+The serve command starts a Ray Serve application with FastAPI routing (`/docs` and `/redoc` available for free). It loads the **Encoder** sentiment model and the **SetFit router** at startup. Both services share the same port with route-based dispatch.
 
 ```bash
-sentimentizer serve --model-path models/router --port 8080
+# Start with defaults (encoder model, port 8000)
+make serve
+
+# Or via CLI with options
+sentimentizer serve --host 0.0.0.0 --port 8000
 ```
+
+By default, the server binds to `0.0.0.0:8000`.
 
 #### Sentiment analysis endpoints
 
 ```bash
-# Single prediction (defaults to RNN)
-curl -X POST http://localhost:8080/predict \
+# Single prediction
+curl -X POST http://localhost:8000/v1/predict \
   -H "Content-Type: application/json" \
   -d '{"text": "the food was terrific"}'
-
-# Use a specific model
-curl -X POST http://localhost:8080/predict \
-  -H "Content-Type: application/json" \
-  -d '{"text": "the food was terrific", "model": "encoder"}'
 
 # Batch prediction
-curl -X POST http://localhost:8080/batch \
+curl -X POST http://localhost:8000/v1/batch \
   -H "Content-Type: application/json" \
-  -d '{"texts": ["great pizza!", "terrible service"], "model": "encoder"}'
+  -d '{"texts": ["great pizza!", "terrible service"]}'
 
 # Tokenize text without inference
-curl -X POST http://localhost:8080/tokenize \
+curl -X POST http://localhost:8000/v1/tokenize \
   -H "Content-Type: application/json" \
   -d '{"text": "the food was terrific"}'
 
-# List sentiment models
-curl http://localhost:8080/models
+# List all sentiment models
+curl http://localhost:8000/v1/models
+
+# Single model metadata
+curl http://localhost:8000/v1/models/encoder
 ```
 
 Sentiment response:
 
 ```json
 {
-  "text": "the food was terrific",
   "prediction": {
-    "model": "encoder",
-    "sentiment_score": 0.9701,
-    "label": "positive"
+    "label": "positive",
+    "score": 0.92,
+    "token_count": 4,
+    "model": "encoder"
   },
   "latency_s": 0.0043
+}
+```
+
+Batch response:
+
+```json
+{
+  "results": [
+    {
+      "prediction": {
+        "label": "positive", "score": 0.89,
+        "token_count": 2, "model": "encoder"
+      }
+    },
+    {
+      "prediction": {
+        "label": "negative", "score": 0.94,
+        "token_count": 2, "model": "encoder"
+      }
+    }
+  ],
+  "count": 2,
+  "latency_s": 0.0031
 }
 ```
 
@@ -120,28 +160,24 @@ Sentiment response:
 
 ```bash
 # Classify a single review
-curl -X POST http://localhost:8080/router/predict \
+curl -X POST http://localhost:8000/v1/router/predict \
   -H "Content-Type: application/json" \
   -d '{"text": "They were so careful with my celiac needs"}'
 
 # Classify multiple reviews
-curl -X POST http://localhost:8080/router/batch \
+curl -X POST http://localhost:8000/v1/router/batch \
   -H "Content-Type: application/json" \
   -d '{"texts": ["Great gluten-free options!", "The waiter was rude", "Decent pizza"]}'
 
 # Router model metadata
-curl http://localhost:8080/router/models
+curl http://localhost:8000/v1/router/models
 ```
 
 Router response:
 
 ```json
 {
-  "text": "They were so careful with my celiac needs",
-  "prediction": {
-    "category": "dietary",
-    "categories": {"0": "dietary", "1": "service", "2": "general"}
-  },
+  "prediction": {"label": "dietary", "score": 0.95, "token_count": 8},
   "latency_s": 0.0031
 }
 ```
@@ -149,11 +185,17 @@ Router response:
 #### Shared endpoints
 
 ```bash
-# Health check
-curl http://localhost:8080/health
+# Liveness probe (always returns 200)
+curl http://localhost:8000/health/live
 
-# Request metrics (both sentiment and router)
-curl http://localhost:8080/metrics
+# Readiness probe (503 if model not loaded)
+curl http://localhost:8000/health/ready
+
+# Backward-compatible health check (delegates to readiness)
+curl http://localhost:8000/health
+
+# Interactive API docs (Swagger UI)
+open http://localhost:8000/docs
 ```
 
 ### Go CLI Client
@@ -182,7 +224,7 @@ The client outputs colorized results with emoji indicators:
 ```
 Text:       the food was terrific
 Prediction: positive 👍
-Score:      0.9701
+Scores:     negative=0.03, neutral=0.05, positive=0.92
 Latency:    12ms
 ```
 
@@ -279,7 +321,10 @@ The `--distributed` flag enables Ray Train, which distributes data and model tra
 | `--hf-repo` | `ryeyoo/sentimentizer` | Override Hugging Face repository ID |
 | `--balance-classes` | off | Enable class balancing via undersampling (flag) |
 | `--balance-seed` | `42` | Random seed for class balancing |
-| `--pos-weight` | `0.0` | Loss weight for positive class (0 = auto-calculate) |
+| `--weight-smoothing` | `0.5` | Class weight smoothing exponent (0=uniform, 1=full inverse frequency) |
+| `--loss-type` | `cross_entropy` | Loss function: `cross_entropy` or `focal` |
+| `--label-smoothing` | `0.1` | Label smoothing for CrossEntropyLoss |
+| `--neutral-oversample-ratio` | `0.0` | Target neutral class ratio via oversampling (0=disabled, 0.20=20%) |
 
 ## Checkpointing
 
@@ -353,6 +398,7 @@ Sentimentizer integrates with the Hugging Face Hub for robust weight management.
 | RNN | `ryeyoo/sentimentizer-rnn` | `rnn_weights.pth`, `yelp.dictionary`, `README.md` |
 | Encoder | `ryeyoo/sentimentizer-encoder` | `encoder_weights.pth`, `yelp.dictionary`, `README.md` |
 | Decoder | `ryeyoo/sentimentizer-decoder` | `decoder_weights.pth`, `yelp.dictionary`, `README.md` |
+| Router | `ryeyoo/sentimentizer-router` | SetFit model artifacts |
 
 ### Automatic Weight Pulling
 
@@ -380,6 +426,7 @@ After a successful training or tuning run, you can push the best weights, dictio
 make upload-rnn
 make upload-encoder
 make upload-decoder
+make upload-router
 
 # Push all models
 make push-hub
@@ -476,7 +523,7 @@ The pipeline consists of three stages, all powered by Ray:
 2. **Transform** — Converts tokens to numeric sequences using `ray.data.map_batches()` and writes processed parquet
 3. **Train** — Fits the model using either single-node PyTorch or distributed Ray Train with `TorchTrainer`
 
-Inference is served via a unified Ray Serve deployment (see `sentimentizer/serve.py`) that handles both sentiment analysis and review routing.
+Inference is served via a Ray Serve deployment with FastAPI routing (see `sentimentizer/serve/app.py`). Endpoints are versioned under `/v1/` (e.g., `/v1/predict`, `/v1/batch`). Health probes are unversioned (`/health/live`, `/health/ready`). The API returns `label`, `score`, `token_count`, and `model` in predictions. The `predict_text()` method on `BaseSentimentModel` returns all 3 class probabilities (without `token_count`) — a different API surface used for validation and export.
 
 ## Docker
 
@@ -490,7 +537,7 @@ docker build -t sentimentizer .
 docker run -p 8000:8000 -p 8265:8265 sentimentizer
 ```
 
-The image uses a multi-stage build with Python 3.11-slim and CPU-only PyTorch. Port 8000 serves predictions; port 8265 exposes the Ray dashboard.
+The image uses a multi-stage build with Python 3.12-slim and CPU-only PyTorch. Port 8000 serves predictions; port 8265 exposes the Ray dashboard.
 
 ## Kubernetes
 
@@ -582,16 +629,19 @@ A routing classifier that categorizes Yelp reviews into three categories:
 
 ```bash
 # 1. Augment seed utterances with GLM 5.1 (requires Ollama running)
-sentimentizer router augment --output augmented_yelp.jsonl
+make router-augment
 
 # 2. Train the router
-sentimentizer router train --data augmented_yelp.jsonl
+make router-train
 
 # 3. Evaluate (similarity matrix + threshold calibration)
-sentimentizer router evaluate --model-path models/router --data augmented_yelp.jsonl
+make router-evaluate
+
+# Or run the full pipeline sequentially:
+make router-pipeline
 ```
 
-The `augment` command supports options for model, variations per seed, and Ollama URL:
+The `augment` command supports options for model, variations per seed, and Ollama URL via CLI:
 
 ```bash
 # Customize augmentation
@@ -627,42 +677,54 @@ uv run pytest tests/ -v --cov=sentimentizer --cov-report=term-missing
 ```
 sentimentizer/
 ├── __init__.py          # Logging and timing utilities
+├── compat.py            # Transformers/setfit compatibility shims
 ├── config.py            # Configuration dataclasses and constants
-├── extractor.py         # Ray Data extraction from zip/tar archives
-├── loader.py            # Data loading utilities
-├── metrics.py           # Classification metrics (accuracy, F1, Cohen's kappa, AUC-ROC)
-├── tokenizer.py         # Text tokenizer with pre-trained support
-├── trainer.py           # Training logic
-├── tuner.py             # Ray Tune + Optuna hyperparameter search
-├── serve.py             # Unified Ray Serve deployment (sentiment + router)
-├── serve_base.py         # Shared serve infrastructure (metrics, response builders)
+├── data_source.py       # Unified DataSource protocol (pandas/Ray)
+├── device.py            # Device detection (cuda/mps/cpu)
+├── env.py               # Environment setup (NVIDIA LD_LIBRARY_PATH)
+├── extractor.py          # Ray Data extraction from zip/tar archives
+├── exporter.py           # Standalone Prometheus metrics exporter
+├── export_onnx.py        # ONNX export, quantization, validation
 ├── hf.py                # Hugging Face Hub push/pull + model card generation
-├── data/                # Training data (Yelp, GloVe)
-├── agent/               # LLM-guided tuning agent
-│   ├── __init__.py      # Package exports
-│   ├── config.yaml      # Agent + tuner configuration (YAML)
-│   ├── loader.py        # YAML → dataclass config loader
-│   ├── models.py        # Pydantic models (AnalysisResult, TuningDecision, etc.)
-│   ├── agents.py        # Pydantic AI agents (GLM 5.1 via Ollama)
-│   ├── prompts.py       # System prompts for analysis & strategy agents
-│   ├── state.py         # LangGraph AgentState TypedDict
-│   ├── nodes.py         # LangGraph node functions (analyze, decide, tune, evaluate)
-│   ├── graph.py         # LangGraph StateGraph + run_agent_tuning() entry point
-│   └── skill.py         # TuningRun skill (tune → train → validate → retry pipeline)
-├── router/               # SetFit router module
-│   ├── __init__.py      # Package exports
-│   ├── config.py        # SetFitConfig, RouteLabels, AugmentConfig
-│   ├── seeds.py         # Golden example utterances per category
-│   ├── augment.py       # GLM 5.1 augmentation via Ollama
-│   ├── dataset.py       # JSONL dataset loader, train/test split
-│   ├── train_router.py  # SetFit training with compat shims
-│   └── evaluate.py      # Similarity heatmap, threshold calibration
+├── loader.py             # Data loading utilities
+├── losses.py             # FocalCrossEntropyLoss for 3-class training
+├── metrics.py            # 3-class classification metrics (per-class P/R/F1, balanced accuracy, MCC)
+├── metrics_publisher.py   # Epoch metrics publishing (Prometheus + JSON)
+├── predictor.py           # SentimentPredictor (model loading, inference)
+├── serve/                 # Ray Serve deployment: FastAPI + @serve.ingress, /v1/ prefix
+│   ├── app.py             # FastAPI route handlers and deployment class
+│   ├── base.py            # ServiceMetrics (request/latency tracking), _DummyServe fallback
+│   ├── config.py           # Serve deployment configuration (YAML/env var loading, incl. cors_origins)
+│   └── models.py          # Pydantic request/response models for Swagger docs
+├── tokenizer.py           # Text tokenizer with pre-trained support
+├── trainer.py             # Training logic
+├── tuner.py               # Ray Tune + Optuna hyperparameter search
+├── data/                  # Training data (Yelp, GloVe)
+├── agent/                 # LLM-guided tuning agent
+│   ├── __init__.py       # Package exports
+│   ├── config.yaml       # Agent + tuner configuration (YAML)
+│   ├── loader.py         # YAML → dataclass config loader
+│   ├── models.py         # Pydantic models (AnalysisResult, TuningDecision, etc.)
+│   ├── agents.py         # Pydantic AI agents (GLM 5.1 via Ollama)
+│   ├── prompts.py        # System prompts for analysis & strategy agents
+│   ├── state.py          # LangGraph AgentState TypedDict
+│   ├── nodes.py          # LangGraph node functions (analyze, decide, tune, evaluate)
+│   ├── graph.py          # LangGraph StateGraph + run_agent_tuning() entry point
+│   └── skill.py          # TuningRun skill (tune → train → validate → retry pipeline)
+├── router/                # SetFit router module
+│   ├── __init__.py       # Package exports
+│   ├── config.py         # SetFitConfig, RouteLabels, AugmentConfig
+│   ├── seeds.py          # Golden example utterances per category
+│   ├── augment.py        # GLM 5.1 augmentation via Ollama
+│   ├── dataset.py        # JSONL dataset loader, train/test split
+│   ├── train_router.py   # SetFit training with compat shims
+│   └── evaluate.py       # Similarity heatmap, threshold calibration
 └── models/
     ├── __init__.py
-    ├── base.py           # BaseSentimentModel with predict() and predict_text()
-    ├── rnn.py           # RNN model with GloVe embeddings
-    ├── encoder.py       # Transformer encoder model
-    └── decoder.py       # Transformer decoder model
+    ├── base.py            # BaseSentimentModel with predict() and predict_text()
+    ├── rnn.py            # Bidirectional LSTM (3-class output)
+    ├── encoder.py         # Transformer encoder model (3-class output)
+    └── decoder.py         # Encoder-decoder transformer (3-class output)
 ```
 
 ## License
