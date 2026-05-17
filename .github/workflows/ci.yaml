@@ -21,10 +21,10 @@ jobs:
       with:
         timezone: UTC
 
-    - name: set up Python 3.11
+    - name: set up Python 3.12
       uses: actions/setup-python@v5
       with:
-        python-version: "3.11"
+        python-version: "3.12"
 
     - name: install uv
       uses: astral-sh/setup-uv@v4

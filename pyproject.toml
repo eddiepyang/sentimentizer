@@ -31,6 +31,7 @@ dependencies = [
     "prometheus_client>=0.25.0",
     "python-dotenv>=1.2.0",
     "pyyaml>=6.0.3",
+    "fastapi>=0.115.0",
     "pydantic-ai-slim[openai]>=1.93.0",
     "langgraph>=1.1.10",
     "rich>=15.0.0",

@@ -131,10 +131,10 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: set up Python 3.11
+    - name: set up Python 3.12
       uses: actions/setup-python@v5
       with:
-        python-version: "3.11"
+        python-version: "3.12"
 
     - name: install uv
       uses: astral-sh/setup-uv@v4
@@ -343,11 +343,11 @@ FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS base
 
 # System deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.11 python3.11-venv python3-pip git curl \
+    python3.12 python3.12-venv python3-pip git curl \
     libgomp1 && rm -rf /var/lib/apt/lists/*
 
-# Use python3.11 as default
-RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
+# Use python3.12 as default
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1
 
 WORKDIR /app
 

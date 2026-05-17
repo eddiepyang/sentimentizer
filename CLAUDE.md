@@ -14,7 +14,7 @@ If the change affects Ray Train or distributed training specifically, also run:
 uv run pytest tests/ -v -k "Ray"
 ```
 
-## Alwa## Dependency management
+## Dependency management
 
 This project uses **uv** for dependency management. Key commands:
 
@@ -72,13 +72,13 @@ Both ruff and black are run in CI — PRs must pass lint and format checks befor
 - Models are created on each Ray Train worker from a config dict (cannot pass PyTorch models across workers)
 - Config classes live in `sentimentizer/config.py` — use dataclasses
 - Keep `ray.init(ignore_reinit_error=True)` in tests to avoid re-init errors
-- The project requires Python 3.11+ (pinned in `.python-version`)
+- The project requires Python 3.12+ (pinned in `.python-version`)
 - **Stale metrics cleanup**: `_reset_stale_metrics(model_type)` in `workflows/stages/train.py` is called at the start of every training run. It writes a zeroed-out per-model JSON file to `/tmp/sentimentizer_metrics/{model_type}_metrics.json` (with `_trace.reset_by` + `_trace.reset_at` trace fields for easy debugging), resets the `sentimentizer_training_*` Prometheus gauges for that model type to 0, and invalidates the `_RAY_GAUGES` cache entry. Per-model files eliminate race conditions between concurrent training processes. The standalone exporter discovers all three files and zeroes gauges for any model type whose file is missing or stale.
 
 ## Ray 2.55 API conventions
 
 This project uses **Ray 2.55.1**. The API has changed significantly from earlier versions.
-Always verify against the installed source in `.venv/lib/python3.11/site-packages/ray/` if unsure.
+Always verify against the installed source in `.venv/lib/python3.12/site-packages/ray/` if unsure.
 
 ### Ray Data (`ray.data.Dataset`)
 

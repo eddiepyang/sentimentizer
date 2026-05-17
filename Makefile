@@ -198,9 +198,9 @@ diagnose:
 # Serving
 # ──────────────────────────────────────────────
 
-## Start Ray Serve with all three models
+## Start Ray Serve with all three models (default: 0.0.0.0:8000)
 serve:
-	uv run serve run sentimentizer.serve:app --host 0.0.0.0 --port 8000
+	uv run --active python -m sentimentizer.serve
 
 # ──────────────────────────────────────────────
 # Testing & Linting

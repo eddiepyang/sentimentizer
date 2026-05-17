@@ -516,12 +516,6 @@ def compute_epoch_metrics(
     if num_classes <= 1:
         num_classes = _NUM_CLASSES
 
-    # Handle both 1D (binary) and 2D (multiclass) probability arrays
-    if probabilities.ndim == 1:
-        # Binary compatibility: expand to 2D
-        probabilities = np.column_stack([1 - probabilities, probabilities])
-        num_classes = 2
-
     # Replace NaN probabilities with uniform distribution
     nan_mask = np.isnan(probabilities)
     if nan_mask.any():

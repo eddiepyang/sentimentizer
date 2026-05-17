@@ -39,9 +39,6 @@ Returns a dict with the best configuration and metrics from the single search:
 | `best_config` | Best hyperparameter configuration found (e.g., `{"lr": 0.003, "hidden_size": 256}`) |
 | `best_accuracy` | Best validation accuracy across all trials |
 | `best_loss` | Best validation loss across all trials |
-| `best_precision` | Best positive-class precision (TP / (TP + FP)) |
-| `best_recall` | Best positive-class recall (TP / (TP + FN)) |
-| `best_f1` | Best positive-class F1 score |
 | `best_balanced_accuracy` | Best mean of per-class recalls |
 | `best_cohen_kappa` | Best Cohen's kappa coefficient |
 | `best_negative_f1` | Best negative-class F1 score |
@@ -154,9 +151,6 @@ Returns a [`TuningRunResult`](../sentimentizer/agent/skill.py) with:
 | `best_config` | Best hyperparameter configuration found |
 | `best_accuracy` | Best validation accuracy achieved |
 | `best_loss` | Best validation loss achieved |
-| `best_precision` | Best positive-class precision (TP / (TP + FP)) |
-| `best_recall` | Best positive-class recall (TP / (TP + FN)) |
-| `best_f1` | Best positive-class F1 score |
 | `best_balanced_accuracy` | Best mean of per-class recalls |
 | `best_cohen_kappa` | Best Cohen's kappa coefficient |
 | `best_negative_f1` | Best negative-class F1 score |

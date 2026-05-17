@@ -1,5 +1,9 @@
 # 3-Class Classification Migration Plan
 
+> **Status: COMPLETED** — All changes from this plan have been implemented and tested.
+> See `AGENTS.md` for current conventions and the 3-class section in `docs/troubleshooting.md` for migration issues.
+> Key source files: `sentimentizer/config.py` (NUM_CLASSES=3, LABEL_NAMES), `sentimentizer/metrics.py` (ClassificationMetrics with per-class fields), `sentimentizer/models/base.py` (predict_text returns dict), `sentimentizer/trainer.py` (CrossEntropyLoss with class_weights), `sentimentizer/losses.py` (FocalCrossEntropyLoss).
+
 ## Background
 
 The models currently train on binary labels (1-2★ → negative, 4-5★ → positive) with 3-star neutral reviews **dropped** from training data. At inference, these models assign neutral reviews to either positive or negative with high confidence — they have no concept of "neutral."

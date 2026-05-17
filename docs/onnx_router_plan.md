@@ -17,9 +17,9 @@
 **Models**:
 | Model | Input | Output | Export Method |
 |-------|-------|--------|---------------|
-| RNN | Token IDs `(B, 200)` | Logit `(B,)` | `torch.onnx.export` via `_RNNOnnxWrapper` (masked fallback) |
-| Encoder | Token IDs `(B, 200)` | Logit `(B,)` | `torch.onnx.export` (padding mask derived internally from input) |
-| Decoder | Token IDs `(B, 200)` | Logit `(B,)` | `torch.onnx.export` (padding mask derived internally from input) |
+| RNN | Token IDs `(B, 200)` | Logits `(B, 3)` | `torch.onnx.export` via `_RNNOnnxWrapper` (masked fallback) |
+| Encoder | Token IDs `(B, 200)` | Logits `(B, 3)` | `torch.onnx.export` (padding mask derived internally from input) |
+| Decoder | Token IDs `(B, 200)` | Logits `(B, 3)` | `torch.onnx.export` (padding mask derived internally from input) |
 | Router (SetFit) | Raw text string | Class probability `(3,)` | Python `setfit` inference (v1); ONNX deferred to v2 |
 
 **Categories** (v1):

@@ -1,5 +1,7 @@
 # Data Processing Unification Plan
 
+> **Status: NOT YET IMPLEMENTED** — This is a future plan. The codebase currently has `data_source.py` with `PandasDataSource` and `RayDataSource` classes, but the full `DataSource` protocol described here has not been implemented. Both `_balance_dataframe()` and `_balance_ray_dataset()` now support 3-class targets (0, 1, 2).
+
 ## Problem
 
 The codebase has **five** categories of duplicated data processing logic, following the same single-node vs distributed pattern as the training loops:
@@ -27,7 +29,7 @@ All of these pairs implement the same logic using different APIs (pandas vs Ray 
 | `text_sequencer()` | `tokenizer.py` | ✅ Shared primitive |
 | `vectorized_convert_ratings()` | `tokenizer.py` | ✅ Shared primitive |
 | `regex_tokenize()` | `tokenizer.py` | ✅ Shared primitive |
-| `compute_pos_weight()` | `loader.py` | ✅ Shared utility |
+| `compute_class_weights()` | `loader.py` | ✅ Shared utility (3-class class weights with smoothing) |
 | `_count_vocab_batch()` | `tokenizer.py` | ✅ Shared primitive (used by both paths) |
 | `CorpusDataset` | `loader.py` | ✅ Single-node dataset |
 
@@ -184,21 +186,18 @@ class PandasDataSource:
         return PandasDataSource(train_df), PandasDataSource(val_df)
 
     def balance(self, target_col: str, random_state: int = 42) -> Self:
-        neg_count = (self._df[target_col] == 0.0).sum()
-        pos_count = (self._df[target_col] == 1.0).sum()
-        if pos_count > neg_count:
-            pos_df = self._df[self._df[target_col] == 1.0].sample(
-                n=neg_count, random_state=random_state
-            )
-            neg_df = self._df[self._df[target_col] == 0.0]
-        elif neg_count > pos_count:
-            neg_df = self._df[self._df[target_col] == 0.0].sample(
-                n=pos_count, random_state=random_state
-            )
-            pos_df = self._df[self._df[target_col] == 1.0]
-        else:
-            return self
-        balanced = pd.concat([neg_df, pos_df]).sample(frac=1, random_state=random_state)
+        """Balance classes via undersampling the majority class(es).
+
+        Works with both binary (2-class) and multi-class (3-class) targets.
+        Undersamples to the smallest class size.
+        """
+        class_counts = self._df[target_col].value_counts()
+        min_count = class_counts.min()
+        sampled = [
+            self._df[self._df[target_col] == cls].sample(n=min_count, random_state=random_state)
+            for cls in class_counts.index
+        ]
+        balanced = pd.concat(sampled).sample(frac=1, random_state=random_state)
         return PandasDataSource(balanced)
 
     def write_parquet(self, path: str) -> None:
@@ -257,20 +256,23 @@ class RayDataSource:
         return RayDataSource(train_ds), RayDataSource(val_ds)
 
     def balance(self, target_col: str, random_state: int = 42) -> Self:
-        neg_ds = self._ds.filter(lambda row: row[target_col] == 0.0)
-        pos_ds = self._ds.filter(lambda row: row[target_col] == 1.0)
-        neg_count = neg_ds.count()
-        pos_count = pos_ds.count()
-        if pos_count > neg_count and neg_count > 0:
-            keep_ratio = neg_count / pos_count
-            pos_keep = pos_ds.random_sample(keep_ratio, seed=random_state)
-            balanced = pos_keep.union(neg_ds)
-        elif neg_count > pos_count and pos_count > 0:
-            keep_ratio = pos_count / neg_count
-            neg_keep = neg_ds.random_sample(keep_ratio, seed=random_state)
-            balanced = neg_keep.union(pos_ds)
-        else:
+        """Balance classes via undersampling the majority class(es).
+
+        Works with both binary (2-class) and multi-class (3-class) targets.
+        Undersamples to the smallest class size.
+        """
+        class_labels = self._ds.unique(column=target_col)
+        class_counts = {label: self._ds.filter(lambda row: row[target_col] == label).count() for label in class_labels}
+        min_count = min(class_counts.values())
+        if min_count == 0:
             return self
+        sampled = [
+            self._ds.filter(lambda row: row[target_col] == label).random_sample(min_count / class_counts[label], seed=random_state)
+            for label in class_labels
+        ]
+        balanced = sampled[0]
+        for ds in sampled[1:]:
+            balanced = balanced.union(ds)
         return RayDataSource(balanced.random_shuffle(seed=random_state))
 
     def write_parquet(self, path: str) -> None:
@@ -555,7 +557,7 @@ On the pandas path, `balance()` is eager and performs a single pass over the Dat
 **Mitigation**: 
 - Document that `balance()` is expensive on Ray and should be avoided for very large datasets.
 - Consider adding a `balance_fraction` parameter to sample only a fraction of the data for quick class-balance checks during development.
-- For production, consider using `compute_pos_weight()` (loss weighting) instead of undersampling to avoid the data-pass cost entirely.
+- For production, consider using `compute_class_weights()` (loss weighting) instead of undersampling to avoid the data-pass cost entirely.
 
 ### RISK 12: `DataSource.iter_batches` Memory Overhead
 
@@ -670,7 +672,7 @@ When `build_dictionary()` uses `iter_batches(batch_format="numpy")`, the text co
 | 8 | Return type mismatch | HIGH | Callers unwrap `DataSource` before use |
 | 9 | Pandas row-wise filter performance | HIGH | Expression-based filter overload + document limits |
 | 10 | Gensim dict serialization in Ray closure | MEDIUM | Use `ray.put()` if dict exceeds limits |
-| 11 | `balance()` eager execution cost on Ray | MEDIUM | Document cost; use `compute_pos_weight()` instead |
+| 11 | `balance()` eager execution cost on Ray | MEDIUM | Document cost; use `compute_class_weights()` instead |
 | 12 | `DataSource.iter_batches` memory overhead | HIGH | Yield dict-of-arrays; add `batch_format` param |
 | 13 | `map_batches` non-uniform schemas | HIGH | Always output uniform schema; split train/infer paths |
 | 14 | Ray lazy `train_test_split` + `balance` interaction | MEDIUM | Document lazy/eager; consider `.materialize()` |

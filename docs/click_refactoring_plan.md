@@ -231,7 +231,11 @@ def shared_train_options(func):
         click.option("--checkpoint-every", default=1, type=int),
         click.option("--balance-classes", is_flag=True),
         click.option("--balance-seed", default=42, type=int),
-        click.option("--pos-weight", default=0.0, type=float),
+        click.option("--weight-smoothing", default=0.5, type=float),
+        click.option("--loss-type", default="cross_entropy",
+                      type=click.Choice(["cross_entropy", "focal"])),
+        click.option("--label-smoothing", default=0.1, type=float),
+        click.option("--neutral-oversample-ratio", default=0.0, type=float),
         click.option("--push-to-hub", is_flag=True),
         click.option("--pull-from-hub", is_flag=True),
         click.option("--hf-repo", default=None),
@@ -297,14 +301,18 @@ def train(ctx, resume, **kwargs):
 @click.option("--samples", "tune_samples", default=20, type=int)
 @click.option("--max-iterations", "tune_max_iterations", default=5, type=int)
 @click.option("--output-dir", "tune_output_dir", default="tuning_results")
-@click.option("--no-validate", is_flag=True)
+@    click.option("--no-validate", is_flag=True)
 @click.option("--validation-threshold", default=0.75, type=float)
 @click.option("--max-retries", default=2, type=int)
 @click.option("--save/--no-save", default=False)
 @click.option("--push-to-hub", is_flag=True)
 @click.option("--balance-classes", is_flag=True)
 @click.option("--balance-seed", default=42, type=int)
-@click.option("--pos-weight", default=0.0, type=float)
+@click.option("--weight-smoothing", default=0.5, type=float)
+@click.option("--loss-type", default="cross_entropy",
+              type=click.Choice(["cross_entropy", "focal"]))
+@click.option("--label-smoothing", default=0.1, type=float)
+@click.option("--neutral-oversample-ratio", default=0.0, type=float)
 @click.pass_context
 def tune(ctx, mode, **kwargs):
     """Hyperparameter tuning (LLM-guided agent or standalone Ray Tune run).
@@ -399,13 +407,16 @@ def run_tokenize(state: State, *, resume: bool) -> None: ...
 def run_train(state: State, *, distributed: bool, num_workers: int,
               save: bool, checkpoint_dir: str, checkpoint_every: int,
               resume: bool, balance_classes: bool, balance_seed: int,
-              pos_weight: float, push_to_hub: bool, pull_from_hub: bool,
+              weight_smoothing: float, loss_type: str, label_smoothing: float,
+              neutral_oversample_ratio: float,
+              push_to_hub: bool, pull_from_hub: bool,
               hf_repo: str | None) -> None: ...
 def run_tune(state: State, *, mode: str, agent_config: str | None,
              tune_samples: int, tune_max_iterations: int, tune_output_dir: str,
              no_validate: bool, validation_threshold: float, max_retries: int,
              save: bool, push_to_hub: bool, balance_classes: bool,
-             balance_seed: int, pos_weight: float) -> None: ...
+             balance_seed: int, weight_smoothing: float, loss_type: str,
+             label_smoothing: float, neutral_oversample_ratio: float) -> None: ...
 def run_hf_push(state: State, *, repo_id: str | None) -> None: ...
 def run_hf_pull(state: State, *, repo_id: str | None) -> None: ...
 def run_diagnose_env(state: State) -> None: ...        # no torch/ray
@@ -616,7 +627,7 @@ def test_run_chains_pipeline(monkeypatch):
 | `extract` | `--stop` |
 | `tokenize` | `--resume` |
 | `train` | `shared_train_options` + `--resume` |
-| `tune` | `--mode`, `--agent-config`, `--samples`, `--max-iterations`, `--output-dir`, `--no-validate`, `--validation-threshold`, `--max-retries`, `--save/--no-save`, `--push-to-hub`, `--balance-classes`, `--balance-seed`, `--pos-weight` |
+| `tune` | `--mode`, `--agent-config`, `--samples`, `--max-iterations`, `--output-dir`, `--no-validate`, `--validation-threshold`, `--max-retries`, `--save/--no-save`, `--push-to-hub`, `--balance-classes`, `--balance-seed`, `--weight-smoothing`, `--loss-type`, `--label-smoothing`, `--neutral-oversample-ratio` |
 | `hf push` | `--repo-id` |
 | `hf pull` | `--repo-id` |
 | `diagnose` (group) | (group itself takes no flags) |
@@ -624,6 +635,6 @@ def test_run_chains_pipeline(monkeypatch):
 | `diagnose pipeline` | (none beyond root) — heavy, imports ML stack |
 | `run` | `--stop`, `--resume-tokenize`, `--resume-train`, `shared_train_options`; calls `run_extract` / `run_tokenize` / `run_train` helpers directly, not via `ctx.invoke` |
 
-**`shared_train_options`** expands to: `--distributed`, `--num-workers`, `--save/--no-save`, `--checkpoint-dir`, `--checkpoint-every`, `--balance-classes`, `--balance-seed`, `--pos-weight`, `--push-to-hub`, `--pull-from-hub`, `--hf-repo`. Applied to both `train` and `run` so the surfaces stay locked together. `--resume` is intentionally not in the shared list — `run` exposes it as split flags, `train` adds it back with command-specific help text.
+**`shared_train_options`** expands to: `--distributed`, `--num-workers`, `--save/--no-save`, `--checkpoint-dir`, `--checkpoint-every`, `--balance-classes`, `--balance-seed`, `--weight-smoothing`, `--loss-type`, `--label-smoothing`, `--neutral-oversample-ratio`, `--push-to-hub`, `--pull-from-hub`, `--hf-repo`. Applied to both `train` and `run` so the surfaces stay locked together. `--resume` is intentionally not in the shared list — `run` exposes it as split flags, `train` adds it back with command-specific help text.
 
 **Envvar precedence:** CLI flag > envvar (`SENTIMENTIZER_MODEL`, `SENTIMENTIZER_DEVICE`) > default. This differs from the current driver, which only reads `os.getenv` ad-hoc — call this out in migration notes if any flags change resolution order.

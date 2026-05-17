@@ -46,7 +46,7 @@ def shared_train_options(func: click.Command) -> click.Command:
             "--num-classes",
             default=3,
             type=int,
-            help="Number of classification classes (2 for binary, 3 for negative/neutral/positive)",
+            help="Number of classification classes (must be 3 for negative/neutral/positive)",
         ),
         click.option(
             "--include-neutral/--no-include-neutral",
@@ -476,40 +476,14 @@ def serve_cmd(ctx: click.Context, model_path: str, host: str, port: int) -> None
 
     Requires the ray extra: pip install -e ".[ray]"
     """
-    import subprocess
-    import sys
+    import os
 
-    click.echo(f"Starting Sentimentizer serve on {host}:{port}...")
-    click.echo(f"Router model path: {model_path}")
-    click.echo("")
-    click.echo("Sentiment endpoints:")
-    click.echo("  POST /predict     — Classify a single text")
-    click.echo("  POST /batch       — Classify multiple texts")
-    click.echo("  POST /tokenize    — Tokenize text without inference")
-    click.echo("  GET  /models      — Sentiment model metadata")
-    click.echo("")
-    click.echo("Router endpoints:")
-    click.echo("  POST /router/predict  — Route a single text")
-    click.echo("  POST /router/batch    — Route multiple texts")
-    click.echo("  GET  /router/models   — Router model metadata")
-    click.echo("")
-    click.echo("Shared endpoints:")
-    click.echo("  GET  /health  — Health check")
-    click.echo("  GET  /metrics — Request metrics")
+    os.environ.setdefault("ROUTER_MODEL_PATH", model_path)
+    os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
 
-    cmd = [
-        sys.executable,
-        "-m",
-        "ray.serve",
-        "run",
-        "sentimentizer.serve:app",
-        "--host",
-        host,
-        "--port",
-        str(port),
-    ]
-    env = {**__import__("os").environ, "ROUTER_MODEL_PATH": model_path}
-    subprocess.run(cmd, env=env)
+    from sentimentizer.serve import main as serve_main
+
+    serve_main(host=host, port=port)
 
 
 # ── diagnose ─────────────────────────────────

@@ -1,0 +1,21 @@
+# Sentimentizer Serve Configuration
+# Controls the Ray Serve deployment settings.
+# Environment variables override these defaults when set.
+
+# Default sentiment model to load (rnn, encoder, decoder)
+default_model: "encoder"
+
+# Router model path (local directory or HuggingFace model ID)
+router_model_path: "models/router"
+
+# Request limits
+max_batch_size: 64           # Maximum texts per /batch request
+max_text_length: 10000       # Maximum characters per text input
+
+# Auto-batching for /predict (serve.batch)
+predict_batch_size: 32        # Maximum requests collected per batch
+predict_batch_wait_s: 0.05    # Seconds to wait before processing a partial batch
+
+# Auto-batching for /router/predict (serve.batch)
+classify_batch_size: 32       # Maximum requests collected per batch
+classify_batch_wait_s: 0.05   # Seconds to wait before processing a partial batch

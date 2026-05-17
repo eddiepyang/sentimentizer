@@ -92,6 +92,10 @@ sentimentizer/
   tuner.py          — Ray Tune integration with TunePrometheusCallback
   metrics.py        — ClassificationMetrics dataclass + compute functions
   export_onnx.py    — Unified ONNX export, quantization, validation (_RNNOnnxWrapper)
+  predictor.py      — SentimentPredictor (model loading, inference, Option B format)
+  serve.py          — Ray Serve deployment: FastAPI + @serve.ingress, route handlers, @serve.batch
+  serve_base.py     — ServiceMetrics (request/latency tracking), _DummyServe fallback
+  serve_config.py   — ServeConfig dataclass + YAML/env var loading
   models/
     base.py          — BaseSentimentModel with predict() and predict_text()
     rnn.py          — Bidirectional LSTM (with onnx_export flag)
@@ -192,7 +196,19 @@ Grafana only reads provisioned dashboard files on **startup**, so a restart is r
 
 - **3-class classification**: Models output logits of shape `(B, 3)` with label mapping: 0=negative, 1=neutral, 2=positive. `LABEL_NAMES = ["negative", "neutral", "positive"]` is the single source of truth in `config.py` — import it, don't duplicate.
 - **Loss function**: `CrossEntropyLoss` (not `BCEWithLogitsLoss`). Target dtype is `torch.long` (not `torch.float32`). `FocalCrossEntropyLoss` in `sentimentizer/losses.py` for hard-example mining.
-- **`predict_text()` returns `dict[str, float]`**: e.g., `{"negative": 0.05, "neutral": 0.12, "positive": 0.83}`. Never call `.item()` on it — use `max(scores, key=scores.get)` for the predicted label.
+- **`predict_batch()` returns Option B format**: Each result is `{"positive": 0.88, "model": "encoder"}` — the winning class label as key and its probability as value, plus the model name. The old format `{"model": "encoder", "label": "positive", "scores": {"negative": ..., "neutral": ..., "positive": ...}}` is gone. `predict()` returns the same Option B dict (it's `predict_batch([text])[0]`).
+- **`predict_text()` on `BaseSentimentModel` still returns all 3 scores**: `{"negative": 0.05, "neutral": 0.12, "positive": 0.83}`. This is a different API surface used by `skill.py` and `hf.py` for model validation/export — it is NOT affected by the Option B change.
+- **`classify_batch()` unchanged**: Returns `{"text": ..., "prediction": {"category": "dietary"}}` — different domain, different shape.
+- **Serving uses FastAPI + `@serve.ingress`**: No more `__call__` dispatch, no more `Starlette` app, no more `_ROUTES` dict. Route handlers are `@app.get`/`@app.post` decorated methods on the deployment class. `@serve.ingress(app)` handles ASGI routing. `/docs` and `/redoc` endpoints are available for free.
+### Ray Serve Deployment
+
+- **`RAY_ENABLE_UV_RUN_RUNTIME_ENV=0`** must be set before any Ray import. Without it, Ray workers create isolated venvs via `uv` that lack the `ray` package, causing `ModuleNotFoundError: No module named 'ray'`. Set in three places: (1) `serve.py` module level, (2) `serve.py:main()`, (3) `cli.py:serve_cmd()` subprocess env. The `lifecycle.py` module-level setting covers training paths. **If any entry point is missing this env var, Ray workers will crash with `ModuleNotFoundError`.**
+- **`auto_detect_device()` requires `"auto"` argument**: `resolve_device()` (re-exported as `auto_detect_device`) requires a `device` parameter. Never call `auto_detect_device()` — always call `auto_detect_device("auto")` or `resolve_device("auto")`.
+- **Ray Serve uses FastAPI + `@serve.ingress`**: Route handlers are `@app.get`/`@app.post` decorated methods on the deployment class. Do NOT define `__call__` on the deployment class — `@serve.ingress` explicitly forbids it. `@serve.batch` methods remain as internal methods called from route handlers.
+- **Prediction response format (Option B)**: `predict_batch()` returns `[{"positive": 0.88, "model": "encoder"}, ...]` — the winning class label as key, its probability as value, plus model name. The old `{"model": ..., "label": ..., "scores": {...}}` format is gone. `predict_text()` on `BaseSentimentModel` still returns all 3 scores.
+- **`serve_base.py`** contains only `ServiceMetrics` and `_DummyServe` — no response builder functions. Response dicts are constructed directly in FastAPI route handlers.
+
+### Ray Worker Environment Variables
 - **`forward()` output shape**: Always `(B, num_classes)`, never squeeze. Batch-of-1 returns `(1, 3)`, not `(3,)`.
 - **`predict()` output**: `torch.softmax(logits, dim=-1)` returns `(B, num_classes)` probability matrix.
 - **`compute_class_weights()`** replaces `compute_pos_weight()`. The old function raises `ValueError` if `num_classes > 2`.
