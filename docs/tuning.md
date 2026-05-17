@@ -42,9 +42,14 @@ Returns a dict with the best configuration and metrics from the single search:
 | `best_precision` | Best positive-class precision (TP / (TP + FP)) |
 | `best_recall` | Best positive-class recall (TP / (TP + FN)) |
 | `best_f1` | Best positive-class F1 score |
+| `best_balanced_accuracy` | Best mean of per-class recalls |
 | `best_cohen_kappa` | Best Cohen's kappa coefficient |
-| `best_positive_accuracy` | Best accuracy on positive samples |
-| `best_negative_accuracy` | Best accuracy on negative samples |
+| `best_negative_f1` | Best negative-class F1 score |
+| `best_neutral_f1` | Best neutral-class F1 score |
+| `best_positive_f1` | Best positive-class F1 score |
+| `best_macro_f1` | Best macro-averaged F1 score |
+| `best_weighted_f1` | Best weighted-averaged F1 score |
+| `best_mcc` | Best Matthews correlation coefficient |
 | `trial_count` | Number of Ray Tune trials completed |
 
 When run via the Tuning Skill (`--tune --tune-mode standalone`), this is wrapped with model training, validation, and retry logic (see below).
@@ -152,9 +157,14 @@ Returns a [`TuningRunResult`](../sentimentizer/agent/skill.py) with:
 | `best_precision` | Best positive-class precision (TP / (TP + FP)) |
 | `best_recall` | Best positive-class recall (TP / (TP + FN)) |
 | `best_f1` | Best positive-class F1 score |
+| `best_balanced_accuracy` | Best mean of per-class recalls |
 | `best_cohen_kappa` | Best Cohen's kappa coefficient |
-| `best_positive_accuracy` | Best accuracy on positive samples |
-| `best_negative_accuracy` | Best accuracy on negative samples |
+| `best_negative_f1` | Best negative-class F1 score |
+| `best_neutral_f1` | Best neutral-class F1 score |
+| `best_positive_f1` | Best positive-class F1 score |
+| `best_macro_f1` | Best macro-averaged F1 score |
+| `best_weighted_f1` | Best weighted-averaged F1 score |
+| `best_mcc` | Best Matthews correlation coefficient |
 | `iterations_completed` | Number of tuning iterations (1 for standalone, variable for agent) |
 | `converged` | Whether the agent converged before max iterations |
 | `model_path` | Path to the saved model weights (`.pth` file) |

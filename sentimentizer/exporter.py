@@ -148,27 +148,45 @@ TUNE_TRIAL_VAL_COHEN_KAPPA = Gauge(
     ["trial_id", "model_type"],
 )
 
-TUNE_TRIAL_VAL_PRECISION = Gauge(
-    "sentimentizer_tune_val_precision",
-    "Validation precision reported by the current Ray Tune trial",
+TUNE_TRIAL_VAL_BALANCED_ACCURACY = Gauge(
+    "sentimentizer_tune_val_balanced_accuracy",
+    "Validation balanced accuracy reported by the current Ray Tune trial",
     ["trial_id", "model_type"],
 )
 
-TUNE_TRIAL_VAL_RECALL = Gauge(
-    "sentimentizer_tune_val_recall",
-    "Validation recall reported by the current Ray Tune trial",
+TUNE_TRIAL_VAL_NEGATIVE_F1 = Gauge(
+    "sentimentizer_tune_val_negative_f1",
+    "Validation negative-class F1 reported by the current Ray Tune trial",
     ["trial_id", "model_type"],
 )
 
-TUNE_TRIAL_POSITIVE_ACCURACY = Gauge(
-    "sentimentizer_tune_val_positive_accuracy",
-    "Validation positive-class accuracy reported by the current Ray Tune trial",
+TUNE_TRIAL_VAL_NEUTRAL_F1 = Gauge(
+    "sentimentizer_tune_val_neutral_f1",
+    "Validation neutral-class F1 reported by the current Ray Tune trial",
     ["trial_id", "model_type"],
 )
 
-TUNE_TRIAL_NEGATIVE_ACCURACY = Gauge(
-    "sentimentizer_tune_val_negative_accuracy",
-    "Validation negative-class accuracy reported by the current Ray Tune trial",
+TUNE_TRIAL_VAL_POSITIVE_F1 = Gauge(
+    "sentimentizer_tune_val_positive_f1",
+    "Validation positive-class F1 reported by the current Ray Tune trial",
+    ["trial_id", "model_type"],
+)
+
+TUNE_TRIAL_VAL_MACRO_F1 = Gauge(
+    "sentimentizer_tune_val_macro_f1",
+    "Validation macro-averaged F1 reported by the current Ray Tune trial",
+    ["trial_id", "model_type"],
+)
+
+TUNE_TRIAL_VAL_WEIGHTED_F1 = Gauge(
+    "sentimentizer_tune_val_weighted_f1",
+    "Validation weighted-averaged F1 reported by the current Ray Tune trial",
+    ["trial_id", "model_type"],
+)
+
+TUNE_TRIAL_VAL_MCC = Gauge(
+    "sentimentizer_tune_val_mcc",
+    "Validation Matthews correlation coefficient reported by the current Ray Tune trial",
     ["trial_id", "model_type"],
 )
 
@@ -230,24 +248,6 @@ TRAINING_VAL_ACCURACY = Gauge(
     ["model_type"],
 )
 
-TRAINING_VAL_PRECISION = Gauge(
-    "sentimentizer_training_val_precision",
-    "Validation precision (positive class) from the current training run",
-    ["model_type"],
-)
-
-TRAINING_VAL_RECALL = Gauge(
-    "sentimentizer_training_val_recall",
-    "Validation recall (positive class) from the current training run",
-    ["model_type"],
-)
-
-TRAINING_VAL_F1 = Gauge(
-    "sentimentizer_training_val_f1",
-    "Validation F1 score from the current training run",
-    ["model_type"],
-)
-
 TRAINING_VAL_COHEN_KAPPA = Gauge(
     "sentimentizer_training_val_cohen_kappa",
     "Validation Cohen's kappa from the current training run",
@@ -260,9 +260,63 @@ TRAINING_VAL_MCC = Gauge(
     ["model_type"],
 )
 
-TRAINING_VAL_NPV = Gauge(
-    "sentimentizer_training_val_npv",
-    "Validation negative predictive value from the current training run",
+TRAINING_VAL_BALANCED_ACCURACY = Gauge(
+    "sentimentizer_training_val_balanced_accuracy",
+    "Validation balanced accuracy from the current training run",
+    ["model_type"],
+)
+
+TRAINING_VAL_NEGATIVE_PRECISION = Gauge(
+    "sentimentizer_training_val_negative_precision",
+    "Validation negative-class precision from the current training run",
+    ["model_type"],
+)
+
+TRAINING_VAL_NEGATIVE_RECALL = Gauge(
+    "sentimentizer_training_val_negative_recall",
+    "Validation negative-class recall from the current training run",
+    ["model_type"],
+)
+
+TRAINING_VAL_NEGATIVE_F1 = Gauge(
+    "sentimentizer_training_val_negative_f1",
+    "Validation negative-class F1 from the current training run",
+    ["model_type"],
+)
+
+TRAINING_VAL_NEUTRAL_PRECISION = Gauge(
+    "sentimentizer_training_val_neutral_precision",
+    "Validation neutral-class precision from the current training run",
+    ["model_type"],
+)
+
+TRAINING_VAL_NEUTRAL_RECALL = Gauge(
+    "sentimentizer_training_val_neutral_recall",
+    "Validation neutral-class recall from the current training run",
+    ["model_type"],
+)
+
+TRAINING_VAL_NEUTRAL_F1 = Gauge(
+    "sentimentizer_training_val_neutral_f1",
+    "Validation neutral-class F1 from the current training run",
+    ["model_type"],
+)
+
+TRAINING_VAL_POSITIVE_PRECISION = Gauge(
+    "sentimentizer_training_val_positive_precision",
+    "Validation positive-class precision from the current training run",
+    ["model_type"],
+)
+
+TRAINING_VAL_POSITIVE_RECALL = Gauge(
+    "sentimentizer_training_val_positive_recall",
+    "Validation positive-class recall from the current training run",
+    ["model_type"],
+)
+
+TRAINING_VAL_POSITIVE_F1 = Gauge(
+    "sentimentizer_training_val_positive_f1",
+    "Validation positive-class F1 from the current training run",
     ["model_type"],
 )
 
@@ -272,27 +326,39 @@ TRAINING_VAL_MACRO_F1 = Gauge(
     ["model_type"],
 )
 
-TRAINING_VAL_AUC_ROC = Gauge(
-    "sentimentizer_training_val_auc_roc",
-    "Validation AUC-ROC from the current training run",
+TRAINING_VAL_WEIGHTED_F1 = Gauge(
+    "sentimentizer_training_val_weighted_f1",
+    "Validation weighted-averaged F1 from the current training run",
     ["model_type"],
 )
 
-TRAINING_VAL_AVG_PRECISION = Gauge(
-    "sentimentizer_training_val_avg_precision",
-    "Validation average precision (PR-AUC) from the current training run",
+TRAINING_VAL_NEUTRAL_AUC_ROC = Gauge(
+    "sentimentizer_training_val_neutral_auc_roc",
+    "Validation neutral-class AUC-ROC from the current training run",
     ["model_type"],
 )
 
-TRAINING_VAL_POSITIVE_ACCURACY = Gauge(
-    "sentimentizer_training_val_positive_accuracy",
-    "Validation positive-class accuracy from the current training run",
+TRAINING_VAL_NEUTRAL_AVG_PRECISION = Gauge(
+    "sentimentizer_training_val_neutral_avg_precision",
+    "Validation neutral-class average precision from the current training run",
     ["model_type"],
 )
 
-TRAINING_VAL_NEGATIVE_ACCURACY = Gauge(
-    "sentimentizer_training_val_negative_accuracy",
-    "Validation negative-class accuracy from the current training run",
+TRAINING_VAL_NEUTRAL_TO_POSITIVE_RATE = Gauge(
+    "sentimentizer_training_val_neutral_to_positive_rate",
+    "Fraction of true neutral reviews misclassified as positive",
+    ["model_type"],
+)
+
+TRAINING_VAL_NEUTRAL_TO_NEGATIVE_RATE = Gauge(
+    "sentimentizer_training_val_neutral_to_negative_rate",
+    "Fraction of true neutral reviews misclassified as negative",
+    ["model_type"],
+)
+
+TRAINING_VAL_PRED_NEUTRAL_FRAC = Gauge(
+    "sentimentizer_training_val_pred_neutral_frac",
+    "Fraction of predictions that are neutral",
     ["model_type"],
 )
 
@@ -460,30 +526,42 @@ def _update_training_metrics() -> None:
             lbl = {"model_type": model_type}
 
             if not path.exists():
-                # File absent → zero out gauges so stale values are cleared
-                TRAINING_TRAIN_LOSS.labels(**lbl).set(0)
-                TRAINING_VAL_LOSS.labels(**lbl).set(0)
-                TRAINING_VAL_ACCURACY.labels(**lbl).set(0)
-                TRAINING_VAL_PRECISION.labels(**lbl).set(0)
-                TRAINING_VAL_RECALL.labels(**lbl).set(0)
-                TRAINING_VAL_F1.labels(**lbl).set(0)
-                TRAINING_VAL_COHEN_KAPPA.labels(**lbl).set(0)
-                TRAINING_VAL_MCC.labels(**lbl).set(0)
-                TRAINING_VAL_NPV.labels(**lbl).set(0)
-                TRAINING_VAL_MACRO_F1.labels(**lbl).set(0)
-                TRAINING_VAL_AUC_ROC.labels(**lbl).set(0)
-                TRAINING_VAL_AVG_PRECISION.labels(**lbl).set(0)
-                TRAINING_VAL_POSITIVE_ACCURACY.labels(**lbl).set(0)
-                TRAINING_VAL_NEGATIVE_ACCURACY.labels(**lbl).set(0)
-                TRAINING_EPOCH.labels(**lbl).set(0)
-                TRAINING_LR.labels(**lbl).set(0)
+                # File absent -> zero out gauges so stale values are cleared
+                _ZERO_GAUGES = [
+                    TRAINING_TRAIN_LOSS,
+                    TRAINING_VAL_LOSS,
+                    TRAINING_VAL_ACCURACY,
+                    TRAINING_VAL_BALANCED_ACCURACY,
+                    TRAINING_VAL_NEGATIVE_PRECISION,
+                    TRAINING_VAL_NEGATIVE_RECALL,
+                    TRAINING_VAL_NEGATIVE_F1,
+                    TRAINING_VAL_NEUTRAL_PRECISION,
+                    TRAINING_VAL_NEUTRAL_RECALL,
+                    TRAINING_VAL_NEUTRAL_F1,
+                    TRAINING_VAL_POSITIVE_PRECISION,
+                    TRAINING_VAL_POSITIVE_RECALL,
+                    TRAINING_VAL_POSITIVE_F1,
+                    TRAINING_VAL_MACRO_F1,
+                    TRAINING_VAL_WEIGHTED_F1,
+                    TRAINING_VAL_COHEN_KAPPA,
+                    TRAINING_VAL_MCC,
+                    TRAINING_VAL_NEUTRAL_TO_POSITIVE_RATE,
+                    TRAINING_VAL_NEUTRAL_TO_NEGATIVE_RATE,
+                    TRAINING_VAL_PRED_NEUTRAL_FRAC,
+                    TRAINING_VAL_NEUTRAL_AUC_ROC,
+                    TRAINING_VAL_NEUTRAL_AVG_PRECISION,
+                    TRAINING_EPOCH,
+                    TRAINING_LR,
+                ]
+                for g in _ZERO_GAUGES:
+                    g.labels(**lbl).set(0)
                 continue
 
             data = json.loads(path.read_text())
             if not isinstance(data, dict):
                 continue
 
-            # Sanity check — the file name should match _written_by trace field
+            # Sanity check -- the file name should match _written_by trace field
             written_by = data.get("_written_by", model_type)
             if written_by != model_type:
                 logger.warning(
@@ -495,29 +573,47 @@ def _update_training_metrics() -> None:
             TRAINING_TRAIN_LOSS.labels(**lbl).set(float(data.get("train_loss", 0)))
             TRAINING_VAL_LOSS.labels(**lbl).set(float(data.get("val_loss", 0)))
             TRAINING_VAL_ACCURACY.labels(**lbl).set(float(data.get("accuracy", 0)))
-            TRAINING_VAL_PRECISION.labels(**lbl).set(float(data.get("precision", 0)))
-            TRAINING_VAL_RECALL.labels(**lbl).set(float(data.get("recall", 0)))
-            TRAINING_VAL_F1.labels(**lbl).set(float(data.get("f1", 0)))
+            TRAINING_VAL_BALANCED_ACCURACY.labels(**lbl).set(
+                float(data.get("balanced_accuracy", 0))
+            )
+            TRAINING_VAL_NEGATIVE_PRECISION.labels(**lbl).set(
+                float(data.get("negative_precision", 0))
+            )
+            TRAINING_VAL_NEGATIVE_RECALL.labels(**lbl).set(float(data.get("negative_recall", 0)))
+            TRAINING_VAL_NEGATIVE_F1.labels(**lbl).set(float(data.get("negative_f1", 0)))
+            TRAINING_VAL_NEUTRAL_PRECISION.labels(**lbl).set(
+                float(data.get("neutral_precision", 0))
+            )
+            TRAINING_VAL_NEUTRAL_RECALL.labels(**lbl).set(float(data.get("neutral_recall", 0)))
+            TRAINING_VAL_NEUTRAL_F1.labels(**lbl).set(float(data.get("neutral_f1", 0)))
+            TRAINING_VAL_POSITIVE_PRECISION.labels(**lbl).set(
+                float(data.get("positive_precision", 0))
+            )
+            TRAINING_VAL_POSITIVE_RECALL.labels(**lbl).set(float(data.get("positive_recall", 0)))
+            TRAINING_VAL_POSITIVE_F1.labels(**lbl).set(float(data.get("positive_f1", 0)))
+            TRAINING_VAL_MACRO_F1.labels(**lbl).set(float(data.get("macro_f1", 0)))
+            TRAINING_VAL_WEIGHTED_F1.labels(**lbl).set(float(data.get("weighted_f1", 0)))
             TRAINING_VAL_COHEN_KAPPA.labels(**lbl).set(float(data.get("cohen_kappa", 0)))
             TRAINING_VAL_MCC.labels(**lbl).set(float(data.get("mcc", 0)))
-            TRAINING_VAL_NPV.labels(**lbl).set(float(data.get("npv", 0)))
-            TRAINING_VAL_MACRO_F1.labels(**lbl).set(float(data.get("macro_f1", 0)))
-            auc_roc = data.get("auc_roc")
-            if auc_roc is not None:
-                TRAINING_VAL_AUC_ROC.labels(**lbl).set(float(auc_roc))
-            else:
-                TRAINING_VAL_AUC_ROC.labels(**lbl).set(0)
-            avg_precision = data.get("avg_precision")
-            if avg_precision is not None:
-                TRAINING_VAL_AVG_PRECISION.labels(**lbl).set(float(avg_precision))
-            else:
-                TRAINING_VAL_AVG_PRECISION.labels(**lbl).set(0)
-            TRAINING_VAL_POSITIVE_ACCURACY.labels(**lbl).set(
-                float(data.get("positive_accuracy", 0))
+            TRAINING_VAL_NEUTRAL_TO_POSITIVE_RATE.labels(**lbl).set(
+                float(data.get("neutral_to_positive_rate", 0))
             )
-            TRAINING_VAL_NEGATIVE_ACCURACY.labels(**lbl).set(
-                float(data.get("negative_accuracy", 0))
+            TRAINING_VAL_NEUTRAL_TO_NEGATIVE_RATE.labels(**lbl).set(
+                float(data.get("neutral_to_negative_rate", 0))
             )
+            TRAINING_VAL_PRED_NEUTRAL_FRAC.labels(**lbl).set(
+                float(data.get("pred_neutral_frac", 0))
+            )
+            neutral_auc = data.get("neutral_auc_roc")
+            if neutral_auc is not None:
+                TRAINING_VAL_NEUTRAL_AUC_ROC.labels(**lbl).set(float(neutral_auc))
+            else:
+                TRAINING_VAL_NEUTRAL_AUC_ROC.labels(**lbl).set(0)
+            neutral_ap = data.get("neutral_avg_precision")
+            if neutral_ap is not None:
+                TRAINING_VAL_NEUTRAL_AVG_PRECISION.labels(**lbl).set(float(neutral_ap))
+            else:
+                TRAINING_VAL_NEUTRAL_AVG_PRECISION.labels(**lbl).set(0)
             TRAINING_EPOCH.labels(**lbl).set(int(data.get("epoch", 0)))
             lr = data.get("lr")
             TRAINING_LR.labels(**lbl).set(0.0 if lr is None else float(lr))

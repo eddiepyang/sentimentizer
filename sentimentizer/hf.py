@@ -134,12 +134,14 @@ def _format_metrics_section(tuning_result: dict[str, Any]) -> str:
     metric_keys = [
         ("best_accuracy", "Accuracy"),
         ("best_loss", "Loss"),
-        ("best_precision", "Precision"),
-        ("best_recall", "Recall"),
-        ("best_f1", "F1"),
+        ("best_balanced_accuracy", "Balanced Accuracy"),
         ("best_cohen_kappa", "Cohen's Kappa"),
-        ("best_positive_accuracy", "Positive Accuracy"),
-        ("best_negative_accuracy", "Negative Accuracy"),
+        ("best_mcc", "MCC"),
+        ("best_negative_f1", "Negative F1"),
+        ("best_neutral_f1", "Neutral F1"),
+        ("best_positive_f1", "Positive F1"),
+        ("best_macro_f1", "Macro F1"),
+        ("best_weighted_f1", "Weighted F1"),
     ]
 
     for key, label in metric_keys:
@@ -254,10 +256,10 @@ def _format_usage_section(model_type: str, repo_id: str) -> str:
         f"from sentimentizer.tokenizer import get_trained_tokenizer\n\n"
         f'model = get_trained_model(device="cpu")\n'
         f"tokenizer = get_trained_tokenizer()\n\n"
-        f"import numpy as np\n"
-        f'token_ids = tokenizer.tokenize_text("amazing food great service")\n'
-        f"score = model.predict(token_ids)\n"
-        f"print(f'Sentiment score: {{score.item():.4f}}')  # >0.5 = positive, <0.5 = negative\n"
+        f"probs = model.predict_text('amazing food great service')\n"
+        f"for label, prob in sorted(probs.items(), key=lambda x: -x[1]):\n"
+        f"    print(f'{{label}}: {{prob:.4f}}')\n"
+        f"# e.g. positive: 0.8300, neutral: 0.1200, negative: 0.0500\n"
         "```\n"
     )
 

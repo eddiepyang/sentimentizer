@@ -265,7 +265,7 @@ class TestTokenizerUnified:
         assert len(result_df["data"].iloc[0]) == cfg.max_len
 
     def test_transform_drops_neutral(self) -> None:
-        """Tokenizer.transform should drop 3-star reviews via expression filter."""
+        """Tokenizer.transform should drop 3-star reviews when include_neutral=False."""
         df = pd.DataFrame(
             {
                 "stars": [1, 3, 5],
@@ -273,7 +273,11 @@ class TestTokenizerUnified:
             }
         )
         cfg = TokenizerConfig(
-            text_col="tokens", label_col="stars", save_dictionary=False, dict_min=1
+            text_col="tokens",
+            label_col="stars",
+            save_dictionary=False,
+            dict_min=1,
+            include_neutral=False,
         )
         ds = PandasDataSource(df)
         tokenizer = Tokenizer.build_dictionary(ds, cfg=cfg)

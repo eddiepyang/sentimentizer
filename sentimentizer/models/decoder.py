@@ -70,10 +70,12 @@ class Decoder(BaseSentimentModel):
         verbose: bool = False,
         dropout: float = DecoderConfig.dropout,
         ff_multiplier: int = DecoderConfig.ff_multiplier,
+        num_classes: int = DecoderConfig.num_classes,
     ) -> None:
         super().__init__()
         self.d_model = d_model
         self.verbose = verbose
+        self.num_classes = num_classes
 
         # Embedding layer
         self.embed_layer = nn.Embedding(emb_weights.shape[0], emb_weights.shape[1])
@@ -113,12 +115,12 @@ class Decoder(BaseSentimentModel):
             num_layers=n_decoder_layers,
         )
 
-        # Classification head: query output → logit
+        # Classification head: query output → class logits
         self.classifier = nn.Sequential(
             nn.Linear(d_model, d_model),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout),
-            nn.Linear(d_model, 1),
+            nn.Linear(d_model, num_classes),
         )
 
         # Load embedding weights immediately
@@ -167,8 +169,8 @@ class Decoder(BaseSentimentModel):
 
         # Extract query output and classify
         query_out = decoded.squeeze(1)  # (B, d_model)
-        logits = self.classifier(query_out)  # (B, 1)
-        return torch.squeeze(logits)  # (B,)
+        logits = self.classifier(query_out)  # (B, num_classes)
+        return logits
 
 
 def new_model(
@@ -195,6 +197,7 @@ def new_model(
         n_decoder_layers=model_config.n_decoder_layers,
         dropout=model_config.dropout,
         ff_multiplier=model_config.ff_multiplier,
+        num_classes=model_config.num_classes,
     )
     return model
 
@@ -246,6 +249,19 @@ def get_trained_model(
     emb_shape = weights["embed_layer.weight"].shape
     d_model = weights["proj.weight"].shape[0]
 
+    # Infer num_classes from the final linear layer output dimension
+    num_classes = weights["classifier.3.weight"].shape[0]
+    if num_classes == 1:
+        raise RuntimeError(
+            "Saved weights are from a binary classification model (num_classes=1). "
+            "3-class migration requires retraining: "
+            "python workflows/driver.py --device cuda --model decoder --type new --save True"
+        )
+
+    # Also check _metadata if available for robust detection
+    if "_metadata" in weights and "num_classes" in weights["_metadata"]:
+        num_classes = weights["_metadata"]["num_classes"]
+
     empty_embeddings = torch.zeros(emb_shape)
     model = Decoder(
         d_model=d_model,
@@ -255,6 +271,7 @@ def get_trained_model(
         n_decoder_layers=model_config.n_decoder_layers,
         dropout=model_config.dropout,
         ff_multiplier=model_config.ff_multiplier,
+        num_classes=num_classes,
     )
 
     try:

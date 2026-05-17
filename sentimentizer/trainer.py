@@ -93,19 +93,54 @@ def _get_ray_gauges(model_type: str) -> dict[str, Any] | None:
             description="Live validation accuracy",
             tag_keys=("model_type",),
         ),
-        "val_precision": Gauge(
-            "sentimentizer_live_val_precision",
-            description="Live validation precision (positive class)",
+        "val_balanced_accuracy": Gauge(
+            "sentimentizer_live_val_balanced_accuracy",
+            description="Live validation balanced accuracy",
             tag_keys=("model_type",),
         ),
-        "val_recall": Gauge(
-            "sentimentizer_live_val_recall",
-            description="Live validation recall (positive class)",
+        "val_negative_precision": Gauge(
+            "sentimentizer_live_val_negative_precision",
+            description="Live validation negative-class precision",
             tag_keys=("model_type",),
         ),
-        "val_f1": Gauge(
-            "sentimentizer_live_val_f1",
-            description="Live validation F1 score",
+        "val_negative_recall": Gauge(
+            "sentimentizer_live_val_negative_recall",
+            description="Live validation negative-class recall",
+            tag_keys=("model_type",),
+        ),
+        "val_negative_f1": Gauge(
+            "sentimentizer_live_val_negative_f1",
+            description="Live validation negative-class F1",
+            tag_keys=("model_type",),
+        ),
+        "val_neutral_precision": Gauge(
+            "sentimentizer_live_val_neutral_precision",
+            description="Live validation neutral-class precision",
+            tag_keys=("model_type",),
+        ),
+        "val_neutral_recall": Gauge(
+            "sentimentizer_live_val_neutral_recall",
+            description="Live validation neutral-class recall",
+            tag_keys=("model_type",),
+        ),
+        "val_neutral_f1": Gauge(
+            "sentimentizer_live_val_neutral_f1",
+            description="Live validation neutral-class F1",
+            tag_keys=("model_type",),
+        ),
+        "val_positive_precision": Gauge(
+            "sentimentizer_live_val_positive_precision",
+            description="Live validation positive-class precision",
+            tag_keys=("model_type",),
+        ),
+        "val_positive_recall": Gauge(
+            "sentimentizer_live_val_positive_recall",
+            description="Live validation positive-class recall",
+            tag_keys=("model_type",),
+        ),
+        "val_positive_f1": Gauge(
+            "sentimentizer_live_val_positive_f1",
+            description="Live validation positive-class F1",
             tag_keys=("model_type",),
         ),
         "val_cohen_kappa": Gauge(
@@ -118,34 +153,39 @@ def _get_ray_gauges(model_type: str) -> dict[str, Any] | None:
             description="Live validation Matthews correlation coefficient",
             tag_keys=("model_type",),
         ),
-        "val_npv": Gauge(
-            "sentimentizer_live_val_npv",
-            description="Live validation negative predictive value",
-            tag_keys=("model_type",),
-        ),
         "val_macro_f1": Gauge(
             "sentimentizer_live_val_macro_f1",
             description="Live validation macro-averaged F1 score",
             tag_keys=("model_type",),
         ),
-        "val_auc_roc": Gauge(
-            "sentimentizer_live_val_auc_roc",
-            description="Live validation AUC-ROC",
+        "val_weighted_f1": Gauge(
+            "sentimentizer_live_val_weighted_f1",
+            description="Live validation weighted-averaged F1 score",
             tag_keys=("model_type",),
         ),
-        "val_positive_accuracy": Gauge(
-            "sentimentizer_live_val_positive_accuracy",
-            description="Live validation positive-class accuracy",
+        "val_neutral_to_positive_rate": Gauge(
+            "sentimentizer_live_val_neutral_to_positive_rate",
+            description="Live validation neutral-to-positive misclassification rate",
             tag_keys=("model_type",),
         ),
-        "val_negative_accuracy": Gauge(
-            "sentimentizer_live_val_negative_accuracy",
-            description="Live validation negative-class accuracy",
+        "val_neutral_to_negative_rate": Gauge(
+            "sentimentizer_live_val_neutral_to_negative_rate",
+            description="Live validation neutral-to-negative misclassification rate",
             tag_keys=("model_type",),
         ),
-        "val_avg_precision": Gauge(
-            "sentimentizer_live_val_avg_precision",
-            description="Live validation average precision (PR-AUC)",
+        "val_pred_neutral_frac": Gauge(
+            "sentimentizer_live_val_pred_neutral_frac",
+            description="Live validation fraction of neutral predictions",
+            tag_keys=("model_type",),
+        ),
+        "val_neutral_auc_roc": Gauge(
+            "sentimentizer_live_val_neutral_auc_roc",
+            description="Live validation neutral-class AUC-ROC",
+            tag_keys=("model_type",),
+        ),
+        "val_neutral_avg_precision": Gauge(
+            "sentimentizer_live_val_neutral_avg_precision",
+            description="Live validation neutral-class average precision",
             tag_keys=("model_type",),
         ),
         "epoch": Gauge(
@@ -412,21 +452,20 @@ class RayReportCallback(TrainingCallback):
                             "train_loss": result.train_loss,
                             "val_loss": result.val_loss,
                             "accuracy": result.metrics.accuracy,
-                            "pos_acc": result.metrics.positive_accuracy,
-                            "neg_acc": result.metrics.negative_accuracy,
-                            "precision": result.metrics.precision,
-                            "recall": result.metrics.recall,
-                            "f1": result.metrics.f1,
+                            "balanced_accuracy": result.metrics.balanced_accuracy,
+                            "negative_precision": result.metrics.negative_precision,
+                            "negative_recall": result.metrics.negative_recall,
+                            "negative_f1": result.metrics.negative_f1,
+                            "neutral_precision": result.metrics.neutral_precision,
+                            "neutral_recall": result.metrics.neutral_recall,
+                            "neutral_f1": result.metrics.neutral_f1,
+                            "positive_precision": result.metrics.positive_precision,
+                            "positive_recall": result.metrics.positive_recall,
+                            "positive_f1": result.metrics.positive_f1,
+                            "macro_f1": result.metrics.macro_f1,
+                            "weighted_f1": result.metrics.weighted_f1,
                             "cohen_kappa": result.metrics.cohen_kappa,
                             "mcc": result.metrics.mcc,
-                            "npv": result.metrics.npv,
-                            "macro_f1": result.metrics.macro_f1,
-                            "auc_roc": result.metrics.auc_roc,
-                            "avg_precision": result.metrics.avg_precision,
-                            "tp": result.metrics.tp,
-                            "tn": result.metrics.tn,
-                            "fp": result.metrics.fp,
-                            "fn": result.metrics.fn,
                             "total": result.metrics.total,
                             "epoch": result.epoch,
                             "lr": result.lr,
@@ -439,6 +478,8 @@ class RayReportCallback(TrainingCallback):
                         "train_loss": result.train_loss,
                         "val_loss": result.val_loss,
                         "accuracy": result.metrics.accuracy,
+                        "balanced_accuracy": result.metrics.balanced_accuracy,
+                        "macro_f1": result.metrics.macro_f1,
                         "epoch": result.epoch,
                         "lr": result.lr,
                     }
@@ -452,32 +493,46 @@ def compute_epoch_metrics(
     probabilities: np.ndarray,
     targets: np.ndarray,
     model_type: str,
+    num_classes: int = 3,
 ) -> ClassificationMetrics:
-    """Compute classification metrics from raw probabilities and targets.
+    """Compute classification metrics from probabilities and targets.
 
     Handles NaN replacement in probabilities before computing metrics.
     This is the shared post-processing logic that was previously duplicated
     in both Trainer.evaluate() and _train_func().
 
     Args:
-        probabilities: Raw sigmoid output, shape (N,). May contain NaN values.
-        targets: Ground truth labels, shape (N,).
+        probabilities: Softmax probability matrix, shape (N, num_classes).
+            May contain NaN values.
+        targets: Ground truth class indices, shape (N,).
         model_type: Model type label for logging.
+        num_classes: Number of classification classes (default 3).
 
     Returns:
         ClassificationMetrics with all standard classification metrics.
     """
-    # Replace NaN probabilities with 0.5 (can result from extreme logit values)
+    from sentimentizer.config import NUM_CLASSES as _NUM_CLASSES
+
+    if num_classes <= 1:
+        num_classes = _NUM_CLASSES
+
+    # Handle both 1D (binary) and 2D (multiclass) probability arrays
+    if probabilities.ndim == 1:
+        # Binary compatibility: expand to 2D
+        probabilities = np.column_stack([1 - probabilities, probabilities])
+        num_classes = 2
+
+    # Replace NaN probabilities with uniform distribution
     nan_mask = np.isnan(probabilities)
     if nan_mask.any():
         nan_count = int(nan_mask.sum())
         logger.warning(
             f"[{model_type}] nan_in_probabilities",
-            message=f"Found {nan_count} NaN values in probabilities, replacing with 0.5",
+            message=f"Found {nan_count} NaN values in probabilities, replacing with uniform",
         )
-        probabilities = np.where(nan_mask, 0.5, probabilities)
+        probabilities = np.where(nan_mask, 1.0 / num_classes, probabilities)
 
-    predictions = (probabilities >= 0.5).astype(int)
+    predictions = probabilities.argmax(axis=1)
 
     from sentimentizer.metrics import compute_classification_metrics
 
@@ -485,6 +540,7 @@ def compute_epoch_metrics(
         predictions=predictions,
         targets=targets,
         probabilities=probabilities,
+        num_classes=num_classes,
     )
 
 
@@ -512,7 +568,7 @@ def _iter_batches(
     else:
         # Ray dataset shard
         for batch in data_source.iter_torch_batches(batch_size=batch_size):
-            yield batch["data"].long().to(device), batch["target"].float().to(device)
+            yield batch["data"].long().to(device), batch["target"].long().to(device)
 
 
 def create_model_from_registry(
@@ -561,28 +617,32 @@ def _create_training_components(
     model: torch.nn.Module,
     model_type: str,
     device: str,
-    pos_weight: float = 1.0,
+    cfg: TrainerConfig | None = None,
     lr: float | None = None,
     betas: tuple[float, float] | None = None,
     weight_decay: float | None = None,
+    class_weights: torch.Tensor | None = None,
 ) -> tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LRScheduler, Callable]:
     """Create optimizer, scheduler, and loss function for a model.
 
-    Extracts the optimizer/scheduler/loss setup that was duplicated in
-    new_trainer() and _train_func() into a single factory function.
+    Uses CrossEntropyLoss (or FocalCrossEntropyLoss) for 3-class
+    classification, replacing the binary BCEWithLogitsLoss.
 
     Args:
         model: The model to create components for.
         model_type: Model type string.
         device: Device to place tensors on.
-        pos_weight: Positive class weight for BCEWithLogitsLoss.
+        cfg: TrainerConfig for loss_type/label_smoothing/focal_gamma settings.
         lr: Optional learning rate override.
         betas: Optional AdamW betas override.
         weight_decay: Optional weight decay override.
+        class_weights: Optional per-class weight tensor for CrossEntropyLoss.
 
     Returns:
         Tuple of (optimizer, scheduler, loss_function).
     """
+    from sentimentizer.losses import FocalCrossEntropyLoss
+
     opt_params = _get_opt_params(model_type)
     sched_params = _get_sched_params(model_type)
 
@@ -615,7 +675,25 @@ def _create_training_components(
             last_epoch=sched_params.last_epoch,
         )
 
-    loss_function = torch.nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight]).to(device))
+    # Determine loss type and label smoothing from config
+    loss_type = cfg.loss_type if cfg else "cross_entropy"
+    label_smoothing = cfg.label_smoothing if cfg else 0.1
+    focal_gamma = cfg.focal_gamma if cfg else 2.0
+
+    # Move class weights to device if provided
+    weights_on_device = class_weights.to(device) if class_weights is not None else None
+
+    if loss_type == "focal":
+        loss_function = FocalCrossEntropyLoss(
+            weight=weights_on_device,
+            gamma=focal_gamma,
+            label_smoothing=label_smoothing,
+        )
+    else:
+        loss_function = torch.nn.CrossEntropyLoss(
+            weight=weights_on_device,
+            label_smoothing=label_smoothing,
+        )
 
     return optimizer, scheduler, loss_function
 
@@ -795,7 +873,7 @@ class Trainer:
                 loss_val = self.loss_function(logits, target)
                 losses.append(loss_val.item())
 
-                all_probs.append(torch.sigmoid(logits).cpu())
+                all_probs.append(torch.softmax(logits, dim=-1).cpu())
                 all_targets.append(target.cpu())
 
         probabilities = torch.cat(all_probs).numpy()
@@ -890,7 +968,7 @@ def _run_training_loop(
                 loss_val = loss_function(output, target)
                 val_losses.append(loss_val.item())
 
-                all_probs.append(torch.sigmoid(output).cpu())
+                all_probs.append(torch.softmax(output, dim=-1).cpu())
                 all_targets.append(target.cpu())
 
         val_loss = float(np.mean(val_losses)) if val_losses else 0.0
@@ -994,11 +1072,17 @@ def new_trainer(
     cfg: TrainerConfig,
     model_type: str,
 ) -> Trainer:
+    # Build class_weights tensor from config if provided
+    class_weights_tensor = None
+    if cfg.class_weights is not None:
+        class_weights_tensor = torch.tensor(cfg.class_weights, dtype=torch.float32)
+
     optimizer, scheduler, loss_function = _create_training_components(
         model=model,
         model_type=model_type,
         device=cfg.device,
-        pos_weight=cfg.pos_weight,
+        cfg=cfg,
+        class_weights=class_weights_tensor,
     )
 
     trainer = Trainer(
@@ -1104,9 +1188,30 @@ def _train_func(config: dict) -> None:
             T_max=epochs,
             eta_min=scheduler_eta_min,
         )
-    loss_function = torch.nn.BCEWithLogitsLoss(
-        pos_weight=torch.tensor([config.get("pos_weight", 1.0)]).to(device)
-    )
+    # Use CrossEntropyLoss for 3-class classification
+    loss_type = config.get("loss_type", "cross_entropy")
+    label_smoothing = config.get("label_smoothing", 0.1)
+
+    # Build class weights tensor from config if provided
+    class_weights_list = config.get("class_weights")
+    class_weights_tensor = None
+    if class_weights_list is not None:
+        class_weights_tensor = torch.tensor(class_weights_list, dtype=torch.float32).to(device)
+
+    if loss_type == "focal":
+        from sentimentizer.losses import FocalCrossEntropyLoss
+
+        focal_gamma = config.get("focal_gamma", 2.0)
+        loss_function = FocalCrossEntropyLoss(
+            weight=class_weights_tensor,
+            gamma=focal_gamma,
+            label_smoothing=label_smoothing,
+        )
+    else:
+        loss_function = torch.nn.CrossEntropyLoss(
+            weight=class_weights_tensor,
+            label_smoothing=label_smoothing,
+        )
 
     # Get dataset shards for this worker
     # In Ray 2.55+, get_dataset_shard is a standalone function, not a method on get_context()
@@ -1132,7 +1237,7 @@ def _train_func(config: dict) -> None:
             loss_val = train_step(
                 model,
                 data=batch["data"].long().to(device),
-                target=batch["target"].float().to(device),
+                target=batch["target"].long().to(device),
                 optimizer=optimizer,
                 loss_function=loss_function,
             )
@@ -1150,12 +1255,12 @@ def _train_func(config: dict) -> None:
         with torch.no_grad():
             for batch in val_shard.iter_torch_batches(batch_size=batch_size):
                 data = batch["data"].long().to(device)
-                target = batch["target"].float().to(device)
+                target = batch["target"].long().to(device)
                 logits = model(data)
                 loss_val = loss_function(logits, target)
                 val_losses.append(loss_val.item())
 
-                all_probs.append(torch.sigmoid(logits).cpu())
+                all_probs.append(torch.softmax(logits, dim=-1).cpu())
                 all_targets.append(target.cpu())
 
         val_loss = float(np.mean(val_losses)) if val_losses else 0.0
@@ -1202,21 +1307,20 @@ def _train_func(config: dict) -> None:
                     "train_loss": train_loss,
                     "val_loss": val_loss,
                     "accuracy": metrics.accuracy,
-                    "pos_acc": metrics.positive_accuracy,
-                    "neg_acc": metrics.negative_accuracy,
-                    "precision": metrics.precision,
-                    "recall": metrics.recall,
-                    "f1": metrics.f1,
+                    "balanced_accuracy": metrics.balanced_accuracy,
+                    "negative_precision": metrics.negative_precision,
+                    "negative_recall": metrics.negative_recall,
+                    "negative_f1": metrics.negative_f1,
+                    "neutral_precision": metrics.neutral_precision,
+                    "neutral_recall": metrics.neutral_recall,
+                    "neutral_f1": metrics.neutral_f1,
+                    "positive_precision": metrics.positive_precision,
+                    "positive_recall": metrics.positive_recall,
+                    "positive_f1": metrics.positive_f1,
+                    "macro_f1": metrics.macro_f1,
+                    "weighted_f1": metrics.weighted_f1,
                     "cohen_kappa": metrics.cohen_kappa,
                     "mcc": metrics.mcc,
-                    "npv": metrics.npv,
-                    "macro_f1": metrics.macro_f1,
-                    "auc_roc": metrics.auc_roc,
-                    "avg_precision": metrics.avg_precision,
-                    "tp": metrics.tp,
-                    "tn": metrics.tn,
-                    "fp": metrics.fp,
-                    "fn": metrics.fn,
                     "total": metrics.total,
                     "epoch": epoch,
                     "lr": optimizer.param_groups[0]["lr"],
@@ -1385,7 +1489,10 @@ def new_ray_trainer(
         "dict_path": driver_config.files.dictionary_file_path,
         "embeddings_model_name": driver_config.embeddings.model_name,
         "embeddings_emb_length": driver_config.embeddings.emb_length,
-        "pos_weight": cfg.pos_weight,
+        "loss_type": cfg.loss_type,
+        "label_smoothing": cfg.label_smoothing,
+        "focal_gamma": cfg.focal_gamma,
+        "class_weights": cfg.class_weights,
     }
 
     use_gpu = cfg.device in ("cuda", "mps")

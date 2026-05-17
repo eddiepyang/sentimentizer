@@ -17,6 +17,10 @@ EMBEDDING_DTYPE = np.float32
 EMBEDDING_RANDOM_MEAN: float = 0.0
 EMBEDDING_RANDOM_STD: float = 0.32
 
+# Classification constants
+NUM_CLASSES: int = 3
+LABEL_NAMES: list[str] = ["negative", "neutral", "positive"]
+
 # Logging constants
 EXTRACT_LOG_INTERVAL: int = 100000
 
@@ -138,6 +142,7 @@ class TokenizerConfig:
     dict_keep: int = 20000
     no_above: float = 0.99999
     save_dictionary: bool = True
+    include_neutral: bool = True  # include 3-star reviews (3-class) or drop them (binary)
 
 
 @dataclass(frozen=True)
@@ -183,7 +188,13 @@ class TrainerConfig:
     checkpoint_dir: str = ""  # directory to save checkpoints (empty = no checkpointing)
     checkpoint_every: int = 1  # save checkpoint every N epochs (0 = disabled)
     checkpoint_best: bool = True  # save the best model (lowest val loss) separately
-    pos_weight: float = 1.0  # weight for the positive class in the loss function
+    class_weights: list[float] | None = None  # per-class weights for CrossEntropyLoss
+    balance_strategy: str = "class_weights_only"  # undersample/oversample/class_weights_only
+    weight_smoothing: float = 0.5  # inverse-frequency exponent (1.0=full, 0.5=sqrt, 0.0=uniform)
+    loss_type: str = "cross_entropy"  # "cross_entropy" or "focal"
+    focal_gamma: float = 2.0  # focal loss focusing parameter (loss_type="focal" only)
+    label_smoothing: float = 0.1  # softens hard targets, reduces overconfident predictions
+    neutral_oversample_ratio: float = 0.0  # 0.0=disabled, 0.20=neutral to 20% of data
 
 
 @dataclass
@@ -221,6 +232,7 @@ class RNNConfig:
     hidden_size: int = 256
     num_layers: int = 2
     dropout: float = 0.2
+    num_classes: int = 3
 
 
 @dataclass(frozen=True)
@@ -232,6 +244,7 @@ class EncoderConfig:
     n_layers: int = 4
     dropout: float = 0.2
     ff_multiplier: int = 4  # dim_feedforward = d_model * ff_multiplier
+    num_classes: int = 3
 
 
 @dataclass(frozen=True)
@@ -250,6 +263,7 @@ class DecoderConfig:
     n_decoder_layers: int = 2
     dropout: float = 0.3
     ff_multiplier: int = 4
+    num_classes: int = 3
 
 
 @dataclass
@@ -262,3 +276,27 @@ class DriverConfig:
     encoder: type[EncoderConfig] = EncoderConfig
     decoder: type[DecoderConfig] = DecoderConfig
     hf: type[HuggingFaceConfig] = HuggingFaceConfig
+
+
+def validate_config_consistency(config: DriverConfig) -> None:
+    """Validate that include_neutral and num_classes settings are consistent.
+
+    Raises ValueError if include_neutral=True but num_classes!=3, or
+    include_neutral=False but num_classes!=2.
+    """
+    tokenizer_cfg = config.tokenizer
+    model_configs = [
+        ("rnn", config.rnn),
+        ("encoder", config.encoder),
+        ("decoder", config.decoder),
+    ]
+    for model_type, model_cfg in model_configs:
+        nc = model_cfg.num_classes
+        if tokenizer_cfg.include_neutral and nc != 3:
+            raise ValueError(
+                f"include_neutral=True requires num_classes=3, got {nc} for {model_type}"
+            )
+        if not tokenizer_cfg.include_neutral and nc != 2:
+            raise ValueError(
+                f"include_neutral=False requires num_classes=2, got {nc} for {model_type}"
+            )

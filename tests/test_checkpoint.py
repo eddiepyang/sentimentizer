@@ -232,14 +232,14 @@ class TestCheckpointTempdirScoping:
                 pickle.dump({"model_state_dict": {"layer1.weight": [1.0, 2.0]}}, fp)
             checkpoint = Checkpoint.from_directory(checkpoint_dir)
             # Verify files exist inside the context
-            assert os.path.exists(
-                data_path
-            ), "Checkpoint file must exist while still in the tempdir context"
+            assert os.path.exists(data_path), (
+                "Checkpoint file must exist while still in the tempdir context"
+            )
             # Reading should succeed inside the context
             with checkpoint.as_directory() as loaded_dir:
                 assert os.path.exists(os.path.join(loaded_dir, "data.pkl"))
 
         # After the with-block, the temp dir is deleted
-        assert not os.path.exists(
-            data_path
-        ), "Temp dir should be cleaned up after exiting the with-block"
+        assert not os.path.exists(data_path), (
+            "Temp dir should be cleaned up after exiting the with-block"
+        )

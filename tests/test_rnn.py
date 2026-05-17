@@ -59,9 +59,11 @@ def processed_df() -> pd.DataFrame:
 
 
 def test_convert_rating():
-    assert convert_rating(5) == 1
-    assert convert_rating(1) == 0
-    assert convert_rating(3) == 0.5
+    assert convert_rating(5) == 2  # 4-5 stars -> positive (2)
+    assert convert_rating(4) == 2  # 4-5 stars -> positive (2)
+    assert convert_rating(1) == 0  # 1-2 stars -> negative (0)
+    assert convert_rating(2) == 0  # 1-2 stars -> negative (0)
+    assert convert_rating(3) == 1  # 3 stars -> neutral (1)
 
 
 def test_tokenize(raw_df):
@@ -137,7 +139,7 @@ class TestGetTrainedModel:
         model = RNN(emb_weights=emb_weights)
         tokens = torch.randint(0, 100, (2, 10))
         output = model(tokens)
-        assert output.shape == (2,)
+        assert output.shape == (2, 3)  # (batch_size, num_classes)
 
     def test_missing_weights_file(self):
         """tests that loading from a missing weights file raises FileNotFoundError
@@ -456,7 +458,7 @@ class TestSingleTrainer:
         model = RNN(emb_weights=emb_weights)
         cfg = TrainerConfig(device="cpu")
         trainer = new_trainer(model=model, cfg=cfg, model_type="rnn")
-        assert isinstance(trainer.loss_function, torch.nn.BCEWithLogitsLoss)
+        assert isinstance(trainer.loss_function, torch.nn.CrossEntropyLoss)
 
 
 # ──────────────────────────────────────────────
@@ -483,7 +485,9 @@ class TestMetricsGauges:
             "embeddings_model_name": "fake-glove",
             "embeddings_emb_length": 100,
             "input_len": 200,
-            "pos_weight": 1.0,
+            "class_weights": [1.0, 1.0, 1.0],
+            "loss_type": "cross_entropy",
+            "label_smoothing": 0.0,
         }
 
         # 2. Mock Ray Data shards
@@ -492,7 +496,7 @@ class TestMetricsGauges:
         mock_shard.iter_torch_batches.return_value = [
             {
                 "data": torch.zeros((2, 200), dtype=torch.long),
-                "target": torch.ones((2, 1), dtype=torch.float),
+                "target": torch.ones((2,), dtype=torch.long),
             }
         ]
 
@@ -501,17 +505,25 @@ class TestMetricsGauges:
             "train_loss": MagicMock(),
             "val_loss": MagicMock(),
             "val_accuracy": MagicMock(),
-            "val_precision": MagicMock(),
-            "val_recall": MagicMock(),
-            "val_f1": MagicMock(),
+            "val_balanced_accuracy": MagicMock(),
+            "val_negative_precision": MagicMock(),
+            "val_negative_recall": MagicMock(),
+            "val_negative_f1": MagicMock(),
+            "val_neutral_precision": MagicMock(),
+            "val_neutral_recall": MagicMock(),
+            "val_neutral_f1": MagicMock(),
+            "val_positive_precision": MagicMock(),
+            "val_positive_recall": MagicMock(),
+            "val_positive_f1": MagicMock(),
             "val_cohen_kappa": MagicMock(),
             "val_mcc": MagicMock(),
-            "val_npv": MagicMock(),
             "val_macro_f1": MagicMock(),
-            "val_auc_roc": MagicMock(),
-            "val_avg_precision": MagicMock(),
-            "val_positive_accuracy": MagicMock(),
-            "val_negative_accuracy": MagicMock(),
+            "val_weighted_f1": MagicMock(),
+            "val_neutral_to_positive_rate": MagicMock(),
+            "val_neutral_to_negative_rate": MagicMock(),
+            "val_pred_neutral_frac": MagicMock(),
+            "val_neutral_auc_roc": MagicMock(),
+            "val_neutral_avg_precision": MagicMock(),
             "epoch": MagicMock(),
             "lr": MagicMock(),
         }
@@ -531,7 +543,7 @@ class TestMetricsGauges:
             mock_model = MagicMock()
             p = torch.nn.Parameter(torch.randn(1, 1))
             mock_model.parameters.side_effect = lambda: iter([p])
-            mock_model.return_value = torch.randn(2, 1)
+            mock_model.return_value = torch.randn(2, 3)
             mock_model.state_dict.return_value = {}
             mock_new_model.return_value = mock_model
 
@@ -552,11 +564,13 @@ class TestMetricsGauges:
         mock_model = MagicMock()
         mock_loader = MagicMock()
         mock_loader.dataset = [1, 2]
-        mock_loader.__iter__.return_value = iter([(torch.zeros(2, 10), torch.ones(2, 1))])
+        mock_loader.__iter__.return_value = iter(
+            [(torch.zeros(2, 10), torch.ones(2, dtype=torch.long))]
+        )
 
         cfg = TrainerConfig(device="cpu")
         trainer = Trainer(
-            loss_function=torch.nn.BCEWithLogitsLoss(),
+            loss_function=torch.nn.CrossEntropyLoss(),
             optimizer=MagicMock(),
             scheduler=MagicMock(),
             cfg=cfg,
@@ -568,17 +582,25 @@ class TestMetricsGauges:
             "train_loss": MagicMock(),
             "val_loss": MagicMock(),
             "val_accuracy": MagicMock(),
-            "val_precision": MagicMock(),
-            "val_recall": MagicMock(),
-            "val_f1": MagicMock(),
+            "val_balanced_accuracy": MagicMock(),
+            "val_negative_precision": MagicMock(),
+            "val_negative_recall": MagicMock(),
+            "val_negative_f1": MagicMock(),
+            "val_neutral_precision": MagicMock(),
+            "val_neutral_recall": MagicMock(),
+            "val_neutral_f1": MagicMock(),
+            "val_positive_precision": MagicMock(),
+            "val_positive_recall": MagicMock(),
+            "val_positive_f1": MagicMock(),
             "val_cohen_kappa": MagicMock(),
             "val_mcc": MagicMock(),
-            "val_npv": MagicMock(),
             "val_macro_f1": MagicMock(),
-            "val_auc_roc": MagicMock(),
-            "val_avg_precision": MagicMock(),
-            "val_positive_accuracy": MagicMock(),
-            "val_negative_accuracy": MagicMock(),
+            "val_weighted_f1": MagicMock(),
+            "val_neutral_to_positive_rate": MagicMock(),
+            "val_neutral_to_negative_rate": MagicMock(),
+            "val_pred_neutral_frac": MagicMock(),
+            "val_neutral_auc_roc": MagicMock(),
+            "val_neutral_avg_precision": MagicMock(),
             "epoch": MagicMock(),
             "lr": MagicMock(),
         }
@@ -589,19 +611,11 @@ class TestMetricsGauges:
             patch("sentimentizer.exporter.TRAINING_EPOCH", create=True),
             patch("sentimentizer.exporter.TRAINING_VAL_LOSS", create=True),
             patch("sentimentizer.exporter.TRAINING_VAL_ACCURACY", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_PRECISION", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_RECALL", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_F1", create=True),
             patch("sentimentizer.exporter.TRAINING_VAL_COHEN_KAPPA", create=True),
             patch("sentimentizer.exporter.TRAINING_VAL_MCC", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_NPV", create=True),
             patch("sentimentizer.exporter.TRAINING_VAL_MACRO_F1", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_AUC_ROC", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_AVG_PRECISION", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_POSITIVE_ACCURACY", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_NEGATIVE_ACCURACY", create=True),
         ):
-            mock_model.return_value = torch.randn(2, 1)
+            mock_model.return_value = torch.randn(2, 3)
             trainer.evaluate(mock_model, mock_loader, epoch=0)
             assert mock_gauges["val_loss"].set.called, "val_loss gauge was not updated"
             assert mock_gauges["val_accuracy"].set.called, "val_accuracy gauge was not updated"

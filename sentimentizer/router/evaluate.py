@@ -67,7 +67,7 @@ def compute_similarity_matrix(
                 name_j = LABEL_NAMES.get(label_j, str(label_j))
                 status = "OK" if inter_sim < 0.65 else "HIGH"
                 logger.info(
-                    f"Inter-class similarity ({name_i} vs {name_j}): " f"{inter_sim:.4f} [{status}]"
+                    f"Inter-class similarity ({name_i} vs {name_j}): {inter_sim:.4f} [{status}]"
                 )
 
     for label in labels:

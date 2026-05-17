@@ -180,11 +180,12 @@ class SentimentizerDeployment:
     def _predict_sentiment(self, text: str, model_name: str | None = None) -> dict:
         """Run sentiment analysis on a single text."""
         model, resolved_name = self._get_model(model_name)
-        score = model.predict_text(text, self.tokenizer)
+        scores = model.predict_text(text)
+        label = max(scores, key=scores.get)
         return {
             "model": resolved_name,
-            "sentiment_score": score,
-            "label": "positive" if score > 0.5 else "negative",
+            "label": label,
+            "scores": scores,
         }
 
     # ---- Router prediction logic --------------------------------------------
@@ -270,7 +271,7 @@ class SentimentizerDeployment:
                 metrics=sentiment_metrics,
                 model=prediction["model"],
                 label=prediction["label"],
-                score=prediction["sentiment_score"],
+                scores=prediction["scores"],
             )
         except Exception as exc:
             latency = time.perf_counter() - start

@@ -61,7 +61,7 @@ class TestIterBatches:
         assert len(batches) == 1
         data, target = batches[0]
         assert data.dtype == torch.long  # .long() applied
-        assert target.dtype == torch.float  # .float() applied
+        assert target.dtype == torch.long  # .long() applied for CrossEntropyLoss
 
     def test_ray_shard_empty(self) -> None:
         mock_shard = MagicMock()
@@ -126,16 +126,18 @@ class TestCreateTrainingComponents:
         )
         assert opt.param_groups[0]["lr"] == 0.123
 
-    def test_loss_has_pos_weight(self) -> None:
+    def test_loss_has_class_weights(self) -> None:
         model = MagicMock()
         model.parameters.return_value = [torch.nn.Parameter(torch.zeros(2, 2))]
+        class_weights = torch.tensor([1.0, 2.0, 3.0])
         _, _, loss_fn = _create_training_components(
             model=model,
             model_type="rnn",
             device="cpu",
-            pos_weight=2.5,
+            class_weights=class_weights,
         )
-        assert loss_fn.pos_weight.item() == 2.5
+        assert isinstance(loss_fn, torch.nn.CrossEntropyLoss)
+        assert torch.allclose(loss_fn.weight, class_weights)
 
     def test_scheduler_is_cosine_annealing_for_rnn(self) -> None:
         model = MagicMock()
@@ -192,30 +194,34 @@ class TestTrainerBoundedMemory:
 def _make_mock_model() -> MagicMock:
     """Create a mock model that returns deterministic logits with grad."""
     model = MagicMock()
-    # Return a tensor that when sigmoided gives ~0.5 probability
-    # requires_grad=True so backward() works
-    model.return_value = torch.zeros(2, 1, requires_grad=True)
+    # Return a tensor with 3 classes (B, num_classes) for CrossEntropyLoss
+    model.return_value = torch.zeros(2, 3, requires_grad=True)
     return model
 
 
 def _make_dummy_metrics() -> ClassificationMetrics:
     return ClassificationMetrics(
         accuracy=0.5,
-        positive_accuracy=0.5,
-        negative_accuracy=0.5,
-        precision=0.5,
-        recall=0.5,
-        f1=0.5,
+        balanced_accuracy=0.5,
+        negative_precision=0.5,
+        negative_recall=0.5,
+        negative_f1=0.5,
+        neutral_precision=0.5,
+        neutral_recall=0.5,
+        neutral_f1=0.5,
+        positive_precision=0.5,
+        positive_recall=0.5,
+        positive_f1=0.5,
+        macro_f1=0.5,
+        weighted_f1=0.5,
+        confusion_matrix=[[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+        neutral_to_positive_rate=0.0,
+        neutral_to_negative_rate=0.0,
+        pred_negative_frac=0.33,
+        pred_neutral_frac=0.33,
+        pred_positive_frac=0.34,
         cohen_kappa=0.0,
         mcc=0.0,
-        npv=0.5,
-        macro_f1=0.5,
-        auc_roc=0.5,
-        avg_precision=0.5,
-        tp=1,
-        tn=1,
-        fp=1,
-        fn=1,
         total=4,
     )
 
@@ -228,11 +234,11 @@ class TestRunTrainingLoop:
         mock_cb.on_epoch_end.return_value = False
 
         model = _make_mock_model()
-        train_iter = [(torch.zeros(2, 10), torch.ones(2, 1))]
-        val_iter = [(torch.zeros(2, 10), torch.ones(2, 1))]
+        train_iter = [(torch.zeros(2, 10), torch.ones(2, dtype=torch.long))]
+        val_iter = [(torch.zeros(2, 10), torch.ones(2, dtype=torch.long))]
 
         optimizer = torch.optim.SGD([torch.nn.Parameter(torch.zeros(1))], lr=0.01)
-        loss_fn = torch.nn.BCEWithLogitsLoss()
+        loss_fn = torch.nn.CrossEntropyLoss()
 
         with (
             patch("sentimentizer.trainer.train_step", return_value=0.5),
@@ -264,11 +270,11 @@ class TestRunTrainingLoop:
         mock_cb.on_epoch_end.side_effect = stop_after_2
 
         model = _make_mock_model()
-        train_iter = [(torch.zeros(2, 10), torch.ones(2, 1))]
-        val_iter = [(torch.zeros(2, 10), torch.ones(2, 1))]
+        train_iter = [(torch.zeros(2, 10), torch.ones(2, dtype=torch.long))]
+        val_iter = [(torch.zeros(2, 10), torch.ones(2, dtype=torch.long))]
 
         optimizer = torch.optim.SGD([torch.nn.Parameter(torch.zeros(1))], lr=0.01)
-        loss_fn = torch.nn.BCEWithLogitsLoss()
+        loss_fn = torch.nn.CrossEntropyLoss()
 
         with (
             patch("sentimentizer.trainer.train_step", return_value=0.5),
@@ -305,11 +311,11 @@ class TestRunTrainingLoop:
                 return False
 
         model = _make_mock_model()
-        train_iter = [(torch.zeros(2, 10), torch.ones(2, 1))]
-        val_iter = [(torch.zeros(2, 10), torch.ones(2, 1))]
+        train_iter = [(torch.zeros(2, 10), torch.ones(2, dtype=torch.long))]
+        val_iter = [(torch.zeros(2, 10), torch.ones(2, dtype=torch.long))]
 
         optimizer = torch.optim.SGD([torch.nn.Parameter(torch.zeros(1))], lr=0.01)
-        loss_fn = torch.nn.BCEWithLogitsLoss()
+        loss_fn = torch.nn.CrossEntropyLoss()
 
         with (
             patch("sentimentizer.trainer.train_step", return_value=0.5),

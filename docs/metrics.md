@@ -4,19 +4,14 @@ Sentimentizer exposes training and system metrics via Prometheus for visualizati
 
 ## Known Gaps
 
-The following gaps were identified between this document and the current codebase. All have been resolved:
+All known gaps have been resolved. Key historical fixes:
 
-1. ~~**Gauge pre-initialization claim was incorrect**~~ — Fixed: updated to reflect that the standalone exporter creates training Gauge objects at module-import time (they appear with value `0` immediately).
-
-2. ~~**Missing `ray_sentimentizer_live_epoch` metric**~~ — Fixed: added to the Ray live metrics list.
-
-3. ~~**Missing Ray controller health metrics**~~ — Fixed: added `sentimentizer_ray_controller_state` and `sentimentizer_ray_controller_operation_time_s` to the system metrics section.
-
-4. ~~**Tune metrics entirely undocumented**~~ — Fixed: added a full `sentimentizer_tune_*` section documenting all 15 tuning metrics (10 per-trial + 5 aggregate).
-
-5. ~~**Missing `sentimentizer_system_info` metric**~~ — Fixed: added to the system metrics section as an Info-type metric.
-
-6. ~~**Minor NaN handling imprecision**~~ — Fixed: NaN handling now uses `torchmetrics.BinaryAUROC` with explicit NaN→0.5 replacement before computation.
+1. Gauge pre-initialization — standalone exporter creates training Gauge objects at module-import time
+2. Ray controller health metrics — `sentimentizer_ray_controller_state` and `sentimentizer_ray_controller_operation_time_s`
+3. Tune metrics — full `sentimentizer_tune_*` section (see below)
+4. `sentimentizer_system_info` — Info-type metric with static system metadata
+5. NaN handling — `torchmetrics.MulticlassAUROC` with NaN→`1/num_classes` replacement before computation
+6. 3-class migration — all binary gauges replaced with per-class gauges (see Metric Definitions below)
 
 ## Architecture
 
@@ -69,52 +64,73 @@ The following gaps were identified between this document and the current codebas
 
 ## Metric Definitions
 
-### Core Classification Metrics
+Sentimentizer uses 3-class classification (negative / neutral / positive). All metrics are computed using `torchmetrics` multiclass classes with `num_classes=3`.
+
+### Per-Class Metrics (negative, neutral, positive)
+
+Each class has its own precision, recall, and F1 computed in a one-vs-rest fashion:
 
 | Metric | Range | Description |
 |--------|-------|-------------|
-| **Accuracy** | 0–1 | Overall correctness: (TP + TN) / total |
-| **Precision** | 0–1 | Positive-class precision: TP / (TP + FP). Of all samples predicted positive, how many were actually positive? |
-| **Recall** | 0–1 | Positive-class recall (sensitivity): TP / (TP + FN). Of all actual positives, how many were correctly identified? |
-| **F1** | 0–1 | Harmonic mean of precision and recall (positive class only). Balances false positives and false negatives for the positive class. |
-| **Positive Accuracy** | 0–1 | Accuracy on positive samples only: TP / (TP + FN). Same as recall for the positive class. |
-| **Negative Accuracy** | 0–1 | Accuracy on negative samples only: TN / (TN + FP). Same as specificity for the negative class. |
+| **{class}\_precision** | 0–1 | Of all samples predicted as *class*, how many were actually *class*? |
+| **{class}\_recall** | 0–1 | Of all actual *class* samples, how many were correctly identified? |
+| **{class}\_f1** | 0–1 | Harmonic mean of that class's precision and recall |
 
-### Agreement and Correlation Metrics
+For example, `neutral_recall` measures how well the model detects neutral reviews — the most critical metric for the minority class.
 
-| Metric | Range | Description |
-|--------|-------|-------------|
-| **Cohen's Kappa** | -1–1 | Agreement beyond chance. 0 = random agreement, 1 = perfect agreement. Unlike accuracy, accounts for agreement expected by chance. Returns 0.0 for single-class targets (torchmetrics returns NaN, coerced to 0.0). |
-| **MCC** (Matthews Correlation Coefficient) | -1–1 | Best single-number summary of confusion matrix quality. Uses all four cells (TP, TN, FP, FN) symmetrically, making it robust to class imbalance where accuracy can be misleading. 0 = random, 1 = perfect, -1 = inverse. |
-
-### Probability-Based Metrics
+### Aggregate Metrics
 
 | Metric | Range | Description |
 |--------|-------|-------------|
-| **AUC-ROC** | 0–1 | Area under the Receiver Operating Characteristic curve. Measures ranking quality: how well the model separates positive from negative samples across all thresholds. 0.5 = random, 1.0 = perfect separation. Requires probability scores; None when not available. Returns 0.0 for single-class targets. |
-| **Average Precision** (PR-AUC) | 0–1 | Area under the Precision-Recall curve. More informative than AUC-ROC for imbalanced datasets because it focuses on the positive class. A random classifier gives AP = positive prevalence (not 0.5), making it a stricter test. Requires probability scores; None when not available. Returns 0.0 for single-class targets. |
+| **Accuracy** | 0–1 | Overall correctness: correct predictions / total |
+| **Balanced Accuracy** | 0–1 | Mean of per-class recalls. Equal weight regardless of class size. Robust to imbalance where raw accuracy is misleading (a 71%-positive dataset gives 71% accuracy by always predicting positive). |
+| **Macro F1** | 0–1 | Mean of per-class F1 scores. Weights all classes equally, so it drops sharply when the model ignores any class. Best early-warning indicator of class-imbalance collapse. |
+| **Weighted F1** | 0–1 | Per-class F1 weighted by class frequency. Close to raw accuracy for imbalanced datasets but still accounts for per-class performance. |
+| **Cohen's Kappa** | -1–1 | Agreement beyond chance. 0 = random, 1 = perfect. Uses the full 3×3 confusion matrix. Returns 0.0 for single-class targets (torchmetrics returns NaN, coerced via `_safe_item()`). |
+| **MCC** (Matthews Correlation Coefficient) | -1–1 | Best single-number summary of confusion matrix quality. Uses all cells symmetrically, making it robust to class imbalance. 0 = random, 1 = perfect, -1 = inverse. |
 
-### Negative-Class Metrics
+### Probability-Based Metrics (one-vs-rest per class)
 
 | Metric | Range | Description |
 |--------|-------|-------------|
-| **NPV** (Negative Predictive Value) | 0–1 | TN / (TN + FN). Of all samples predicted negative, how many were actually negative? Complement to precision for the negative class. Low NPV indicates many false negatives — the model incorrectly classifies actual negatives as positive. |
-| **Macro F1** | 0–1 | Mean of per-class F1 scores (F1_positive + F1_negative) / 2. Weights both classes equally regardless of prevalence. Unlike positive-class-only F1, Macro F1 drops significantly when the model ignores either class — making it the best early-warning indicator of class-imbalance collapse. |
+| **{class}\_auc_roc** | 0–1 | AUC-ROC for *class* vs all others (one-vs-rest). Measures ranking quality: how well the model separates *class* from the rest. 0.5 = random, 1.0 = perfect. May be `None` if not computable. |
+| **{class}\_avg_precision** | 0–1 | Area under the Precision-Recall curve for *class* vs all others (one-vs-rest). More informative than AUC-ROC for minority classes. May be `None` if not computable. |
+
+Currently, AUC-ROC and average precision are tracked for the neutral class only (`neutral_auc_roc`, `neutral_avg_precision`) since it is the minority class most vulnerable to being ignored.
+
+### Neutral-Class Diagnostic Metrics
+
+| Metric | Range | Description |
+|--------|-------|-------------|
+| **neutral\_to\_positive\_rate** | 0–1 | Fraction of true neutral reviews misclassified as positive. Most common failure mode (neutral confused with positive). Target: < 0.30 |
+| **neutral\_to\_negative\_rate** | 0–1 | Fraction of true neutral reviews misclassified as negative. |
+| **pred\_neutral\_frac** | 0–1 | Fraction of all predictions that are neutral. If < 0.05, the model is ignoring the neutral class entirely. Target: 0.08–0.15 |
+
+### Imbalance Monitoring Targets
+
+| Metric | Target | Why |
+|--------|--------|-----|
+| `neutral_recall` | ≥ 0.60 | Primary indicator that the model can find neutral reviews |
+| `neutral_avg_precision` | ≥ 0.40 | PR-AUC for neutral — more informative than ROC-AUC for minority class |
+| `pred_neutral_frac` | 0.08–0.15 | If < 0.05, model is ignoring neutral entirely |
+| `neutral_to_positive_rate` | < 0.30 | Most common failure: neutral miscategorized as positive |
+| `balanced_accuracy` | ≥ 0.70 | Mean of per-class recalls — drops when any class is ignored |
+| `macro_f1` | ≥ 0.65 | Drops sharply if neutral F1 is near zero |
+
+> **Do not optimize for overall accuracy.** A model that predicts positive for everything achieves ~71% accuracy on the Yelp dataset. Watch `balanced_accuracy` and `macro_f1` instead.
 
 ### When to Use Which Metric
 
-- **Balanced dataset**: All metrics are equally informative. Use F1 or accuracy for quick assessment.
-- **Imbalanced dataset** (common in sentiment analysis): Accuracy is misleading. Use **Macro F1** (detects negative-class neglect), **MCC** (robust single-number summary), and **Average Precision** (stricter than AUC-ROC).
-- **Negative-class performance matters**: Use **NPV** and **Negative Accuracy** alongside precision/recall.
-- **Model ranking quality**: Use **AUC-ROC** (threshold-independent) and **Average Precision** (focuses on positive class).
+- **Quick assessment**: Use `balanced_accuracy` and `macro_f1` as primary monitors.
+- **Neutral-class performance**: Use `neutral_recall`, `neutral_avg_precision`, and `pred_neutral_frac`.
+- **Model ranking quality**: Use `neutral_auc_roc` (threshold-independent) and `neutral_avg_precision` (stricter for minority classes).
+- **Confusion analysis**: Use `neutral_to_positive_rate` and `neutral_to_negative_rate` to see where neutral reviews are being misdirected.
 
 ### Key Literature
 
-- **MCC as best single metric**: Chicco & Jurman (2020), "The advantages of the Matthews correlation coefficient (MCC) over F1 score and accuracy in binary classification evaluation," *BMC Genomics* 21:6. — Demonstrates MCC is more informative than F1 and accuracy across binary classification tasks, including imbalanced ones. ([Springer Nature](https://bmcgenomics.biomedcentral.com/article/10.1186/s12864-019-6413-7))
-- **MCC real-world challenges**: Zhu & Wang (2023), "Challenges in the real world use of classification accuracy metrics: From recall and precision to the Matthews correlation coefficient," *PLOS One*. — Reviews practical pitfalls of recall/precision/F1 and recommends MCC. ([PLOS One](https://journals.plos.org/plosone/article?id=10.1371%2Fjournal.pone.0291908))
-- **Macro F1 definition and variants**: Opitz & Burst (2019), "Macro F1 and Macro F1," *arXiv:1911.03347*. — Shows macro F1 weights both classes equally, penalizing classifiers that ignore the minority class. ([arXiv](https://ui.adsabs.harvard.edu/abs/2019arXiv191103347O/abstract))
-- **PR-AUC vs ROC-AUC for imbalance**: Saito & Rehmsmeier (2015), "The Precision-Recall Plot Is More Informative than the ROC Plot When Evaluating Binary Classifiers on Imbalanced Datasets," *PLOS One*. — Definitive study showing PR curves (and Average Precision) are more informative than ROC curves when classes are imbalanced. ([PMC](https://ncbi.nlm.nih.gov/pmc/articles/PMC4349800/))
-- **ROC-AUC still valid for imbalance**: Richardson et al. (2024), "The receiver operating characteristic curve accurately assesses imbalanced datasets," *Patterns* 5(6). — Counterpoint showing ROC-AUC can still be valid, but recommends using it alongside PR-based metrics. ([ScienceDirect](https://www.sciencedirect.com/science/article/pii/S2666389924001090))
+- **MCC as best single metric**: Chicco & Jurman (2020), "The advantages of the Matthews correlation coefficient (MCC) over F1 score and accuracy in binary classification evaluation," *BMC Genomics* 21:6. ([Springer Nature](https://bmcgenomics.biomedcentral.com/articles/10.1186/s12864-019-6413-7))
+- **Macro F1 definition and variants**: Opitz & Burst (2019), "Macro F1 and Macro F1," *arXiv:1911.03347*. ([arXiv](https://ui.adsabs.harvard.edu/abs/2019arXiv191103347O/abstract))
+- **PR-AUC vs ROC-AUC for imbalance**: Saito & Rehmsmeier (2015), "The Precision-Recall Plot Is More Informative than the ROC Plot When Evaluating Binary Classifiers on Imbalanced Datasets," *PLOS One*. ([PMC](https://ncbi.nlm.nih.gov/pmc/articles/PMC4349800/))
 
 ## Metric Naming Convention
 
@@ -124,39 +140,59 @@ Gauges are pre-initialized at module-import time in the standalone exporter (`ex
 - `sentimentizer_training_train_loss{model_type}`
 - `sentimentizer_training_val_loss{model_type}`
 - `sentimentizer_training_val_accuracy{model_type}`
-- `sentimentizer_training_val_precision{model_type}`
-- `sentimentizer_training_val_recall{model_type}`
-- `sentimentizer_training_val_f1{model_type}`
+- `sentimentizer_training_val_balanced_accuracy{model_type}`
+- `sentimentizer_training_val_negative_precision{model_type}`
+- `sentimentizer_training_val_negative_recall{model_type}`
+- `sentimentizer_training_val_negative_f1{model_type}`
+- `sentimentizer_training_val_neutral_precision{model_type}`
+- `sentimentizer_training_val_neutral_recall{model_type}`
+- `sentimentizer_training_val_neutral_f1{model_type}`
+- `sentimentizer_training_val_positive_precision{model_type}`
+- `sentimentizer_training_val_positive_recall{model_type}`
+- `sentimentizer_training_val_positive_f1{model_type}`
+- `sentimentizer_training_val_macro_f1{model_type}`
+- `sentimentizer_training_val_weighted_f1{model_type}`
 - `sentimentizer_training_val_cohen_kappa{model_type}`
 - `sentimentizer_training_val_mcc{model_type}`
-- `sentimentizer_training_val_npv{model_type}`
-- `sentimentizer_training_val_macro_f1{model_type}`
-- `sentimentizer_training_val_auc_roc{model_type}`
-- `sentimentizer_training_val_avg_precision{model_type}`
-- `sentimentizer_training_val_positive_accuracy{model_type}`
-- `sentimentizer_training_val_negative_accuracy{model_type}`
+- `sentimentizer_training_val_neutral_auc_roc{model_type}`
+- `sentimentizer_training_val_neutral_avg_precision{model_type}`
+- `sentimentizer_training_val_neutral_to_positive_rate{model_type}`
+- `sentimentizer_training_val_neutral_to_negative_rate{model_type}`
+- `sentimentizer_training_val_pred_neutral_frac{model_type}`
 - `sentimentizer_training_epoch{model_type}`
+- `sentimentizer_training_lr{model_type}`
 
 The `model_type` label is one of: `rnn`, `encoder`, `decoder`.
 
 ### `ray_sentimentizer_live_*` (real-time distributed metrics)
-Set by Ray workers during distributed training. These are prefixed with `ray_` by Ray's metrics system and only exist while Ray is running.
+Set by Ray workers during distributed training. These are prefixed with `ray_` by Ray's metrics system and only exist while Ray is running. They mirror the `sentimentizer_training_*` names with the `ray_` prefix.
+
+Per-class Ray gauges (set from `_get_ray_gauges()` in `trainer.py`):
 
 - `ray_sentimentizer_live_train_loss{model_type}`
 - `ray_sentimentizer_live_val_loss{model_type}`
 - `ray_sentimentizer_live_val_accuracy{model_type}`
-- `ray_sentimentizer_live_val_precision{model_type}`
-- `ray_sentimentizer_live_val_recall{model_type}`
-- `ray_sentimentizer_live_val_f1{model_type}`
+- `ray_sentimentizer_live_val_balanced_accuracy{model_type}`
+- `ray_sentimentizer_live_val_negative_precision{model_type}`
+- `ray_sentimentizer_live_val_negative_recall{model_type}`
+- `ray_sentimentizer_live_val_negative_f1{model_type}`
+- `ray_sentimentizer_live_val_neutral_precision{model_type}`
+- `ray_sentimentizer_live_val_neutral_recall{model_type}`
+- `ray_sentimentizer_live_val_neutral_f1{model_type}`
+- `ray_sentimentizer_live_val_positive_precision{model_type}`
+- `ray_sentimentizer_live_val_positive_recall{model_type}`
+- `ray_sentimentizer_live_val_positive_f1{model_type}`
+- `ray_sentimentizer_live_val_macro_f1{model_type}`
+- `ray_sentimentizer_live_val_weighted_f1{model_type}`
 - `ray_sentimentizer_live_val_cohen_kappa{model_type}`
 - `ray_sentimentizer_live_val_mcc{model_type}`
-- `ray_sentimentizer_live_val_npv{model_type}`
-- `ray_sentimentizer_live_val_macro_f1{model_type}`
-- `ray_sentimentizer_live_val_auc_roc{model_type}`
-- `ray_sentimentizer_live_val_avg_precision{model_type}`
-- `ray_sentimentizer_live_val_positive_accuracy{model_type}`
-- `ray_sentimentizer_live_val_negative_accuracy{model_type}`
+- `ray_sentimentizer_live_val_neutral_auc_roc{model_type}`
+- `ray_sentimentizer_live_val_neutral_avg_precision{model_type}`
+- `ray_sentimentizer_live_val_neutral_to_positive_rate{model_type}`
+- `ray_sentimentizer_live_val_neutral_to_negative_rate{model_type}`
+- `ray_sentimentizer_live_val_pred_neutral_frac{model_type}`
 - `ray_sentimentizer_live_epoch{model_type}`
+- `ray_sentimentizer_live_lr{model_type}`
 
 ### `sentimentizer_tune_*` (tuning metrics)
 Emitted on port 8082 during Ray Tune hyperparameter tuning runs. These metrics are only available while `tune_model()` is actively running.
@@ -165,12 +201,14 @@ Emitted on port 8082 during Ray Tune hyperparameter tuning runs. These metrics a
 - `sentimentizer_tune_val_accuracy{trial_id, model_type}`
 - `sentimentizer_tune_val_loss{trial_id, model_type}`
 - `sentimentizer_tune_train_loss{trial_id, model_type}`
-- `sentimentizer_tune_val_f1{trial_id, model_type}`
+- `sentimentizer_tune_val_balanced_accuracy{trial_id, model_type}`
 - `sentimentizer_tune_val_cohen_kappa{trial_id, model_type}`
-- `sentimentizer_tune_val_precision{trial_id, model_type}`
-- `sentimentizer_tune_val_recall{trial_id, model_type}`
-- `sentimentizer_tune_val_positive_accuracy{trial_id, model_type}`
-- `sentimentizer_tune_val_negative_accuracy{trial_id, model_type}`
+- `sentimentizer_tune_val_mcc{trial_id, model_type}`
+- `sentimentizer_tune_val_negative_f1{trial_id, model_type}`
+- `sentimentizer_tune_val_neutral_f1{trial_id, model_type}`
+- `sentimentizer_tune_val_positive_f1{trial_id, model_type}`
+- `sentimentizer_tune_val_macro_f1{trial_id, model_type}`
+- `sentimentizer_tune_val_weighted_f1{trial_id, model_type}`
 - `sentimentizer_tune_epoch{trial_id, model_type}`
 
 #### Aggregate metrics (labeled by `model_type` only):
@@ -212,8 +250,8 @@ When training starts for a model type (e.g., `encoder`), any residual metrics fr
 
 **Fix:** `_reset_stale_metrics(model_type)` in `workflows/stages/train.py` is called at the start of `run_train()` (both single-node and distributed paths). It:
 
-1. Writes a **zeroed-out entry** for the current `model_type` in the JSON file (sets all metrics to 0, epoch to 0). This is essential because the standalone exporter only updates gauge labels for model types present in the file — deleting the entry would leave the exporter serving stale values from its in-process gauges.
-2. Resets all 11 `sentimentizer_training_*` Prometheus gauges for that `model_type` to `0`.
+1. Writes a **zeroed-out entry** for *all* model types in their respective JSON files (sets all metrics to 0, epoch to 0). Each file gets a `_reset: true` flag and a `_trace.reset_by` field documenting which model type triggered the reset. This is essential because the standalone exporter only updates gauge labels for model types present in the file — deleting the entry would leave the exporter serving stale values from its in-process gauges.
+2. Resets all 24 `sentimentizer_training_*` Prometheus gauges for that `model_type` to `0` (per-class metrics: 3×3 per-class P/R/F1 + balanced_accuracy + macro_f1 + weighted_f1 + cohen_kappa + mcc + neutral_auc_roc + neutral_avg_precision + neutral_to_positive_rate + neutral_to_negative_rate + pred_neutral_frac).
 3. Invalidates the `_RAY_GAUGES` cache entry for that `model_type`, forcing lazy re-creation in the current worker context.
 
 Other model types' entries in the JSON file are left untouched — they'll naturally be updated when those model types are trained next.
@@ -244,11 +282,11 @@ Other model types' entries in the JSON file are left untouched — they'll natur
 
 ## NaN Handling in Metrics
 
-During training, `torch.sigmoid()` on extreme logit values can produce NaN, which would cause metric computation errors. The codebase handles this at multiple levels:
+During training, `torch.softmax()` on extreme logit values can produce NaN, which would cause metric computation errors. The codebase handles this at multiple levels:
 
-1. **`sentimentizer/metrics.py`**: `compute_classification_metrics()` replaces NaN probabilities with 0.5 (random-guess probability) via `_replace_nan_probs()` before passing to `torchmetrics.BinaryAUROC`. This also logs a warning for debugging. Cohen's kappa from `torchmetrics.BinaryCohenKappa` returns NaN for single-class targets — `_safe_item()` coerces this to 0.0 to avoid Prometheus gauge issues.
+1. **`sentimentizer/metrics.py`**: `compute_classification_metrics()` replaces NaN probabilities with `1/num_classes` (i.e., 1/3 ≈ 0.333 for 3-class) via `_replace_nan_probs()` before passing to `torchmetrics.MulticlassAUROC`. Rows with partial NaN are re-normalized to sum to 1.0. Cohen's kappa from `torchmetrics.MulticlassCohenKappa` returns NaN for single-class targets — `_safe_item()` coerces this to 0.0 to avoid Prometheus gauge issues.
 2. **`sentimentizer/metrics.py`**: `compute_metrics_from_model()` replaces NaN at the tensor level using `torch.where()` before converting to numpy
-3. **`sentimentizer/trainer.py`**: Both `Trainer.evaluate()` and `_train_func()` (Ray) replace NaN in probabilities with 0.5 after `torch.sigmoid()`
+3. **`sentimentizer/trainer.py`**: Both `Trainer.evaluate()` and `_train_func()` (Ray) replace NaN in probabilities with `1/num_classes` after `torch.softmax()`
 
 ## Starting the Metrics Stack
 
@@ -306,8 +344,8 @@ The following dashboards are provisioned in Grafana:
 
 | Dashboard | UID | Metrics Shown |
 |-----------|-----|---------------|
-| **Model Training** | `sentimentizerModelTraining` | Training loss, validation accuracy / precision / recall / F1, per-class accuracy, Cohen's Kappa, AUC-ROC, epoch |
-| **Model Tuning** | `sentimentizerModelTuning` | Ray Tune trial metrics: aggregate stats (best accuracy/loss/F1, trial counts) and per-trial time-series for all validation metrics |
+| **Model Training** | `sentimentizerModelTraining` | Training loss, validation accuracy, per-class precision/recall/F1 (negative/neutral/positive), balanced_accuracy, macro_f1, weighted_f1, Cohen's Kappa, MCC, neutral AUC-ROC, neutral avg precision, neutral misclassification rates, epoch, learning rate |
+| **Model Tuning** | `sentimentizerModelTuning` | Ray Tune trial metrics: aggregate stats (best accuracy/loss/F1, trial counts) and per-trial time-series for balanced_accuracy, per-class F1, macro_f1, weighted_f1, MCC, Cohen's kappa |
 | **Sentimentizer System** | `sentimentizerSystem` | CPU / memory / disk usage, GPU utilization / memory / temperature, Ray cluster health (availability, node count, controller state) |
 
 All custom dashboards use the provisioned Prometheus datasource (`uid: prometheus`).
@@ -365,7 +403,7 @@ If you train the RNN model and then train the encoder model, the dashboard may b
 
 **This is now handled automatically.** `_reset_stale_metrics(model_type)` is called at the start of every training run and:
 1. Writes a zeroed-out per-model JSON file (`/tmp/sentimentizer_metrics/{model_type}_metrics.json`) with a `_trace` field documenting the reset, so the exporter clear stale values.
-2. Resets all 11 `sentimentizer_training_*` Prometheus gauges for that `model_type` to `0`.
+2. Resets all 24 `sentimentizer_training_*` Prometheus gauges for that `model_type` to `0` (per-class metrics: 3×3 per-class P/R/F1 + balanced_accuracy + macro_f1 + weighted_f1 + cohen_kappa + mcc + neutral_auc_roc + neutral_avg_precision + neutral_to_positive_rate + neutral_to_negative_rate + pred_neutral_frac).
 3. Invalidates the Ray gauge cache for that `model_type`.
 
 Each model type's metrics live in its own file, so concurrent training processes never race.

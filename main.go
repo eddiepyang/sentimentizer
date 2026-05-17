@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
 )
@@ -17,9 +18,10 @@ type SentimentRequest struct {
 }
 
 type SentimentResponse struct {
-	SentimentScore float64 `json:"sentiment_score"`
-	Prediction     string  `json:"prediction"`
-	Error          string  `json:"error,omitempty"`
+	Model      string             `json:"model"`
+	Label      string             `json:"label"`
+	Scores     map[string]float64 `json:"scores"`
+	Error      string             `json:"error,omitempty"`
 }
 
 func main() {
@@ -98,14 +100,26 @@ func main() {
 	// Colorized output
 	emoji := "👎"
 	color := "\033[31m" // red
-	if result.Prediction == "positive" {
+	if result.Label == "positive" {
 		emoji = "👍"
 		color = "\033[32m" // green
+	} else if result.Label == "neutral" {
+		emoji = "😐"
+		color = "\033[33m" // yellow
 	}
 	reset := "\033[0m"
 
 	fmt.Printf("Text:       %s\n", input)
-	fmt.Printf("Prediction: %s%s%s %s\n", color, result.Prediction, reset, emoji)
-	fmt.Printf("Score:      %.4f\n", result.SentimentScore)
+	fmt.Printf("Prediction: %s%s%s %s\n", color, result.Label, reset, emoji)
+	fmt.Printf("Model:      %s\n", result.Model)
+	// Print scores sorted by label name
+	labels := make([]string, 0, len(result.Scores))
+	for label := range result.Scores {
+		labels = append(labels, label)
+	}
+	sort.Strings(labels)
+	for _, label := range labels {
+		fmt.Printf("  %-8s: %.4f\n", label, result.Scores[label])
+	}
 	fmt.Printf("Latency:    %s\n", elapsed.Round(time.Millisecond))
 }

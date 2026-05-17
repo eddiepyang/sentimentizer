@@ -43,10 +43,51 @@ def shared_train_options(func: click.Command) -> click.Command:
             "--balance-seed", default=42, type=int, help="Random seed for class balancing"
         ),
         click.option(
-            "--pos-weight",
+            "--num-classes",
+            default=3,
+            type=int,
+            help="Number of classification classes (2 for binary, 3 for negative/neutral/positive)",
+        ),
+        click.option(
+            "--include-neutral/--no-include-neutral",
+            default=True,
+            help="Include 3-star (neutral) reviews in training data",
+        ),
+        click.option(
+            "--loss-type",
+            default="cross_entropy",
+            type=click.Choice(["cross_entropy", "focal"]),
+            help="Loss function type",
+        ),
+        click.option(
+            "--focal-gamma",
+            default=2.0,
+            type=float,
+            help="Focal loss focusing parameter (only used with --loss-type=focal)",
+        ),
+        click.option(
+            "--label-smoothing",
+            default=0.1,
+            type=float,
+            help="Label smoothing for CrossEntropyLoss (0.0 = no smoothing)",
+        ),
+        click.option(
+            "--weight-smoothing",
+            default=0.5,
+            type=float,
+            help="Exponent on inverse-frequency class weights (1.0=full, 0.5=sqrt, 0.0=uniform)",
+        ),
+        click.option(
+            "--neutral-oversample-ratio",
             default=0.0,
             type=float,
-            help="Loss weight for positive class (0 = auto-calculate)",
+            help="Oversample neutral class to this ratio (0.0=disabled, 0.20=20%)",
+        ),
+        click.option(
+            "--balance-strategy",
+            default="class_weights_only",
+            type=click.Choice(["class_weights_only", "undersample", "oversample"]),
+            help="Class balancing strategy",
         ),
         click.option("--push-to-hub", is_flag=True, help="Push model weights to Hugging Face Hub"),
         click.option(
@@ -181,7 +222,37 @@ def train(ctx: click.Context, resume: bool, **kwargs: Any) -> None:
 @click.option("--push-to-hub", is_flag=True, help="Push model weights to Hugging Face Hub")
 @click.option("--balance-classes", is_flag=True, help="Enable class balancing in training data")
 @click.option("--balance-seed", default=42, type=int, help="Random seed for class balancing")
-@click.option("--pos-weight", default=0.0, type=float, help="Loss weight for positive class")
+@click.option(
+    "--weight-smoothing",
+    default=0.5,
+    type=float,
+    help="Inverse-frequency exponent (1.0=full, 0.5=sqrt, 0.0=uniform)",
+)
+@click.option(
+    "--loss-type",
+    default="cross_entropy",
+    type=click.Choice(["cross_entropy", "focal"]),
+    help="Loss function type",
+)
+@click.option(
+    "--focal-gamma",
+    default=2.0,
+    type=float,
+    help="Focal loss focusing parameter (loss_type=focal only)",
+)
+@click.option("--label-smoothing", default=0.1, type=float, help="Label smoothing coefficient")
+@click.option(
+    "--neutral-oversample-ratio",
+    default=0.0,
+    type=float,
+    help="Neutral class oversample ratio (0.0=disabled)",
+)
+@click.option(
+    "--balance-strategy",
+    default="class_weights_only",
+    type=click.Choice(["class_weights_only", "undersample", "oversample"]),
+    help="Class imbalance strategy",
+)
 @click.pass_context
 def tune(ctx: click.Context, mode: str, **kwargs: Any) -> None:
     """Hyperparameter tuning (LLM-guided agent or standalone Ray Tune run)."""

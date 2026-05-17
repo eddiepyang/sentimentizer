@@ -1,10 +1,72 @@
 # Troubleshooting
 
+## 3-Class Migration
+
+### Binary → 3-class changes
+
+The pipeline was migrated from binary (negative/positive, `BCEWithLogitsLoss`) to 3-class (negative/neutral/positive, `CrossEntropyLoss`). Key changes:
+
+| Aspect | Binary (old) | 3-class (current) |
+|--------|-------------|-------------------|
+| **Classes** | 2 (negative, positive) | 3 (negative, neutral, positive) |
+| **Loss** | `BCEWithLogitsLoss` with `pos_weight` | `CrossEntropyLoss` with `class_weights` and `label_smoothing=0.1` |
+| **Target dtype** | `torch.float32` | `torch.long` |
+| **Model output** | `(B, 1)` logits | `(B, 3)` logits |
+| **Final activation** | `sigmoid` | `softmax` |
+| **Rating mapping** | 1-2★ → 0, 4-5★ → 1 | 1-2★ → 0, 3★ → 1, 4-5★ → 2 |
+| **`predict_text()` return** | `float` (0-1 score) | `dict[str, float]` (e.g., `{"negative": 0.05, "neutral": 0.12, "positive": 0.83}`) |
+| **Class balance** | `compute_pos_weight()` → single float | `compute_class_weights()` → 3-element tensor, `weight_smoothing` parameter |
+| **NaN replacement** | `0.5` (binary random) | `1/num_classes` ≈ `0.333` (uniform over 3 classes) |
+| **Configuration** | `NUM_CLASSES=2`, `pos_weight` | `NUM_CLASSES=3`, `LABEL_NAMES`, `class_weights`, `loss_type`, `focal_gamma`, `label_smoothing`, `weight_smoothing`, `neutral_oversample_ratio` |
+
+### Common issues after migration
+
+#### Old binary weights crash on load
+
+**Symptoms**: `RuntimeError` about tensor shape mismatch (expecting `(3, hidden_dim)` but got `(1, hidden_dim)`).
+
+**Fix**: Old binary weights are incompatible with the 3-class architecture. Delete them and retrain:
+
+```bash
+rm models/rnn_sentiment.model
+rm models/encoder_sentiment.model
+rm models/decoder_sentiment.model
+make train MODEL=rnn
+```
+
+#### `compute_pos_weight()` raises `ValueError`
+
+**Symptoms**: `ValueError: compute_pos_weight() is deprecated for 3-class classification. Use compute_class_weights() instead.`
+
+**Fix**: Replace all `compute_pos_weight()` calls with `compute_class_weights()`. The old function raises an error for `num_classes > 2`.
+
+#### Target dtype errors in training
+
+**Symptoms**: `RuntimeError: Expected tensor for argument #1 'indices' to have scalar type Long, but got Float`.
+
+**Fix**: Targets must be `torch.long` for `CrossEntropyLoss`, not `torch.float32`. This applies to both DataLoader and Ray distributed paths. Search for any residual `.float()` casts on targets and replace with `.long()`.
+
+#### `torch.squeeze` removing class dimension
+
+**Symptoms**: Shape `(3,)` instead of `(1, 3)` for batch-of-1 predictions.
+
+**Fix**: `forward()` must always return `(B, num_classes)`, never squeeze. `predict()` uses `torch.softmax(logits, dim=-1)` returning `(B, 3)`.
+
+#### Neutral class has low recall (< 0.60)
+
+**Symptoms**: `neutral_recall` below 0.60, `pred_neutral_frac` below 0.05.
+
+**Fix (escalate through these)**:
+1. Default: `CrossEntropyLoss` with `class_weights` (smoothed) + `label_smoothing=0.1`
+2. Focal loss: `loss_type="focal"`, `focal_gamma=2.0`
+3. Oversampling: `neutral_oversample_ratio=0.20`
+4. Reduce `weight_smoothing` toward `0.0` for more aggressive class weighting
+
 ## Model Training Issues
 
-### Zero negative-class accuracy / Cohen's kappa = 0
+### Zero neutral-class recall / Cohen's kappa = 0
 
-**Symptoms**: After training, `negative_accuracy` is 0, `cohen_kappa` is 0, and `positive_accuracy` is high (often matching the fraction of positive reviews in the dataset). The model predicts the majority class for every input.
+**Symptoms**: After training, `neutral_recall` is 0, `cohen_kappa` is 0, and the model predicts the majority class (positive) for every input.
 
 **Root cause**: The model is effectively not learning word meanings. Nearly all tokens are mapped to the out-of-vocabulary (OOV) embedding, so the model trains on random vectors.
 
@@ -23,7 +85,7 @@ A healthy match rate should be 50–80%.
 | **Dictionary tokens have wrapping quotes** | `extract_embeddings()` raises `ValueError` for match rate < 50%; dictionary contains `"'the'"` instead of `"the"` | Since the fix, `new_dictionary()` and `_count_vocab_batch()` use `list(doc_tokens)` instead of `str(doc_tokens)` for numpy arrays. If you have a stale `.dictionary` file, delete it and re-run the pipeline with `--run-type new`. |
 | **Wrong T_max for scheduler** | Loss decays to minimum halfway through training; model stops learning after ~50% of epochs | `EncoderSchedulerParams.T_max` should equal `default_epochs("encoder")` (= 8). Verify in `config.py`. |
 | **Zero LR during warmup** | First epoch shows no learning progress | `_LinearWarmupCosineScheduler` uses `(step + 1) / warmup_steps` instead of `step / warmup_steps`. Verify the warmup formula is correct. |
-| **Class imbalance not addressed** | Model always predicts positive; `pos_weight ≈ 1.0` | Pass `--pos-weight 0.0` (auto-calculates `neg_count/pos_count`) or `--balance-classes` to undersample the majority class. |
+| **Class imbalance not addressed** | Model always predicts positive; `balanced_accuracy` near 0.33 (random) | Use `class_weights` (default with `compute_class_weights()`), `label_smoothing=0.1`, or `loss_type="focal"` with `focal_gamma=2.0`. |
 
 ### Dictionary has wrapping quotes (`'the'` instead of `the`)
 
@@ -68,13 +130,16 @@ make train   # or make train-distributed
 
 ### Class imbalance in Yelp dataset
 
-The Yelp reviews dataset has roughly 3.5:1 positive-to-negative ratio (5-star and 4-star reviews dominate). Without addressing this, the model learns to always predict positive.
+The Yelp reviews dataset has roughly 3.5:1 positive-to-negative ratio with neutral (~11%) being the smallest class. Without addressing this, the model learns to always predict positive.
 
-**Solutions** (use one or both):
-- `--pos-weight 0.0`: Auto-calculates `neg_count/pos_count` and passes it to `BCEWithLogitsLoss`, reducing the loss weight for the majority class
-- `--balance-classes`: Undersamples the majority class to create equal class counts
+**Solutions** (use one or more, in escalation order):
+- **Smoothed class weights** (default): `compute_class_weights()` with `weight_smoothing=0.5` produces sqrt-scaled inverse frequency weights. Controlled by `--weight-smoothing` CLI flag.
+- **Label smoothing** (default `0.1`): Regularizes the model from making overconfident predictions. Controlled by `--label-smoothing` CLI flag.
+- **Focal loss**: `--loss-type focal --focal-gamma 2.0` applies higher loss to hard examples. Useful when class weights alone aren't enough.
+- **Neutral oversampling**: `--neutral-oversample-ratio 0.20` targets 20% neutral reviews in training data via duplication.
+- **Undersampling**: `--balance-strategy class_weights_only` (default) avoids aggressive undersampling that destroys 89% of data.
 
-Both options are available for `train`, `train-distributed`, and `run` commands.
+All options are available for `train`, `train-distributed`, and `run` commands.
 
 ### Stale metrics from previous training run on dashboard
 
