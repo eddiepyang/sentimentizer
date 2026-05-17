@@ -155,9 +155,13 @@ uv run pytest tests/ -v --exitfirst --failed-first
 uv run pytest tests/ -v -k "Ray"
 ```
 
-### Linting and formatting
+### Linting, formatting, and checking
 
 ```bash
+# Auto-format, auto-fix, then lint (run after every change)
+make check
+
+# Individual commands
 uv run ruff check .
 uv run ruff check --fix .
 uv run black --check .
@@ -252,8 +256,8 @@ Grafana only reads provisioned dashboard files on **startup**, so a restart is r
 - **Base model**: Default is `BAAI/bge-base-en-v1.5` (109M params, 768-dim embeddings, strong MTEB scores). Switch to `mxbai-embed-large-v1` (335M params) only if evaluation thresholds are not met.
 - **Categories**: Dietary (0), Service (1), General (2) — defined in `RouteLabels` dataclass.
 - **Seed utterances**: 10 per category in `sentimentizer/router/seeds.py` — expanded via `augment.py` (GLM 5.1 via Ollama, default model `glm-5.1:cloud`).
-- **Training**: `sentimentizer router augment` to generate data, `sentimentizer router train --data augmented_yelp.jsonl` to train — uses `setfit>=1.1.0` with `Trainer` (not deprecated `SetFitTrainer`).
-- **Evaluation**: `sentimentizer router evaluate --model-path models/router` — similarity matrix (inter-class < 0.65, intra-class > 0.85) and tau threshold calibration.
+- **Training**: `make router-augment` to generate data, `make router-train` to train — uses `setfit>=1.1.0` with `Trainer` (not deprecated `SetFitTrainer`).
+- **Evaluation**: `make router-evaluate` — similarity matrix (inter-class < 0.65, intra-class > 0.85) and tau threshold calibration.
 - **Router ONNX export**: Deferred to v2 — router uses Python `setfit` inference for now.
 - **Optional dependencies**: `pip install -e ".[router]"` for SetFit training, `pip install -e ".[onnx]"` for ONNX export, `pip install -e ".[router,onnx]"` for both.
 - **setfit/transformers compatibility**: `setfit 1.1.x` imports `default_logdir` from `transformers.training_args`, which was removed in `transformers 5.x`. The `sentimentizer/compat.py` module includes a monkey-patch shim that injects `default_logdir` if missing. This must be imported BEFORE `import setfit`. The shim is applied automatically by `sentimentizer/router/__init__.py` and `sentimentizer/router/train_router.py`.

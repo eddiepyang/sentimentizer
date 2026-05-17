@@ -45,7 +45,8 @@ from typing import Any
 # to create a fresh venv will fail with ModuleNotFoundError.
 os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 import sentimentizer.compat  # noqa: F401
@@ -69,6 +70,21 @@ app = FastAPI(
     version="0.210.1",
     description="Sentiment analysis and review routing API",
 )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Any, exc: Exception) -> JSONResponse:
+    """Centralized handler for all unhandled exceptions.
+
+    Logs the full traceback and returns a generic 500 response
+    without leaking internal details.
+    """
+    logger.exception("unhandled error in request")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+    )
+
 
 # ---------------------------------------------------------------------------
 # Pydantic request models
@@ -120,25 +136,6 @@ class SentimentizerDeployment:
         )
 
     # ------------------------------------------------------------------
-    # Input validation
-    # ------------------------------------------------------------------
-
-    def _validate_text_length(self, text: str) -> str | None:
-        """Return an error message if text exceeds max length, else None."""
-        if len(text) > self.cfg.max_text_length:
-            return f"Text too long ({len(text)} chars, max {self.cfg.max_text_length})"
-        return None
-
-    def _validate_texts_batch(self, texts: list[str]) -> str | None:
-        """Return an error message if batch is invalid, else None."""
-        if len(texts) > self.cfg.max_batch_size:
-            return f"Batch too large ({len(texts)} items, max {self.cfg.max_batch_size})"
-        for i, t in enumerate(texts):
-            if len(t) > self.cfg.max_text_length:
-                return f"texts[{i}] too long ({len(t)} chars, max {self.cfg.max_text_length})"
-        return None
-
-    # ------------------------------------------------------------------
     # Auto-batched endpoints (serve.batch collects individual calls)
     # ------------------------------------------------------------------
 
@@ -178,74 +175,75 @@ class SentimentizerDeployment:
     @app.post("/predict")
     async def predict(self, body: PredictRequest) -> dict[str, Any]:
         """POST /predict -- single text sentiment analysis (auto-batched)."""
-        start = time.perf_counter()
-        try:
-            if error := self._validate_text_length(body.text):
-                return {"error": error}
-
-            prediction = await self.predict_sentiment({"text": body.text})
-            latency = time.perf_counter() - start
-
-            self._sentiment_metrics.record_request(latency)
-            logger.info(
-                "prediction completed",
-                input_length=len(body.text),
-                latency_s=f"{latency:.4f}",
-                model=prediction.get("model", ""),
+        if len(body.text) > self.cfg.max_text_length:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Text too long ({len(body.text)} chars, max {self.cfg.max_text_length})",
             )
-            return {
-                "text": body.text,
-                "prediction": prediction,
-                "latency_s": round(latency, 4),
-            }
-        except Exception as exc:
-            self._sentiment_metrics.record_request(time.perf_counter() - start, error=True)
-            logger.exception("sentiment prediction failed")
-            return {"error": f"Internal error: {exc}"}
+
+        start = time.perf_counter()
+        prediction = await self.predict_sentiment({"text": body.text})
+        latency = time.perf_counter() - start
+
+        self._sentiment_metrics.record_request(latency)
+        logger.info(
+            "prediction completed",
+            input_length=len(body.text),
+            latency_s=f"{latency:.4f}",
+            model=prediction.get("model", ""),
+        )
+        return {
+            "text": body.text,
+            "prediction": prediction,
+            "latency_s": round(latency, 4),
+        }
 
     @app.post("/batch")
     async def batch(self, body: BatchRequest) -> dict[str, Any]:
         """POST /batch -- batch sentiment analysis (explicit forward pass)."""
-        start = time.perf_counter()
-        try:
-            if error := self._validate_texts_batch(body.texts):
-                return {"error": error}
-
-            raw_predictions = await asyncio.to_thread(self.predictor.predict_batch, body.texts)
-            results = [
-                {"text": text, "prediction": pred}
-                for text, pred in zip(body.texts, raw_predictions, strict=False)
-            ]
-            latency = time.perf_counter() - start
-
-            self._sentiment_metrics.record_request(latency)
-            logger.info(
-                "batch prediction completed",
-                batch_size=len(body.texts),
-                latency_s=f"{latency:.4f}",
+        if len(body.texts) > self.cfg.max_batch_size:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Batch too large ({len(body.texts)} items, max {self.cfg.max_batch_size})",
             )
-            return {
-                "results": results,
-                "count": len(results),
-                "latency_s": round(latency, 4),
-            }
-        except Exception as exc:
-            self._sentiment_metrics.record_request(time.perf_counter() - start, error=True)
-            logger.exception("sentiment batch failed")
-            return {"error": f"Internal error: {exc}"}
+        for i, t in enumerate(body.texts):
+            if len(t) > self.cfg.max_text_length:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"texts[{i}] too long ({len(t)} chars, max {self.cfg.max_text_length})",
+                )
+
+        start = time.perf_counter()
+        raw_predictions = await asyncio.to_thread(self.predictor.predict_batch, body.texts)
+        results = [
+            {"text": text, "prediction": pred}
+            for text, pred in zip(body.texts, raw_predictions, strict=False)
+        ]
+        latency = time.perf_counter() - start
+
+        self._sentiment_metrics.record_request(latency)
+        logger.info(
+            "batch prediction completed",
+            batch_size=len(body.texts),
+            latency_s=f"{latency:.4f}",
+        )
+        return {
+            "results": results,
+            "count": len(results),
+            "latency_s": round(latency, 4),
+        }
 
     @app.post("/tokenize")
     async def tokenize(self, body: TokenizeRequest) -> dict[str, Any]:
         """POST /tokenize -- standalone tokenization without inference."""
-        try:
-            if error := self._validate_text_length(body.text):
-                return {"error": error}
+        if len(body.text) > self.cfg.max_text_length:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Text too long ({len(body.text)} chars, max {self.cfg.max_text_length})",
+            )
 
-            result = self.predictor.tokenize(body.text)
-            return result
-        except Exception as exc:
-            logger.exception("tokenization failed")
-            return {"error": f"Internal error: {exc}"}
+        result = self.predictor.tokenize(body.text)
+        return result
 
     @app.get("/models")
     async def models(self) -> dict[str, Any]:
@@ -260,66 +258,70 @@ class SentimentizerDeployment:
     @app.post("/router/predict")
     async def router_predict(self, body: PredictRequest) -> dict[str, Any]:
         """POST /router/predict -- classify a single text (auto-batched)."""
-        start = time.perf_counter()
-        try:
-            if not self.predictor.router_loaded:
-                return {
-                    "error": f"Router model not loaded: {self.predictor.router_error}",
-                }
-
-            if error := self._validate_text_length(body.text):
-                return {"error": error}
-
-            prediction = await self.classify_route({"text": body.text})
-            latency = time.perf_counter() - start
-
-            self._router_metrics.record_request(latency)
-            logger.info(
-                "router prediction completed",
-                input_length=len(body.text),
-                latency_s=f"{latency:.4f}",
-                category=prediction.get("category", ""),
+        if not self.predictor.router_loaded:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Router model not loaded: {self.predictor.router_error}",
             )
-            return {
-                "text": body.text,
-                "prediction": prediction,
-                "latency_s": round(latency, 4),
-            }
-        except Exception as exc:
-            self._router_metrics.record_request(time.perf_counter() - start, error=True)
-            logger.exception("router prediction failed")
-            return {"error": f"Internal error: {exc}"}
+
+        if len(body.text) > self.cfg.max_text_length:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Text too long ({len(body.text)} chars, max {self.cfg.max_text_length})",
+            )
+
+        start = time.perf_counter()
+        prediction = await self.classify_route({"text": body.text})
+        latency = time.perf_counter() - start
+
+        self._router_metrics.record_request(latency)
+        logger.info(
+            "router prediction completed",
+            input_length=len(body.text),
+            latency_s=f"{latency:.4f}",
+            category=prediction.get("category", ""),
+        )
+        return {
+            "text": body.text,
+            "prediction": prediction,
+            "latency_s": round(latency, 4),
+        }
 
     @app.post("/router/batch")
     async def router_batch(self, body: BatchRequest) -> dict[str, Any]:
         """POST /router/batch -- classify multiple texts into routes."""
-        start = time.perf_counter()
-        try:
-            if not self.predictor.router_loaded:
-                return {
-                    "error": f"Router model not loaded: {self.predictor.router_error}",
-                }
-
-            if error := self._validate_texts_batch(body.texts):
-                return {"error": error}
-
-            results = await asyncio.to_thread(self.predictor.classify_batch, body.texts)
-            latency = time.perf_counter() - start
-
-            self._router_metrics.record_request(latency)
-            logger.info(
-                "router batch completed",
-                batch_size=len(body.texts),
-                latency_s=f"{latency:.4f}",
+        if not self.predictor.router_loaded:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Router model not loaded: {self.predictor.router_error}",
             )
-            return {
-                "results": results,
-                "latency_s": round(latency, 4),
-            }
-        except Exception as exc:
-            self._router_metrics.record_request(time.perf_counter() - start, error=True)
-            logger.exception("router batch failed")
-            return {"error": f"Internal error: {exc}"}
+
+        if len(body.texts) > self.cfg.max_batch_size:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Batch too large ({len(body.texts)} items, max {self.cfg.max_batch_size})",
+            )
+        for i, t in enumerate(body.texts):
+            if len(t) > self.cfg.max_text_length:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"texts[{i}] too long ({len(t)} chars, max {self.cfg.max_text_length})",
+                )
+
+        start = time.perf_counter()
+        results = await asyncio.to_thread(self.predictor.classify_batch, body.texts)
+        latency = time.perf_counter() - start
+
+        self._router_metrics.record_request(latency)
+        logger.info(
+            "router batch completed",
+            batch_size=len(body.texts),
+            latency_s=f"{latency:.4f}",
+        )
+        return {
+            "results": results,
+            "latency_s": round(latency, 4),
+        }
 
     @app.get("/router/models")
     async def router_models(self) -> dict[str, Any]:
@@ -333,9 +335,8 @@ class SentimentizerDeployment:
     @app.get("/health")
     async def health(self) -> dict[str, Any]:
         """GET /health -- liveness / readiness probe."""
-        status = "healthy" if self.predictor.model_loaded else "unhealthy"
-        return {
-            "status": status,
+        body = {
+            "status": "healthy" if self.predictor.model_loaded else "unhealthy",
             "device": self.predictor.device,
             "version": self.predictor.version,
             "uptime_s": round(time.time() - self._started_at, 1),
@@ -343,6 +344,9 @@ class SentimentizerDeployment:
             "router_loaded": self.predictor.router_loaded,
             "router_error": self.predictor.router_error,
         }
+        if not self.predictor.model_loaded:
+            return JSONResponse(status_code=503, content=body)
+        return body
 
     @app.get("/metrics")
     async def metrics(self) -> dict[str, Any]:

@@ -29,6 +29,15 @@ except ImportError:
         def ingress(self, *args: Any, **kwargs: Any) -> Any:
             return lambda cls: cls
 
+        def start(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def run(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def shutdown(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
     serve = _DummyServe()
 
 

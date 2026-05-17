@@ -3,7 +3,8 @@
  	   gpu-reset tune tune-rnn tune-encoder tune-decoder tune-standalone \
  	   start-metrics stop-metrics setup-dashboards start-exporter stop-exporter stop-ray \
  	   upload-rnn upload-encoder upload-decoder download-rnn download-encoder download-decoder \
- 	   push-hub pull-hub diagnose diagnose-env diagnose-pipeline
+ 	   push-hub pull-hub diagnose diagnose-env diagnose-pipeline \
+ 	   router-augment router-train router-evaluate router-pipeline
 
 # Default device: use auto-detect (cuda > mps > cpu)
 DEVICE ?= auto
@@ -143,6 +144,25 @@ tune-custom:
 ## Run tuning skill without model validation
 tune-no-validate:
 	uv run sentimentizer --model $(MODEL) tune --no-validate --save
+
+# ──────────────────────────────────────────────
+# Router
+# ──────────────────────────────────────────────
+
+## Augment router seed utterances with GLM 5.1 (requires Ollama)
+router-augment:
+	uv run sentimentizer router augment --output augmented_yelp.jsonl
+
+## Train the SetFit router model
+router-train:
+	uv run sentimentizer router train --data augmented_yelp.jsonl
+
+## Evaluate the SetFit router model
+router-evaluate:
+	uv run sentimentizer router evaluate --model-path models/router --data augmented_yelp.jsonl
+
+## Run the full router pipeline (augment -> train -> evaluate)
+router-pipeline: router-augment router-train router-evaluate
 
 # ──────────────────────────────────────────────
 # Hugging Face Hub (push/pull per model)

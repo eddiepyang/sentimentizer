@@ -40,9 +40,9 @@ from sentimentizer.tokenizer import Tokenizer, get_trained_tokenizer, regex_toke
 # ---------------------------------------------------------------------------
 
 try:
-    from setfit import SetFitModel
+    import sentimentizer.compat  # noqa: F401, I001 — must patch transformers BEFORE setfit import
 
-    import sentimentizer.compat  # noqa: F401 — patch transformers before setfit import
+    from setfit import SetFitModel
 
     _SETFIT_AVAILABLE = True
 except ImportError:

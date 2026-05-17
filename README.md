@@ -606,16 +606,19 @@ A routing classifier that categorizes Yelp reviews into three categories:
 
 ```bash
 # 1. Augment seed utterances with GLM 5.1 (requires Ollama running)
-sentimentizer router augment --output augmented_yelp.jsonl
+make router-augment
 
 # 2. Train the router
-sentimentizer router train --data augmented_yelp.jsonl
+make router-train
 
 # 3. Evaluate (similarity matrix + threshold calibration)
-sentimentizer router evaluate --model-path models/router --data augmented_yelp.jsonl
+make router-evaluate
+
+# Or run the full pipeline sequentially:
+make router-pipeline
 ```
 
-The `augment` command supports options for model, variations per seed, and Ollama URL:
+The `augment` command supports options for model, variations per seed, and Ollama URL via CLI:
 
 ```bash
 # Customize augmentation
