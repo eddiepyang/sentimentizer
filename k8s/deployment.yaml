@@ -42,21 +42,21 @@ spec:
           # from HF Hub can take minutes). Checked before liveness/readiness.
           startupProbe:
             httpGet:
-              path: /health
+              path: /health/ready
               port: 8000
             initialDelaySeconds: 10
             periodSeconds: 10
             failureThreshold: 30 # up to 5 minutes
           livenessProbe:
             httpGet:
-              path: /health
+              path: /health/live
               port: 8000
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /health
+              path: /health/ready
               port: 8000
             periodSeconds: 5
             timeoutSeconds: 3

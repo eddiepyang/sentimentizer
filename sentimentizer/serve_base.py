@@ -78,6 +78,10 @@ class ServiceMetrics:
                 self.error_count += 1
 
     def to_prometheus(self) -> str:
+        """Generate Prometheus exposition format text.
+
+        # TODO(P3): used by future Prometheus push to standalone exporter.
+        """
         p = self._prefix
         with self._lock:
             metrics = [

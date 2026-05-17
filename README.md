@@ -31,17 +31,20 @@ model.predict_text(review_text, tokenizer)
 # >> {'negative': 0.03, 'neutral': 0.05, 'positive': 0.92}
 ```
 
-`predict_text()` on `BaseSentimentModel` returns all 3 class probabilities. For the serving API (`/predict`, `/batch`), responses use Option B format — just the winning class and its score:
+`predict_text()` on `BaseSentimentModel` returns all 3 class probabilities. `predict_text()` on `BaseSentimentModel` returns all 3 class probabilities. For the serving API, responses use the additive v1 format with explicit `label`, `score`, `scores`, and `token_count` fields:
 
 ```python
 from sentimentizer.predictor import SentimentPredictor
 
 predictor = SentimentPredictor(model_name="encoder")
 predictor.predict("amazing restaurant!")
-# >> {"positive": 0.92, "model": "encoder"}
+# >> {"positive": 0.92, "label": "positive", "score": 0.92,
+#     "scores": {"negative": 0.03, "neutral": 0.05, "positive": 0.92},
+#     "token_count": 2, "model": "encoder"}
 
 predictor.predict_batch(["Great food!", "Terrible service."])
-# >> [{"positive": 0.88, "model": "encoder"}, {"negative": 0.94, "model": "encoder"}]
+# >> [{"positive": 0.88, "label": "positive", "score": 0.88,
+#      "scores": {...}, "token_count": 2, "model": "encoder"}, ...]
 
 For advanced use, you can also call tokenization and prediction separately:
 
@@ -95,31 +98,40 @@ By default, the server binds to `0.0.0.0:8000`.
 
 ```bash
 # Single prediction
-curl -X POST http://localhost:8000/predict \
+curl -X POST http://localhost:8000/v1/predict \
   -H "Content-Type: application/json" \
   -d '{"text": "the food was terrific"}'
 
 # Batch prediction
-curl -X POST http://localhost:8000/batch \
+curl -X POST http://localhost:8000/v1/batch \
   -H "Content-Type: application/json" \
   -d '{"texts": ["great pizza!", "terrible service"]}'
 
 # Tokenize text without inference
-curl -X POST http://localhost:8000/tokenize \
+curl -X POST http://localhost:8000/v1/tokenize \
   -H "Content-Type: application/json" \
   -d '{"text": "the food was terrific"}'
 
-# List sentiment models
-curl http://localhost:8000/models
+# List all sentiment models
+curl http://localhost:8000/v1/models
+
+# Single model metadata
+curl http://localhost:8000/v1/models/encoder
 ```
 
-Sentiment response (Option B — winning class and its probability):
+Sentiment response (additive v1 format — includes explicit fields plus backward-compat dynamic key):
 
 ```json
 {
   "text": "the food was terrific",
-  "prediction": {"positive": 0.92},
-  "model": "encoder",
+  "prediction": {
+    "label": "positive",
+    "score": 0.92,
+    "scores": {"negative": 0.03, "neutral": 0.05, "positive": 0.92},
+    "token_count": 4,
+    "model": "encoder",
+    "positive": 0.92
+  },
   "latency_s": 0.0043
 }
 ```
@@ -129,8 +141,22 @@ Batch response:
 ```json
 {
   "results": [
-    {"text": "great pizza!", "prediction": {"positive": 0.89}, "model": "encoder"},
-    {"text": "terrible service", "prediction": {"negative": 0.94}, "model": "encoder"}
+    {
+      "text": "great pizza!",
+      "prediction": {
+        "label": "positive", "score": 0.89,
+        "scores": {"negative": 0.02, "neutral": 0.09, "positive": 0.89},
+        "token_count": 2, "model": "encoder", "positive": 0.89
+      }
+    },
+    {
+      "text": "terrible service",
+      "prediction": {
+        "label": "negative", "score": 0.94,
+        "scores": {"negative": 0.94, "neutral": 0.04, "positive": 0.02},
+        "token_count": 2, "model": "encoder", "negative": 0.94
+      }
+    }
   ],
   "count": 2,
   "latency_s": 0.0031
@@ -141,17 +167,17 @@ Batch response:
 
 ```bash
 # Classify a single review
-curl -X POST http://localhost:8000/router/predict \
+curl -X POST http://localhost:8000/v1/router/predict \
   -H "Content-Type: application/json" \
   -d '{"text": "They were so careful with my celiac needs"}'
 
 # Classify multiple reviews
-curl -X POST http://localhost:8000/router/batch \
+curl -X POST http://localhost:8000/v1/router/batch \
   -H "Content-Type: application/json" \
   -d '{"texts": ["Great gluten-free options!", "The waiter was rude", "Decent pizza"]}'
 
 # Router model metadata
-curl http://localhost:8000/router/models
+curl http://localhost:8000/v1/router/models
 ```
 
 Router response:
@@ -167,11 +193,14 @@ Router response:
 #### Shared endpoints
 
 ```bash
-# Health check
-curl http://localhost:8000/health
+# Liveness probe (always returns 200)
+curl http://localhost:8000/health/live
 
-# Request metrics (both sentiment and router)
-curl http://localhost:8000/metrics
+# Readiness probe (503 if model not loaded)
+curl http://localhost:8000/health/ready
+
+# Backward-compatible health check (delegates to readiness)
+curl http://localhost:8000/health
 
 # Interactive API docs (Swagger UI)
 open http://localhost:8000/docs
@@ -377,6 +406,7 @@ Sentimentizer integrates with the Hugging Face Hub for robust weight management.
 | RNN | `ryeyoo/sentimentizer-rnn` | `rnn_weights.pth`, `yelp.dictionary`, `README.md` |
 | Encoder | `ryeyoo/sentimentizer-encoder` | `encoder_weights.pth`, `yelp.dictionary`, `README.md` |
 | Decoder | `ryeyoo/sentimentizer-decoder` | `decoder_weights.pth`, `yelp.dictionary`, `README.md` |
+| Router | `ryeyoo/sentimentizer-router` | SetFit model artifacts |
 
 ### Automatic Weight Pulling
 
@@ -404,6 +434,7 @@ After a successful training or tuning run, you can push the best weights, dictio
 make upload-rnn
 make upload-encoder
 make upload-decoder
+make upload-router
 
 # Push all models
 make push-hub
@@ -500,7 +531,7 @@ The pipeline consists of three stages, all powered by Ray:
 2. **Transform** — Converts tokens to numeric sequences using `ray.data.map_batches()` and writes processed parquet
 3. **Train** — Fits the model using either single-node PyTorch or distributed Ray Train with `TorchTrainer`
 
-Inference is served via a Ray Serve deployment with FastAPI routing (see `sentimentizer/serve.py`). The `/predict` endpoint returns the winning class and its probability (Option B format). The `predict_text()` method on `BaseSentimentModel` returns all 3 class probabilities — it's a different API surface used for validation and export.
+Inference is served via a Ray Serve deployment with FastAPI routing (see `sentimentizer/serve.py`). Endpoints are versioned under `/v1/` (e.g., `/v1/predict`, `/v1/batch`). Health probes are unversioned (`/health/live`, `/health/ready`). The API returns the additive v1 format with explicit `label`, `score`, `scores`, and `token_count` fields. The `predict_text()` method on `BaseSentimentModel` returns all 3 class probabilities (without `token_count`) — a different API surface used for validation and export.
 
 ## Docker
 
@@ -667,10 +698,10 @@ sentimentizer/
 ├── losses.py             # FocalCrossEntropyLoss for 3-class training
 ├── metrics.py            # 3-class classification metrics (per-class P/R/F1, balanced accuracy, MCC)
 ├── metrics_publisher.py   # Epoch metrics publishing (Prometheus + JSON)
-├── predictor.py           # SentimentPredictor (model loading, inference, Option B format)
-├── serve.py              # Ray Serve deployment: FastAPI + @serve.ingress
+├── predictor.py           # SentimentPredictor (model loading, inference, additive v1 format)
+├── serve.py              # Ray Serve deployment: FastAPI + @serve.ingress, /v1/ prefix
 ├── serve_base.py          # ServiceMetrics (request/latency tracking), _DummyServe fallback
-├── serve_config.py        # Serve deployment configuration (YAML/env var loading)
+├── serve_config.py        # Serve deployment configuration (YAML/env var loading, incl. cors_origins)
 ├── tokenizer.py           # Text tokenizer with pre-trained support
 ├── trainer.py             # Training logic
 ├── tuner.py               # Ray Tune + Optuna hyperparameter search

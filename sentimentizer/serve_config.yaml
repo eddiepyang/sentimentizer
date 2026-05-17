@@ -9,13 +9,18 @@ default_model: "encoder"
 router_model_path: "models/router"
 
 # Request limits
-max_batch_size: 64           # Maximum texts per /batch request
+max_batch_size: 64           # Maximum texts per /v1/batch request
 max_text_length: 10000       # Maximum characters per text input
 
-# Auto-batching for /predict (serve.batch)
+# Auto-batching for /v1/predict (serve.batch)
 predict_batch_size: 32        # Maximum requests collected per batch
 predict_batch_wait_s: 0.05    # Seconds to wait before processing a partial batch
 
-# Auto-batching for /router/predict (serve.batch)
+# Auto-batching for /v1/router/predict (serve.batch)
 classify_batch_size: 32       # Maximum requests collected per batch
-classify_batch_wait_s: 0.05   # Seconds to wait before processing a partial batch
+classify_batch_wait_s: 0.05   # Seconds to wait before processing a partial router batch
+
+# CORS configuration
+# Set to ["*"] for development, restrict in production via env var
+cors_origins:
+  - "*"

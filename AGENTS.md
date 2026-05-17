@@ -92,10 +92,10 @@ sentimentizer/
   tuner.py          — Ray Tune integration with TunePrometheusCallback
   metrics.py        — ClassificationMetrics dataclass + compute functions
   export_onnx.py    — Unified ONNX export, quantization, validation (_RNNOnnxWrapper)
-  predictor.py      — SentimentPredictor (model loading, inference, Option B format)
+  predictor.py      — SentimentPredictor (model loading, inference, additive v1 format)
   serve.py          — Ray Serve deployment: FastAPI + @serve.ingress, route handlers, @serve.batch
   serve_base.py     — ServiceMetrics (request/latency tracking), _DummyServe fallback
-  serve_config.py   — ServeConfig dataclass + YAML/env var loading
+  serve_config.py   — ServeConfig dataclass + YAML/env var loading (incl. cors_origins)
   models/
     base.py          — BaseSentimentModel with predict() and predict_text()
     rnn.py          — Bidirectional LSTM (with onnx_export flag)
@@ -200,16 +200,26 @@ Grafana only reads provisioned dashboard files on **startup**, so a restart is r
 
 - **3-class classification**: Models output logits of shape `(B, 3)` with label mapping: 0=negative, 1=neutral, 2=positive. `LABEL_NAMES = ["negative", "neutral", "positive"]` is the single source of truth in `config.py` — import it, don't duplicate.
 - **Loss function**: `CrossEntropyLoss` (not `BCEWithLogitsLoss`). Target dtype is `torch.long` (not `torch.float32`). `FocalCrossEntropyLoss` in `sentimentizer/losses.py` for hard-example mining.
-- **`predict_batch()` returns Option B format**: Each result is `{"positive": 0.88, "model": "encoder"}` — the winning class label as key and its probability as value, plus the model name. The old format `{"model": "encoder", "label": "positive", "scores": {"negative": ..., "neutral": ..., "positive": ...}}` is gone. `predict()` returns the same Option B dict (it's `predict_batch([text])[0]`).
-- **`predict_text()` on `BaseSentimentModel` still returns all 3 scores**: `{"negative": 0.05, "neutral": 0.12, "positive": 0.83}`. This is a different API surface used by `skill.py` and `hf.py` for model validation/export — it is NOT affected by the Option B change.
+- **`predict_batch()` returns additive v1 format**: Each result is `{"positive": 0.88, "label": "positive", "score": 0.88, "scores": {"negative": 0.02, "neutral": 0.10, "positive": 0.88}, "token_count": 12, "model": "encoder"}` — includes both the dynamic winning-class key (deprecated, will be removed in v2) and explicit `label`/`score`/`scores`/`token_count` fields. `predict()` returns the same dict (it's `predict_batch([text])[0]`).
+- **`predict_text()` on `BaseSentimentModel` still returns all 3 scores**: `{"negative": 0.05, "neutral": 0.12, "positive": 0.83}`. This is a different API surface used by `skill.py` and `hf.py` for model validation/export — it is NOT affected by the `predict_batch()` change.
 - **`classify_batch()` unchanged**: Returns `{"text": ..., "prediction": {"category": "dietary"}}` — different domain, different shape.
-- **Serving uses FastAPI + `@serve.ingress`**: No more `__call__` dispatch, no more `Starlette` app, no more `_ROUTES` dict. Route handlers are `@app.get`/`@app.post` decorated methods on the deployment class. `@serve.ingress(app)` handles ASGI routing. `/docs` and `/redoc` endpoints are available for free.
+- **Serving uses FastAPI + `@serve.ingress` with `/v1/` prefix**: Sentiment and router endpoints are under `v1` sub-app (`app.mount("/v1", v1)`). Health endpoints remain unversioned. Route handlers use `@v1.post("/predict")`, `@v1.get("/models")`, etc. Health uses `@app.get("/health/live")`, `@app.get("/health/ready")`, `@app.get("/health")`.
+- **CORS middleware**: `CORSMiddleware` added with `allow_origins=cfg.cors_origins` (default `["*"]`). Configurable via `SENTIMENTIZER_CORS_ORIGINS` env var (comma-separated). CORS is registered as outermost middleware (added last in code, processed first in request).
+- **Request-ID middleware**: `X-Request-Id` header read from request or auto-generated UUID. Added to response headers and `request.state.request_id`. Registered as second middleware (inner to CORS).
+- **Pydantic validation centralized**: Request models use `Annotated[str, Field(min_length=1, max_length=cfg.max_text_length)]` for per-item validation. `BatchRequest.texts` uses `list[Annotated[str, Field(...)]]` with both per-item string length and list size validation. Manual HTTPException(400) validation removed from handlers — 422 responses from Pydantic instead.
+- **`/metrics` endpoint removed**: The JSON `/metrics` endpoint is gone. `ServiceMetrics` class is kept for internal observability (used by handlers for latency tracking). `to_prometheus()` method has a `TODO(P3)` comment for future Prometheus push.
+- **Error response envelope**: All HTTP exceptions now use `{"error": {"code": "...", "message": "..."}}` format via `http_exception_handler`. Unhandled exceptions return `{"error": {"code": "internal_error", "message": "Internal server error", "request_id": "..."}}`. Pydantic 422 validation errors retain their default format.
+- **`model` field on requests**: `PredictRequest` and `BatchRequest` accept an optional `model: str | None = None` field. If provided, it's validated against the loaded model (returns 400 if mismatch). If omitted, the default model is used. This provides the API shape for future multi-model support.
+- **`include_scores` and `top_k` on requests**: `PredictRequest` and `BatchRequest` accept `include_scores: bool = True` and `top_k: int | None = None`. `include_scores=False` omits the `scores` key from response predictions. `top_k=N` returns only the top N classes in `scores`, sorted by probability.
+- **`token_count` in prediction response**: `predict_batch()` now returns `token_count` (number of tokens per text) in each prediction dict. `_format_prediction()` passes it through to the API response. This uses `len(regex_tokenize(text))` computed during the existing tokenization step — no extra tokenization cost.
+- **`GET /v1/models/{model_name}`**: Returns metadata for a single model. Returns 400 for unknown model names, 404 if model exists but isn't loaded.
+- **Request body size limit middleware**: `_RequestBodySizeLimitMiddleware` rejects requests with `Content-Length` > 1 MiB with 413. Defense-in-depth alongside K8s ingress `proxy-body-size: "1m"`.
 ### Ray Serve Deployment
 
 - **`RAY_ENABLE_UV_RUN_RUNTIME_ENV=0`** must be set before any Ray import. Without it, Ray workers create isolated venvs via `uv` that lack the `ray` package, causing `ModuleNotFoundError: No module named 'ray'`. Set in three places: (1) `serve.py` module level, (2) `serve.py:main()`, (3) `cli.py:serve_cmd()` subprocess env. The `lifecycle.py` module-level setting covers training paths. **If any entry point is missing this env var, Ray workers will crash with `ModuleNotFoundError`.**
 - **`auto_detect_device()` requires `"auto"` argument**: `resolve_device()` (re-exported as `auto_detect_device`) requires a `device` parameter. Never call `auto_detect_device()` — always call `auto_detect_device("auto")` or `resolve_device("auto")`.
-- **Ray Serve uses FastAPI + `@serve.ingress`**: Route handlers are `@app.get`/`@app.post` decorated methods on the deployment class. Do NOT define `__call__` on the deployment class — `@serve.ingress` explicitly forbids it. `@serve.batch` methods remain as internal methods called from route handlers.
-- **Prediction response format (Option B)**: `predict_batch()` returns `[{"positive": 0.88, "model": "encoder"}, ...]` — the winning class label as key, its probability as value, plus model name. The old `{"model": ..., "label": ..., "scores": {...}}` format is gone. `predict_text()` on `BaseSentimentModel` still returns all 3 scores.
+- **Ray Serve uses FastAPI + `@serve.ingress`**: Route handlers are `@v1.get`/`@v1.post` decorated methods on the deployment class (on the `v1` sub-app). Health handlers use `@app.get` on the main app. Do NOT define `__call__` on the deployment class — `@serve.ingress` explicitly forbids it. `@serve.batch` methods remain as internal methods called from route handlers.
+- **Prediction response format (additive v1)**: `predict_batch()` returns `[{"positive": 0.88, "label": "positive", "score": 0.88, "scores": {"negative": 0.02, "neutral": 0.10, "positive": 0.88}, "token_count": 12, "model": "encoder"}, ...]` — includes both the dynamic winning-class key (deprecated, will be removed in v2) and explicit `label`/`score`/`scores`/`token_count` fields. `predict_text()` on `BaseSentimentModel` still returns all 3 scores (without `token_count`).
 - **`serve_base.py`** contains only `ServiceMetrics` and `_DummyServe` — no response builder functions. Response dicts are constructed directly in FastAPI route handlers.
 
 ### Ray Worker Environment Variables
@@ -258,6 +268,7 @@ Grafana only reads provisioned dashboard files on **startup**, so a restart is r
 - **Seed utterances**: 10 per category in `sentimentizer/router/seeds.py` — expanded via `augment.py` (GLM 5.1 via Ollama, default model `glm-5.1:cloud`).
 - **Training**: `make router-augment` to generate data, `make router-train` to train — uses `setfit>=1.1.0` with `Trainer` (not deprecated `SetFitTrainer`).
 - **Evaluation**: `make router-evaluate` — similarity matrix (inter-class < 0.65, intra-class > 0.85) and tau threshold calibration.
+- **Upload**: `make upload-router` pushes the trained model to Hugging Face Hub (default: `ryeyoo/sentimentizer-router`).
 - **Router ONNX export**: Deferred to v2 — router uses Python `setfit` inference for now.
 - **Optional dependencies**: `pip install -e ".[router]"` for SetFit training, `pip install -e ".[onnx]"` for ONNX export, `pip install -e ".[router,onnx]"` for both.
 - **setfit/transformers compatibility**: `setfit 1.1.x` imports `default_logdir` from `transformers.training_args`, which was removed in `transformers 5.x`. The `sentimentizer/compat.py` module includes a monkey-patch shim that injects `default_logdir` if missing. This must be imported BEFORE `import setfit`. The shim is applied automatically by `sentimentizer/router/__init__.py` and `sentimentizer/router/train_router.py`.

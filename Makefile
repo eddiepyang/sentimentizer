@@ -4,7 +4,7 @@
  	   start-metrics stop-metrics setup-dashboards start-exporter stop-exporter stop-ray \
  	   upload-rnn upload-encoder upload-decoder download-rnn download-encoder download-decoder \
  	   push-hub pull-hub diagnose diagnose-env diagnose-pipeline \
- 	   router-augment router-train router-evaluate router-pipeline
+ 	   router-augment router-train router-evaluate router-pipeline upload-router
 
 # Default device: use auto-detect (cuda > mps > cpu)
 DEVICE ?= auto
@@ -180,8 +180,12 @@ upload-encoder:
 upload-decoder:
 	uv run sentimentizer --model decoder hf push
 
+## Upload Router model to Hugging Face Hub
+upload-router:
+	uv run sentimentizer router push
+
 ## Upload all models to Hugging Face Hub
-push-hub: upload-rnn upload-encoder upload-decoder
+push-hub: upload-rnn upload-encoder upload-decoder upload-router
 
 ## Download RNN weights + dictionary from Hugging Face Hub
 download-rnn:

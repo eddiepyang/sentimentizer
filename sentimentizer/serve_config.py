@@ -14,12 +14,13 @@ Environment variables:
     SENTIMENTIZER_CLASSIFY_BATCH_SIZE -- Override classify_batch_size
     SENTIMENTIZER_CLASSIFY_BATCH_WAIT_S -- Override classify_batch_wait_s
     ROUTER_MODEL_PATH -- Override router_model_path
+    SENTIMENTIZER_CORS_ORIGINS -- Override cors_origins (comma-separated)
 """
 
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -32,12 +33,13 @@ class ServeConfig:
     Attributes:
         default_model: Default sentiment model to load (rnn, encoder, decoder).
         router_model_path: Path to trained SetFit router model directory.
-        max_batch_size: Maximum texts per /batch request.
+        max_batch_size: Maximum texts per /v1/batch request.
         max_text_length: Maximum characters per text input.
-        predict_batch_size: Maximum requests collected per /predict batch.
+        predict_batch_size: Maximum requests collected per /v1/predict batch.
         predict_batch_wait_s: Seconds to wait before processing a partial batch.
-        classify_batch_size: Maximum requests collected per /router/predict batch.
+        classify_batch_size: Maximum requests collected per /v1/router/predict batch.
         classify_batch_wait_s: Seconds to wait before processing a partial router batch.
+        cors_origins: Allowed CORS origins (comma-separated for env var).
     """
 
     default_model: str = "encoder"
@@ -48,6 +50,12 @@ class ServeConfig:
     predict_batch_wait_s: float = 0.05
     classify_batch_size: int = 32
     classify_batch_wait_s: float = 0.05
+    cors_origins: list[str] = field(default_factory=lambda: ["*"])
+
+
+def _parse_list(value: str) -> list[str]:
+    """Parse a comma-separated string into a list of stripped strings."""
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 # Mapping from env var name to ServeConfig field name
@@ -60,9 +68,11 @@ _ENV_OVERRIDES: dict[str, str] = {
     "SENTIMENTIZER_PREDICT_BATCH_WAIT_S": "predict_batch_wait_s",
     "SENTIMENTIZER_CLASSIFY_BATCH_SIZE": "classify_batch_size",
     "SENTIMENTIZER_CLASSIFY_BATCH_WAIT_S": "classify_batch_wait_s",
+    "SENTIMENTIZER_CORS_ORIGINS": "cors_origins",
 }
 
 # Type coercion for non-string fields
+# list[str] fields use _parse_list for comma-separated env var parsing
 _FIELD_TYPES: dict[str, type] = {
     "max_batch_size": int,
     "max_text_length": int,
@@ -70,6 +80,7 @@ _FIELD_TYPES: dict[str, type] = {
     "predict_batch_wait_s": float,
     "classify_batch_size": int,
     "classify_batch_wait_s": float,
+    "cors_origins": list,
 }
 
 
@@ -114,6 +125,9 @@ def load_serve_config(path: str | Path | None = None) -> ServeConfig:
         env_value = os.environ.get(env_var)
         if env_value is not None:
             coerce = _FIELD_TYPES.get(field_name, str)
-            values[field_name] = coerce(env_value)
+            if coerce is list:
+                values[field_name] = _parse_list(env_value)
+            else:
+                values[field_name] = coerce(env_value)
 
     return ServeConfig(**values)

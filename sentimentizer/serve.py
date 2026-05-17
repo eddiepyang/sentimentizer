@@ -4,8 +4,8 @@ Provides a unified REST API for:
   - Sentiment analysis (encoder model by default)
   - Review routing (Dietary, Service, General categories)
 
-Uses ``serve.batch`` to auto-batch individual ``/predict`` and
-``/router/predict`` requests into efficient forward passes, and
+Uses ``serve.batch`` to auto-batch individual ``/v1/predict`` and
+``/v1/router/predict`` requests into efficient forward passes, and
 ``asyncio.to_thread()`` to keep sync model inference off the event loop.
 
 Uses FastAPI for HTTP routing via ``@serve.ingress(app)`` with
@@ -22,36 +22,47 @@ Usage:
 
 Endpoints:
   Sentiment analysis:
-    POST /predict         -- Classify a single text (auto-batched)
-    POST /batch           -- Classify multiple texts (single forward pass)
-    POST /tokenize        -- Tokenize text without inference
-    GET  /models          -- Sentiment model metadata
-    GET  /health          -- Health check
-    GET  /metrics          -- Request metrics
+    POST /v1/predict           -- Classify a single text (auto-batched)
+    POST /v1/batch             -- Classify multiple texts (single forward pass)
+    POST /v1/tokenize          -- Tokenize text without inference
+    GET  /v1/models             -- Sentiment model metadata (all models)
+    GET  /v1/models/{name}     -- Single model metadata
 
   Router (review categorization):
-    POST /router/predict  -- Route a single text (auto-batched)
-    POST /router/batch    -- Route multiple texts
-    GET  /router/models   -- Router model metadata
+    POST /v1/router/predict   -- Route a single text (auto-batched)
+    POST /v1/router/batch     -- Route multiple texts
+    GET  /v1/router/models    -- Router model metadata
+
+  Infrastructure (unversioned):
+    GET  /health               -- Backward-compatible alias for /health/ready
+    GET  /health/live          -- Liveness probe (always 200)
+    GET  /health/ready         -- Readiness probe (503 if model not loaded)
 """
 
 import asyncio
 import os
 import time
-from typing import Any
+import uuid
+from typing import Annotated, Any
 
 # Prevent Ray from creating isolated worker venvs via uv.
 # Must be set before Ray imports occur — Ray workers that use uv
 # to create a fresh venv will fail with ModuleNotFoundError.
 os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
 
-from fastapi import FastAPI, HTTPException
+from collections.abc import Callable, Coroutine
+
+from fastapi import FastAPI, HTTPException, Path, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request as StarletteRequest
+from starlette.responses import Response as StarletteResponse
 
 import sentimentizer.compat  # noqa: F401
 from sentimentizer import logger
-from sentimentizer.predictor import SentimentPredictor
+from sentimentizer.predictor import _MODEL_CONFIGS, SentimentPredictor
 from sentimentizer.serve_base import ServiceMetrics, serve
 from sentimentizer.serve_config import load_serve_config
 
@@ -67,40 +78,364 @@ cfg = load_serve_config()
 
 app = FastAPI(
     title="Sentimentizer",
-    version="0.210.1",
+    version="0.211.0",
     description="Sentiment analysis and review routing API",
 )
 
+# ---------------------------------------------------------------------------
+# Middleware registration
+# ---------------------------------------------------------------------------
+# Order matters! Starlette processes middleware in LIFO order:
+#   - Last added = outermost (first request in, last response out)
+# Required order (outermost first):
+#   1. CORS — must be outermost to handle preflight OPTIONS before auth
+#   2. Request-ID — adds trace IDs to all requests including CORS preflight
+#   3. Body size limit — reject oversized payloads early
+# ---------------------------------------------------------------------------
+
+MAX_REQUEST_BODY_BYTES = 1 * 1024 * 1024  # 1 MiB defense-in-depth limit
+
+
+class _RequestBodySizeLimitMiddleware(BaseHTTPMiddleware):
+    """Reject requests with body exceeding MAX_REQUEST_BODY_BYTES.
+
+    Defense-in-depth: the K8s ingress already enforces
+    ``proxy-body-size: "1m"``, but this middleware catches requests
+    that bypass the ingress (e.g., port-forward, node port).
+    """
+
+    async def dispatch(
+        self,
+        request: StarletteRequest,
+        call_next: Callable[
+            [StarletteRequest], Coroutine[StarletteRequest, None, StarletteResponse]
+        ],
+    ) -> StarletteResponse:
+        if request.method in ("POST", "PUT", "PATCH"):
+            content_length = request.headers.get("content-length")
+            if content_length and int(content_length) > MAX_REQUEST_BODY_BYTES:
+                return JSONResponse(
+                    status_code=413,
+                    content={
+                        "error": {
+                            "code": "request_too_large",
+                            "message": (f"Request body exceeds " f"{MAX_REQUEST_BODY_BYTES} bytes"),
+                        }
+                    },
+                )
+        return await call_next(request)
+
+
+app.add_middleware(_RequestBodySizeLimitMiddleware)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cfg.cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["X-Request-Id"],
+)
+
+
+@app.middleware("http")
+async def request_id_middleware(
+    request: StarletteRequest,
+    call_next: Callable[[StarletteRequest], Coroutine[StarletteRequest, None, StarletteResponse]],
+) -> StarletteResponse:
+    """Add X-Request-Id to every request/response for distributed tracing."""
+    request_id = request.headers.get("X-Request-Id") or str(uuid.uuid4())
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["X-Request-Id"] = request_id
+    return response
+
 
 @app.exception_handler(Exception)
-async def unhandled_exception_handler(request: Any, exc: Exception) -> JSONResponse:
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Centralized handler for all unhandled exceptions.
 
     Logs the full traceback and returns a generic 500 response
-    without leaking internal details.
+    without leaking internal details. Uses the standard error envelope.
     """
-    logger.exception("unhandled error in request")
+    request_id = getattr(request.state, "request_id", "unknown")
+    logger.exception("unhandled error in request", request_id=request_id)
     return JSONResponse(
         status_code=500,
-        content={"detail": "Internal server error"},
+        content={
+            "error": {
+                "code": "internal_error",
+                "message": "Internal server error",
+                "request_id": request_id,
+            }
+        },
     )
 
 
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    """Wrap HTTPException in the standard error envelope.
+
+    Converts FastAPI/Starlette's default ``{"detail": "..."}`` format
+    into the structured ``{"error": {"code": ..., "message": ...}}``
+    envelope. Validation errors (422) from Pydantic are left as-is
+    since they already have structured ``detail`` arrays.
+    """
+    detail = exc.detail
+    if isinstance(detail, str):
+        error_code = _status_code_to_error_code(exc.status_code)
+        content = {
+            "error": {
+                "code": error_code,
+                "message": detail,
+            }
+        }
+    else:
+        content = (
+            {"error": detail} if isinstance(detail, dict) else {"error": {"message": str(detail)}}
+        )
+    return JSONResponse(status_code=exc.status_code, content=content)
+
+
+def _status_code_to_error_code(status_code: int) -> str:
+    """Map common HTTP status codes to machine-readable error codes."""
+    mapping = {
+        400: "bad_request",
+        404: "not_found",
+        413: "request_too_large",
+        422: "validation_error",
+        503: "service_unavailable",
+    }
+    return mapping.get(status_code, f"error_{status_code}")
+
+
 # ---------------------------------------------------------------------------
-# Pydantic request models
+# Pydantic request models (use module-level cfg for validation limits)
 # ---------------------------------------------------------------------------
 
 
 class PredictRequest(BaseModel):
-    text: str = Field(..., min_length=1)
+    """Single text sentiment prediction request."""
+
+    text: Annotated[str, Field(min_length=1, max_length=cfg.max_text_length)]
+    model: str | None = Field(
+        default=None,
+        description="Model name to use for prediction. "
+        "If omitted, uses the default model. "
+        "Returns 400 if the requested model is not loaded.",
+    )
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {"text": "The food was terrific!"},
+                {"text": "Terrible service, would not recommend."},
+            ]
+        }
+    }
 
 
 class BatchRequest(BaseModel):
-    texts: list[str] = Field(..., min_length=1)
+    """Multiple text sentiment prediction request."""
+
+    texts: list[Annotated[str, Field(min_length=1, max_length=cfg.max_text_length)]] = Field(
+        ..., min_length=1, max_length=cfg.max_batch_size
+    )
+    model: str | None = Field(
+        default=None,
+        description="Model name to use for prediction. "
+        "If omitted, uses the default model. "
+        "Returns 400 if the requested model is not loaded.",
+    )
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "texts": [
+                        "Great food!",
+                        "Terrible service.",
+                    ],
+                },
+            ]
+        }
+    }
 
 
 class TokenizeRequest(BaseModel):
-    text: str = Field(..., min_length=1)
+    """Tokenize text without running inference."""
+
+    text: Annotated[str, Field(min_length=1, max_length=cfg.max_text_length)]
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {"text": "The food was terrific!"},
+            ]
+        }
+    }
+
+
+# ---------------------------------------------------------------------------
+# Response models for Swagger docs
+# ---------------------------------------------------------------------------
+
+
+class SentimentPrediction(BaseModel):
+    """Single sentiment prediction in the response."""
+
+    label: str = Field(..., description="Predicted sentiment label")
+    score: float = Field(..., description="Confidence score for the predicted label")
+    token_count: int = Field(..., description="Number of tokens in the input text")
+    model: str = Field(..., description="Model name used for prediction")
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "label": "positive",
+                    "score": 0.92,
+                    "token_count": 4,
+                    "model": "encoder",
+                }
+            ]
+        }
+    }
+
+
+class PredictResponse(BaseModel):
+    """Response from /v1/predict."""
+
+    prediction: SentimentPrediction
+    latency_s: float
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "prediction": {
+                        "label": "positive",
+                        "score": 0.92,
+                        "token_count": 4,
+                        "model": "encoder",
+                    },
+                    "latency_s": 0.0043,
+                }
+            ]
+        }
+    }
+
+
+class BatchResponse(BaseModel):
+    """Response from /v1/batch."""
+
+    results: list[dict[str, Any]]
+    count: int
+    latency_s: float
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "results": [
+                        {
+                            "prediction": {
+                                "label": "positive",
+                                "score": 0.89,
+                                "token_count": 2,
+                                "model": "encoder",
+                            },
+                        }
+                    ],
+                    "count": 1,
+                    "latency_s": 0.0031,
+                }
+            ]
+        }
+    }
+
+
+class TokenizeResponse(BaseModel):
+    """Response from /v1/tokenize."""
+
+    text: str
+    tokens: list[str]
+    token_ids: list[int]
+    token_count: int
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "text": "The food was terrific!",
+                    "tokens": ["the", "food", "was", "terrific"],
+                    "token_ids": [42, 156, 23, 789],
+                    "token_count": 4,
+                }
+            ]
+        }
+    }
+
+
+class ModelsResponse(BaseModel):
+    """Response from /v1/models."""
+
+    models: dict[str, Any]
+    default: str
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "models": {
+                        "encoder": {
+                            "architecture": "Transformer Encoder (CLS token)",
+                            "device": "cpu",
+                            "status": "loaded",
+                        }
+                    },
+                    "default": "encoder",
+                }
+            ]
+        }
+    }
+
+
+class HealthLiveResponse(BaseModel):
+    """Response from /health/live."""
+
+    status: str = "alive"
+    uptime_s: float
+
+    model_config = {"json_schema_extra": {"examples": [{"status": "alive", "uptime_s": 123.4}]}}
+
+
+class HealthReadyResponse(BaseModel):
+    """Response from /health/ready."""
+
+    status: str
+    device: str
+    version: str
+    uptime_s: float
+    model_loaded: str
+    router_loaded: bool
+    router_error: str | None = None
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "status": "ready",
+                    "device": "cpu",
+                    "version": "0.211.0",
+                    "uptime_s": 123.4,
+                    "model_loaded": "encoder",
+                    "router_loaded": True,
+                    "router_error": None,
+                }
+            ]
+        }
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -118,7 +453,7 @@ class SentimentizerDeployment:
     """Serves sentiment analysis and review routing over HTTP.
 
     Uses ``serve.ingress`` with FastAPI for HTTP routing.
-    ``serve.batch`` auto-batches individual ``/predict`` calls into
+    ``serve.batch`` auto-batches individual ``/v1/predict`` calls into
     efficient forward passes. Sync model inference runs via
     ``asyncio.to_thread()`` to avoid blocking the event loop.
     """
@@ -135,6 +470,44 @@ class SentimentizerDeployment:
             router_model_path=self.cfg.router_model_path,
         )
 
+    def _validate_model(self, model_name: str | None) -> str:
+        """Validate requested model matches loaded model.
+
+        Returns the validated model name. Raises HTTPException(400)
+        if the requested model doesn't match the loaded model.
+        """
+        if model_name is None:
+            return self.predictor.model_name
+        if model_name.lower().strip() != self.predictor.model_name:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Model '{model_name}' is not loaded. "
+                    f"Available model: '{self.predictor.model_name}'"
+                ),
+            )
+        return self.predictor.model_name
+
+    @staticmethod
+    def _format_prediction(
+        prediction: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Format a prediction dict for the response.
+
+        The prediction dict has the additive v1 format:
+        ``{label: score, "label": label, "score": score,
+        "scores": {...}, "token_count": N, "model": model}``.
+        Returns only label, score, token_count, and model.
+        """
+        result: dict[str, Any] = {
+            "label": prediction["label"],
+            "score": prediction["score"],
+            "model": prediction["model"],
+        }
+        if "token_count" in prediction:
+            result["token_count"] = prediction["token_count"]
+        return result
+
     # ------------------------------------------------------------------
     # Auto-batched endpoints (serve.batch collects individual calls)
     # ------------------------------------------------------------------
@@ -146,7 +519,7 @@ class SentimentizerDeployment:
     async def predict_sentiment(self, inputs: list[dict]) -> list[dict]:
         """Auto-batched sentiment prediction.
 
-        Collects up to ``predict_batch_size`` individual ``/predict``
+        Collects up to ``predict_batch_size`` individual ``/v1/predict``
         requests over a ``predict_batch_wait_s`` window, then
         runs them through a single forward pass.
         """
@@ -162,24 +535,25 @@ class SentimentizerDeployment:
         """Auto-batched route classification.
 
         Collects up to ``classify_batch_size`` individual
-        ``/router/predict`` requests, then classifies them in one batch.
+        ``/v1/router/predict`` requests, then classifies them in one batch.
         """
         texts = [inp["text"] for inp in inputs]
         results = await asyncio.to_thread(self.predictor.classify_batch, texts)
         return [r["prediction"] for r in results]
 
     # ------------------------------------------------------------------
-    # Sentiment handlers
+    # Sentiment handlers (v1 prefix)
     # ------------------------------------------------------------------
 
-    @app.post("/predict")
+    @app.post("/v1/predict", response_model=PredictResponse)
     async def predict(self, body: PredictRequest) -> dict[str, Any]:
-        """POST /predict -- single text sentiment analysis (auto-batched)."""
-        if len(body.text) > self.cfg.max_text_length:
+        """POST /v1/predict -- single text sentiment analysis (auto-batched)."""
+        if not self.predictor.model_loaded:
             raise HTTPException(
-                status_code=400,
-                detail=f"Text too long ({len(body.text)} chars, max {self.cfg.max_text_length})",
+                status_code=503,
+                detail=f"Sentiment model not loaded: {self.predictor.model_error}",
             )
+        self._validate_model(body.model)
 
         start = time.perf_counter()
         prediction = await self.predict_sentiment({"text": body.text})
@@ -192,32 +566,29 @@ class SentimentizerDeployment:
             latency_s=f"{latency:.4f}",
             model=prediction.get("model", ""),
         )
+        formatted = self._format_prediction(prediction)
         return {
-            "text": body.text,
-            "prediction": prediction,
+            "prediction": formatted,
             "latency_s": round(latency, 4),
         }
 
-    @app.post("/batch")
+    @app.post("/v1/batch", response_model=BatchResponse)
     async def batch(self, body: BatchRequest) -> dict[str, Any]:
-        """POST /batch -- batch sentiment analysis (explicit forward pass)."""
-        if len(body.texts) > self.cfg.max_batch_size:
+        """POST /v1/batch -- batch sentiment analysis (explicit forward pass)."""
+        if not self.predictor.model_loaded:
             raise HTTPException(
-                status_code=400,
-                detail=f"Batch too large ({len(body.texts)} items, max {self.cfg.max_batch_size})",
+                status_code=503,
+                detail=f"Sentiment model not loaded: {self.predictor.model_error}",
             )
-        for i, t in enumerate(body.texts):
-            if len(t) > self.cfg.max_text_length:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"texts[{i}] too long ({len(t)} chars, max {self.cfg.max_text_length})",
-                )
+        self._validate_model(body.model)
 
         start = time.perf_counter()
         raw_predictions = await asyncio.to_thread(self.predictor.predict_batch, body.texts)
         results = [
-            {"text": text, "prediction": pred}
-            for text, pred in zip(body.texts, raw_predictions, strict=False)
+            {
+                "prediction": self._format_prediction(pred),
+            }
+            for pred in raw_predictions
         ]
         latency = time.perf_counter() - start
 
@@ -233,41 +604,49 @@ class SentimentizerDeployment:
             "latency_s": round(latency, 4),
         }
 
-    @app.post("/tokenize")
+    @app.post("/v1/tokenize", response_model=TokenizeResponse)
     async def tokenize(self, body: TokenizeRequest) -> dict[str, Any]:
-        """POST /tokenize -- standalone tokenization without inference."""
-        if len(body.text) > self.cfg.max_text_length:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Text too long ({len(body.text)} chars, max {self.cfg.max_text_length})",
-            )
-
-        result = self.predictor.tokenize(body.text)
+        """POST /v1/tokenize -- standalone tokenization without inference."""
+        result = await asyncio.to_thread(self.predictor.tokenize, body.text)
         return result
 
-    @app.get("/models")
+    @app.get("/v1/models", response_model=ModelsResponse)
     async def models(self) -> dict[str, Any]:
-        """GET /models -- sentiment model metadata."""
+        """GET /v1/models -- sentiment model metadata (all models)."""
         models_info = self.predictor.get_sentiment_model_info()
         return {"models": models_info, "default": self.predictor.model_name}
 
+    @app.get("/v1/models/{model_name}")
+    async def model_detail(
+        self,
+        model_name: str = Path(..., description="Model name: rnn, encoder, or decoder"),
+    ) -> dict[str, Any]:
+        """GET /v1/models/{model_name} -- single model metadata."""
+        if model_name not in _MODEL_CONFIGS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown model '{model_name}'. Available: {list(_MODEL_CONFIGS.keys())}",
+            )
+        info = self.predictor.get_sentiment_model_info()
+        model_info = info.get(model_name)
+        if model_info is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Model '{model_name}' not found in model info.",
+            )
+        return {"model": model_name, "info": model_info}
+
     # ------------------------------------------------------------------
-    # Router handlers
+    # Router handlers (v1 prefix)
     # ------------------------------------------------------------------
 
-    @app.post("/router/predict")
+    @app.post("/v1/router/predict")
     async def router_predict(self, body: PredictRequest) -> dict[str, Any]:
-        """POST /router/predict -- classify a single text (auto-batched)."""
+        """POST /v1/router/predict -- classify a single text (auto-batched)."""
         if not self.predictor.router_loaded:
             raise HTTPException(
                 status_code=503,
                 detail=f"Router model not loaded: {self.predictor.router_error}",
-            )
-
-        if len(body.text) > self.cfg.max_text_length:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Text too long ({len(body.text)} chars, max {self.cfg.max_text_length})",
             )
 
         start = time.perf_counter()
@@ -279,34 +658,21 @@ class SentimentizerDeployment:
             "router prediction completed",
             input_length=len(body.text),
             latency_s=f"{latency:.4f}",
-            category=prediction.get("category", ""),
+            category=prediction.get("label", ""),
         )
         return {
-            "text": body.text,
             "prediction": prediction,
             "latency_s": round(latency, 4),
         }
 
-    @app.post("/router/batch")
+    @app.post("/v1/router/batch")
     async def router_batch(self, body: BatchRequest) -> dict[str, Any]:
-        """POST /router/batch -- classify multiple texts into routes."""
+        """POST /v1/router/batch -- classify multiple texts into routes."""
         if not self.predictor.router_loaded:
             raise HTTPException(
                 status_code=503,
                 detail=f"Router model not loaded: {self.predictor.router_error}",
             )
-
-        if len(body.texts) > self.cfg.max_batch_size:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Batch too large ({len(body.texts)} items, max {self.cfg.max_batch_size})",
-            )
-        for i, t in enumerate(body.texts):
-            if len(t) > self.cfg.max_text_length:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"texts[{i}] too long ({len(t)} chars, max {self.cfg.max_text_length})",
-                )
 
         start = time.perf_counter()
         results = await asyncio.to_thread(self.predictor.classify_batch, body.texts)
@@ -320,23 +686,32 @@ class SentimentizerDeployment:
         )
         return {
             "results": results,
+            "count": len(results),
             "latency_s": round(latency, 4),
         }
 
-    @app.get("/router/models")
+    @app.get("/v1/router/models")
     async def router_models(self) -> dict[str, Any]:
-        """GET /router/models -- router model metadata."""
+        """GET /v1/router/models -- router model metadata."""
         return self.predictor.get_router_model_info()
 
     # ------------------------------------------------------------------
-    # Infrastructure handlers
+    # Infrastructure handlers (unversioned)
     # ------------------------------------------------------------------
 
-    @app.get("/health")
-    async def health(self) -> dict[str, Any]:
-        """GET /health -- liveness / readiness probe."""
+    @app.get("/health/live", response_model=None)
+    async def health_live(self) -> dict[str, Any]:
+        """GET /health/live -- liveness probe (always returns 200)."""
+        return {
+            "status": "alive",
+            "uptime_s": round(time.time() - self._started_at, 1),
+        }
+
+    @app.get("/health/ready", response_model=None)
+    async def health_ready(self) -> dict[str, Any] | JSONResponse:
+        """GET /health/ready -- readiness probe (503 if model not loaded)."""
         body = {
-            "status": "healthy" if self.predictor.model_loaded else "unhealthy",
+            "status": "ready" if self.predictor.model_loaded else "not_ready",
             "device": self.predictor.device,
             "version": self.predictor.version,
             "uptime_s": round(time.time() - self._started_at, 1),
@@ -348,28 +723,11 @@ class SentimentizerDeployment:
             return JSONResponse(status_code=503, content=body)
         return body
 
-    @app.get("/metrics")
-    async def metrics(self) -> dict[str, Any]:
-        """GET /metrics -- combined metrics for sentiment and router."""
-        return {
-            "sentiment": {
-                "prometheus": self._sentiment_metrics.to_prometheus(),
-                "request_count": self._sentiment_metrics.request_count,
-                "error_count": self._sentiment_metrics.error_count,
-                "avg_latency_s": self._sentiment_metrics.avg_latency_s,
-            },
-            "router": {
-                "prometheus": self._router_metrics.to_prometheus(),
-                "request_count": self._router_metrics.request_count,
-                "error_count": self._router_metrics.error_count,
-                "avg_latency_s": self._router_metrics.avg_latency_s,
-            },
-        }
+    @app.get("/health", response_model=None)
+    async def health(self) -> dict[str, Any] | JSONResponse:
+        """GET /health -- backward-compatible alias for /health/ready."""
+        return await self.health_ready()
 
-
-# ---------------------------------------------------------------------------
-# Build the Serve application
-# ---------------------------------------------------------------------------
 
 deployment = SentimentizerDeployment.bind()
 

@@ -9,10 +9,12 @@ Usage::
 
     predictor = SentimentPredictor(model_name="encoder")
     result = predictor.predict("This restaurant was amazing!")
-    # {"model": "encoder", "label": "positive", "scores": {"negative": 0.02, ...}}
+    # {"label": "positive", "score": 0.88,
+    #  "scores": {"negative": 0.02, ...}, "model": "encoder", "positive": 0.88}
 
     batch = predictor.predict_batch(["Great food!", "Terrible service."])
-    # [{"model": "encoder", "label": "positive", ...}, ...]
+    # [{"label": "positive", "score": 0.88, "scores": {...},
+    #  "token_count": 3, "model": "encoder", "positive": 0.88}, ...]
 
     route = predictor.classify("Is the pasta gluten-free?")
     # {"text": "Is the pasta gluten-free?", "prediction": {"category": "dietary"}}
@@ -178,8 +180,12 @@ class SentimentPredictor:
         """Run sentiment analysis on a single text.
 
         Returns:
-            Dict with winning class and score, plus model name.
-            Example: ``{"positive": 0.88, "model": "encoder"}``
+            Dict with label, score, all class scores, token usage,
+            and model name.
+            Example: ``{"label": "positive", "score": 0.88,
+            "scores": {"negative": 0.02, "neutral": 0.10,
+            "positive": 0.88}, "token_count": 5, "model": "encoder",
+            "positive": 0.88}``
         """
         if not self.model_loaded:
             raise RuntimeError(f"Sentiment model not loaded: {self._model_error}")
@@ -193,14 +199,19 @@ class SentimentPredictor:
         and runs one forward pass.
 
         Returns:
-            List of dicts, each with the winning class label, its
-            probability, and the model name.
-            Example: ``[{"positive": 0.88, "model": "encoder"}, ...]``
+            List of dicts, each with label, score, all class scores,
+            token usage, and the model name. Uses additive format with
+            both the dynamic winning-class key (deprecated) and explicit
+            fields.
+            Example: ``[{"positive": 0.88, "label": "positive",
+            "score": 0.88, "scores": {...}, "token_count": 12,
+            "model": "encoder"}, ...]``
         """
         if not self.model_loaded:
             raise RuntimeError(f"Sentiment model not loaded: {self._model_error}")
 
         token_arrays = [self.model.tokenizer.tokenize_text(t) for t in texts]
+        token_counts = [len(regex_tokenize(t)) for t in texts]
         batch = np.concatenate(token_arrays, axis=0)
         probs = self.model.predict(batch)
 
@@ -210,7 +221,17 @@ class SentimentPredictor:
         for i in range(len(texts)):
             label = label_names[label_idx[i]]
             score = probs[i, label_idx[i]].item()
-            results.append({label: score, "model": self.model_name})
+            all_scores = {name: probs[i, j].item() for j, name in enumerate(label_names)}
+            results.append(
+                {
+                    label: score,
+                    "label": label,
+                    "score": score,
+                    "scores": all_scores,
+                    "token_count": token_counts[i],
+                    "model": self.model_name,
+                }
+            )
         return results
 
     # ------------------------------------------------------------------
@@ -221,7 +242,7 @@ class SentimentPredictor:
         """Classify a single text into a route category.
 
         Returns:
-            Dict with keys ``text`` and ``prediction`` (which has ``category``).
+            Dict with key ``prediction`` containing label, score, and token_count.
         """
         results = self.classify_batch([text])
         return results[0]
@@ -230,19 +251,34 @@ class SentimentPredictor:
         """Classify multiple texts into route categories.
 
         Returns:
-            List of dicts, each with keys ``text`` and ``prediction``.
+            List of dicts, each with key ``prediction`` containing label, score, and token_count.
         """
         if not self.router_loaded:
             raise RuntimeError(f"Router model not loaded: {self._router_error}")
 
+        label_names = RouteLabels.label_names()
         predictions = self.router.predict(texts)
+        probabilities = self.router.predict_proba(texts)
         results: list[dict[str, Any]] = []
-        for text, pred in zip(texts, predictions, strict=False):
+        for i, (text, pred) in enumerate(zip(texts, predictions, strict=False)):
             if isinstance(pred, str):
                 category = pred
+                label_idx = (
+                    list(label_names.values()).index(pred)
+                    if pred in label_names.values()
+                    else 0
+                )
             else:
-                category = RouteLabels.label_names().get(int(pred), str(pred))
-            results.append({"text": text, "prediction": {"category": category}})
+                label_idx = int(pred)
+                category = label_names.get(label_idx, str(pred))
+            token_count = len(regex_tokenize(text))
+            results.append({
+                "prediction": {
+                    "label": category,
+                    "score": float(probabilities[i, label_idx]),
+                    "token_count": token_count,
+                },
+            })
         return results
 
     # ------------------------------------------------------------------
