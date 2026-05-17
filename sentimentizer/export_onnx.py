@@ -19,7 +19,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
-from sentimentizer.config import weights_path_for
+from sentimentizer.config import LABEL_NAMES, NUM_CLASSES, weights_path_for
 from sentimentizer.models.decoder import Decoder
 from sentimentizer.models.encoder import Encoder
 from sentimentizer.models.rnn import RNN
@@ -258,6 +258,8 @@ def _save_metadata(
     """
     metadata = {
         "model_type": model_type,
+        "num_classes": NUM_CLASSES,
+        "label_names": LABEL_NAMES,
         "opset_version": opset_version,
         "input_shape": ["batch_size", "seq_len"],
         "input_name": "input",

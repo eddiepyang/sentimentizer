@@ -28,12 +28,14 @@ _ALL_MODEL_TYPES = ("rnn", "encoder", "decoder")
 
 
 def _reset_stale_metrics(model_type: str) -> None:
-    """Clear stale persisted metrics and reset Prometheus gauges for ALL model types.
+    """Clear stale persisted metrics and reset Prometheus gauges.
 
-    When a new training run starts for *model_type*, metrics from previous runs of
-    any model type (including the current one) are stale.  We zero out all three
-    per-model JSON files and all Prometheus gauge labels so the dashboard only
-    shows fresh data from the new run.
+    When a new training run starts for *model_type*, metrics from previous runs
+    are stale.  We zero out all three per-model JSON files (so the exporter can
+    clear stale gauge values) but only reset Prometheus gauges for the *current*
+    model type.  Other model types' gauges are left untouched — the exporter
+    will handle them when it reads their ``_reset: true`` JSON files and skips
+    them, leaving their gauges at whatever the last real training run set.
     """
     import time
 
@@ -45,19 +47,28 @@ def _reset_stale_metrics(model_type: str) -> None:
                 "train_loss": 0.0,
                 "val_loss": 0.0,
                 "accuracy": 0.0,
-                "precision": 0.0,
-                "recall": 0.0,
-                "f1": 0.0,
+                "balanced_accuracy": 0.0,
+                "negative_precision": 0.0,
+                "negative_recall": 0.0,
+                "negative_f1": 0.0,
+                "neutral_precision": 0.0,
+                "neutral_recall": 0.0,
+                "neutral_f1": 0.0,
+                "positive_precision": 0.0,
+                "positive_recall": 0.0,
+                "positive_f1": 0.0,
+                "macro_f1": 0.0,
+                "weighted_f1": 0.0,
                 "cohen_kappa": 0.0,
                 "mcc": 0.0,
-                "npv": 0.0,
-                "macro_f1": 0.0,
-                "auc_roc": None,
-                "avg_precision": None,
-                "positive_accuracy": 0.0,
-                "negative_accuracy": 0.0,
+                "neutral_to_positive_rate": 0.0,
+                "neutral_to_negative_rate": 0.0,
+                "pred_neutral_frac": 0.0,
+                "neutral_auc_roc": None,
+                "neutral_avg_precision": None,
                 "epoch": 0,
                 "lr": 0.0,
+                "_reset": True,
                 "_trace": {
                     "reset_by": model_type,
                     "reset_at": time.time(),
@@ -74,48 +85,63 @@ def _reset_stale_metrics(model_type: str) -> None:
     except OSError as exc:
         logger.warning("failed_to_clear_stale_metrics_file: %s", exc)
 
-    # --- 2. prometheus_client gauges (zero all model types) ---
+    # --- 2. prometheus_client gauges (zero current model type only) ---
     try:
         from sentimentizer.exporter import (
             TRAINING_EPOCH,
             TRAINING_LR,
             TRAINING_TRAIN_LOSS,
             TRAINING_VAL_ACCURACY,
-            TRAINING_VAL_AUC_ROC,
-            TRAINING_VAL_AVG_PRECISION,
+            TRAINING_VAL_BALANCED_ACCURACY,
             TRAINING_VAL_COHEN_KAPPA,
-            TRAINING_VAL_F1,
             TRAINING_VAL_LOSS,
             TRAINING_VAL_MACRO_F1,
             TRAINING_VAL_MCC,
-            TRAINING_VAL_NEGATIVE_ACCURACY,
-            TRAINING_VAL_NPV,
-            TRAINING_VAL_POSITIVE_ACCURACY,
-            TRAINING_VAL_PRECISION,
-            TRAINING_VAL_RECALL,
+            TRAINING_VAL_NEGATIVE_F1,
+            TRAINING_VAL_NEGATIVE_PRECISION,
+            TRAINING_VAL_NEGATIVE_RECALL,
+            TRAINING_VAL_NEUTRAL_AUC_ROC,
+            TRAINING_VAL_NEUTRAL_AVG_PRECISION,
+            TRAINING_VAL_NEUTRAL_F1,
+            TRAINING_VAL_NEUTRAL_PRECISION,
+            TRAINING_VAL_NEUTRAL_RECALL,
+            TRAINING_VAL_NEUTRAL_TO_NEGATIVE_RATE,
+            TRAINING_VAL_NEUTRAL_TO_POSITIVE_RATE,
+            TRAINING_VAL_POSITIVE_F1,
+            TRAINING_VAL_POSITIVE_PRECISION,
+            TRAINING_VAL_POSITIVE_RECALL,
+            TRAINING_VAL_PRED_NEUTRAL_FRAC,
+            TRAINING_VAL_WEIGHTED_F1,
         )
 
-        for mt in _ALL_MODEL_TYPES:
-            lbl = {"model_type": mt}
-            for gauge in (
-                TRAINING_TRAIN_LOSS,
-                TRAINING_VAL_LOSS,
-                TRAINING_VAL_ACCURACY,
-                TRAINING_VAL_PRECISION,
-                TRAINING_VAL_RECALL,
-                TRAINING_VAL_F1,
-                TRAINING_VAL_COHEN_KAPPA,
-                TRAINING_VAL_MCC,
-                TRAINING_VAL_NPV,
-                TRAINING_VAL_MACRO_F1,
-                TRAINING_VAL_POSITIVE_ACCURACY,
-                TRAINING_VAL_NEGATIVE_ACCURACY,
-                TRAINING_EPOCH,
-                TRAINING_LR,
-            ):
-                gauge.labels(**lbl).set(0)
-            TRAINING_VAL_AUC_ROC.labels(**lbl).set(0)
-            TRAINING_VAL_AVG_PRECISION.labels(**lbl).set(0)
+        lbl = {"model_type": model_type}
+        for gauge in (
+            TRAINING_TRAIN_LOSS,
+            TRAINING_VAL_LOSS,
+            TRAINING_VAL_ACCURACY,
+            TRAINING_VAL_BALANCED_ACCURACY,
+            TRAINING_VAL_NEGATIVE_PRECISION,
+            TRAINING_VAL_NEGATIVE_RECALL,
+            TRAINING_VAL_NEGATIVE_F1,
+            TRAINING_VAL_NEUTRAL_PRECISION,
+            TRAINING_VAL_NEUTRAL_RECALL,
+            TRAINING_VAL_NEUTRAL_F1,
+            TRAINING_VAL_POSITIVE_PRECISION,
+            TRAINING_VAL_POSITIVE_RECALL,
+            TRAINING_VAL_POSITIVE_F1,
+            TRAINING_VAL_COHEN_KAPPA,
+            TRAINING_VAL_MCC,
+            TRAINING_VAL_MACRO_F1,
+            TRAINING_VAL_WEIGHTED_F1,
+            TRAINING_VAL_NEUTRAL_TO_POSITIVE_RATE,
+            TRAINING_VAL_NEUTRAL_TO_NEGATIVE_RATE,
+            TRAINING_VAL_PRED_NEUTRAL_FRAC,
+            TRAINING_EPOCH,
+            TRAINING_LR,
+        ):
+            gauge.labels(**lbl).set(0)
+        TRAINING_VAL_NEUTRAL_AUC_ROC.labels(**lbl).set(0)
+        TRAINING_VAL_NEUTRAL_AVG_PRECISION.labels(**lbl).set(0)
     except ImportError:
         pass
 
@@ -139,13 +165,27 @@ def run_train(
     resume: bool,
     balance_classes: bool,
     balance_seed: int,
-    pos_weight: float,
-    push_to_hub: bool,
-    pull_from_hub: bool,
-    hf_repo: str | None,
+    class_weights: list[float] | None = None,
+    num_classes: int = 3,
+    include_neutral: bool = True,
+    loss_type: str = "cross_entropy",
+    focal_gamma: float = 2.0,
+    label_smoothing: float = 0.1,
+    weight_smoothing: float = 0.5,
+    neutral_oversample_ratio: float = 0.0,
+    balance_strategy: str = "class_weights_only",
+    push_to_hub: bool = False,
+    pull_from_hub: bool = False,
+    hf_repo: str | None = None,
 ) -> None:
     """Fit the model (single-node or distributed)."""
     from sentimentizer.device import resolve_device
+
+    # Validate that include_neutral and num_classes are consistent
+    if include_neutral and num_classes != 3:
+        raise ValueError(f"include_neutral=True requires num_classes=3, got {num_classes}")
+    if not include_neutral and num_classes != 2:
+        raise ValueError(f"include_neutral=False requires num_classes=2, got {num_classes}")
 
     device = resolve_device(state.device)
 
@@ -175,7 +215,6 @@ def run_train(
         )
         if result_path:
             logger.info(f"Pulled {state.model} weights from HF Hub. Forcing run type to 'update'.")
-            state.run_type = "update"
         else:
             logger.error("Failed to pull weights from HF Hub. Proceeding with original run type.")
 
@@ -197,7 +236,14 @@ def run_train(
             checkpoint_every=checkpoint_every,
             balance_classes=balance_classes,
             balance_seed=balance_seed,
-            pos_weight=pos_weight,
+            class_weights=class_weights,
+            num_classes=num_classes,
+            loss_type=loss_type,
+            focal_gamma=focal_gamma,
+            label_smoothing=label_smoothing,
+            weight_smoothing=weight_smoothing,
+            neutral_oversample_ratio=neutral_oversample_ratio,
+            balance_strategy=balance_strategy,
             save=save,
             push_to_hub=push_to_hub,
             hf_repo=hf_repo,
@@ -214,7 +260,14 @@ def run_train(
             resume=resume,
             balance_classes=balance_classes,
             balance_seed=balance_seed,
-            pos_weight=pos_weight,
+            class_weights=class_weights,
+            num_classes=num_classes,
+            loss_type=loss_type,
+            focal_gamma=focal_gamma,
+            label_smoothing=label_smoothing,
+            weight_smoothing=weight_smoothing,
+            neutral_oversample_ratio=neutral_oversample_ratio,
+            balance_strategy=balance_strategy,
             save=save,
             push_to_hub=push_to_hub,
             hf_repo=hf_repo,
@@ -231,7 +284,14 @@ def _run_fit_single(
     resume: bool,
     balance_classes: bool,
     balance_seed: int,
-    pos_weight: float,
+    class_weights: list[float] | None,
+    num_classes: int,
+    loss_type: str,
+    focal_gamma: float,
+    label_smoothing: float,
+    weight_smoothing: float,
+    neutral_oversample_ratio: float,
+    balance_strategy: str,
     save: bool,
     push_to_hub: bool,
     hf_repo: str | None,
@@ -240,27 +300,26 @@ def _run_fit_single(
     import torch
 
     from sentimentizer.config import DriverConfig, default_dataloader_workers, weights_path_for
-    from sentimentizer.loader import compute_pos_weight, load_train_val_corpus_datasets
+    from sentimentizer.loader import compute_class_weights, load_train_val_corpus_datasets
     from sentimentizer.trainer import new_trainer
 
-    from_sentinel = pos_weight == 0.0
     train_dataset, val_dataset = load_train_val_corpus_datasets(
         data_path=DriverConfig.files.processed_reviews_file_path,
         balance_classes=balance_classes,
         random_state=balance_seed,
     )
 
-    # Auto-compute pos_weight from training data if not explicitly set
-    if from_sentinel:
-        if balance_classes:
-            logger.info("using pos_weight=1.0 because class balancing (undersampling) is enabled")
-            pos_weight = 1.0
-        else:
-            import pandas as pd
+    # Auto-compute class_weights from training data if not explicitly set
+    if class_weights is None:
+        import pandas as pd
 
-            train_df = pd.read_parquet(DriverConfig.files.processed_reviews_file_path)
-            pos_weight = compute_pos_weight(train_df)
-            del train_df
+        train_df = pd.read_parquet(DriverConfig.files.processed_reviews_file_path)
+        class_weights_tensor = compute_class_weights(
+            train_df, num_classes=num_classes, smoothing=weight_smoothing
+        )
+        del train_df
+    else:
+        class_weights_tensor = torch.tensor(class_weights, dtype=torch.float32)
 
     cfg = DriverConfig.trainer(
         epochs=epochs,
@@ -268,7 +327,10 @@ def _run_fit_single(
         dataloader_workers=default_dataloader_workers(device),
         checkpoint_dir=checkpoint_dir,
         checkpoint_every=checkpoint_every,
-        pos_weight=pos_weight,
+        class_weights=class_weights_tensor.tolist(),
+        loss_type=loss_type,
+        focal_gamma=focal_gamma,
+        label_smoothing=label_smoothing,
     )
 
     trainer = new_trainer(
@@ -326,14 +388,21 @@ def _run_fit_distributed(
     checkpoint_every: int,
     balance_classes: bool,
     balance_seed: int,
-    pos_weight: float,
+    class_weights: list[float] | None,
+    num_classes: int,
+    loss_type: str,
+    focal_gamma: float,
+    label_smoothing: float,
+    weight_smoothing: float,
+    neutral_oversample_ratio: float,
+    balance_strategy: str,
     save: bool,
     push_to_hub: bool,
     hf_repo: str | None,
 ) -> None:
     """Distributed training using Ray Train TorchTrainer.
 
-    The model is NOT loaded in the driver process — Ray workers create their
+    The model is NOT loaded in the driver process -- Ray workers create their
     own model from scratch in ``_train_func``.  Loading the model here would
     waste GPU memory (for ``run_type="update"``) since the driver-side model
     is never used for training.
@@ -341,23 +410,22 @@ def _run_fit_distributed(
     import torch
 
     from sentimentizer.config import DriverConfig, weights_path_for
-    from sentimentizer.loader import compute_pos_weight, load_train_val_ray_datasets
+    from sentimentizer.loader import compute_class_weights, load_train_val_ray_datasets
     from sentimentizer.trainer import new_ray_trainer
 
     _ensure_ray_initialized()
 
-    # Auto-compute pos_weight from full dataset if not explicitly set
-    from_sentinel = pos_weight == 0.0
-    if from_sentinel:
-        if balance_classes:
-            logger.info("using pos_weight=1.0 because class balancing (undersampling) is enabled")
-            pos_weight = 1.0
-        else:
-            import pandas as pd
+    # Auto-compute class_weights from full dataset if not explicitly set
+    if class_weights is None:
+        import pandas as pd
 
-            full_df = pd.read_parquet(DriverConfig.files.processed_reviews_file_path)
-            pos_weight = compute_pos_weight(full_df)
-            del full_df
+        full_df = pd.read_parquet(DriverConfig.files.processed_reviews_file_path)
+        class_weights_tensor = compute_class_weights(
+            full_df, num_classes=num_classes, smoothing=weight_smoothing
+        )
+        del full_df
+    else:
+        class_weights_tensor = torch.tensor(class_weights, dtype=torch.float32)
 
     train_ds, val_ds = load_train_val_ray_datasets(
         DriverConfig.files.processed_reviews_file_path,
@@ -371,7 +439,10 @@ def _run_fit_distributed(
         ray_workers=num_workers,
         checkpoint_dir=checkpoint_dir,
         checkpoint_every=checkpoint_every,
-        pos_weight=pos_weight,
+        class_weights=class_weights_tensor.tolist(),
+        loss_type=loss_type,
+        focal_gamma=focal_gamma,
+        label_smoothing=label_smoothing,
     )
 
     ray_trainer = new_ray_trainer(
@@ -459,30 +530,45 @@ def _persist_metrics_to_file(metrics: dict, model_type: str) -> None:
     training processes never race on a shared JSON file.  The standalone
     exporter discovers all three files and zeroes out Prometheus gauges for
     any model type whose file is missing or stale.
-
-    Accepts both Ray Train key names (``pos_acc``, ``neg_acc``) and direct
-    key names (``positive_accuracy``, ``negative_accuracy``).
     """
     _METRICS_DIR.mkdir(parents=True, exist_ok=True)
     path = _metrics_path(model_type)
 
-    auc_roc = metrics.get("auc_roc")
-    avg_precision = metrics.get("avg_precision")
+    def _float(key: str, fallback: str | None = None) -> float:
+        val = metrics.get(key)
+        if val is None and fallback:
+            val = metrics.get(fallback)
+        return float(val) if val is not None else 0.0
+
+    def _opt_float(key: str, fallback: str | None = None) -> float | None:
+        val = metrics.get(key)
+        if val is None and fallback:
+            val = metrics.get(fallback)
+        return float(val) if val is not None else None
+
     data: dict[str, Any] = {
         "train_loss": float(metrics.get("train_loss", 0)),
         "val_loss": float(metrics.get("val_loss", 0)),
         "accuracy": float(metrics.get("accuracy", 0)),
-        "precision": float(metrics.get("precision", 0)),
-        "recall": float(metrics.get("recall", 0)),
-        "f1": float(metrics.get("f1", 0)),
+        "balanced_accuracy": _float("balanced_accuracy"),
+        "negative_precision": _float("negative_precision", "val_negative_precision"),
+        "negative_recall": _float("negative_recall", "val_negative_recall"),
+        "negative_f1": _float("negative_f1", "val_negative_f1"),
+        "neutral_precision": _float("neutral_precision", "val_neutral_precision"),
+        "neutral_recall": _float("neutral_recall", "val_neutral_recall"),
+        "neutral_f1": _float("neutral_f1", "val_neutral_f1"),
+        "positive_precision": _float("positive_precision", "val_positive_precision"),
+        "positive_recall": _float("positive_recall", "val_positive_recall"),
+        "positive_f1": _float("positive_f1", "val_positive_f1"),
         "cohen_kappa": float(metrics.get("cohen_kappa", 0)),
         "mcc": float(metrics.get("mcc", 0)),
-        "npv": float(metrics.get("npv", 0)),
         "macro_f1": float(metrics.get("macro_f1", 0)),
-        "auc_roc": float(auc_roc) if auc_roc is not None else None,
-        "avg_precision": float(avg_precision) if avg_precision is not None else None,
-        "positive_accuracy": float(metrics.get("pos_acc", metrics.get("positive_accuracy", 0))),
-        "negative_accuracy": float(metrics.get("neg_acc", metrics.get("negative_accuracy", 0))),
+        "weighted_f1": _float("weighted_f1"),
+        "neutral_to_positive_rate": _float("neutral_to_positive_rate"),
+        "neutral_to_negative_rate": _float("neutral_to_negative_rate"),
+        "pred_neutral_frac": _float("pred_neutral_frac"),
+        "neutral_auc_roc": _opt_float("neutral_auc_roc", "val_neutral_auc_roc"),
+        "neutral_avg_precision": _opt_float("neutral_avg_precision", "val_neutral_avg_precision"),
         "epoch": int(metrics.get("epoch", 0)),
         "lr": float(metrics.get("lr", 0.0)),
         "_written_by": model_type,

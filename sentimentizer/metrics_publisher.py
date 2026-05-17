@@ -29,17 +29,25 @@ _METRIC_GAUGE_KEYS: list[tuple[str, str, bool]] = [
     # (metrics_attr, gauge_key, is_optional_none)
     # gauge_key matches both Ray gauge dict keys and Prometheus gauge variable prefixes
     ("accuracy", "val_accuracy", False),
-    ("precision", "val_precision", False),
-    ("recall", "val_recall", False),
-    ("f1", "val_f1", False),
+    ("balanced_accuracy", "val_balanced_accuracy", False),
+    ("negative_precision", "val_negative_precision", False),
+    ("negative_recall", "val_negative_recall", False),
+    ("negative_f1", "val_negative_f1", False),
+    ("neutral_precision", "val_neutral_precision", False),
+    ("neutral_recall", "val_neutral_recall", False),
+    ("neutral_f1", "val_neutral_f1", False),
+    ("positive_precision", "val_positive_precision", False),
+    ("positive_recall", "val_positive_recall", False),
+    ("positive_f1", "val_positive_f1", False),
+    ("macro_f1", "val_macro_f1", False),
+    ("weighted_f1", "val_weighted_f1", False),
     ("cohen_kappa", "val_cohen_kappa", False),
     ("mcc", "val_mcc", False),
-    ("npv", "val_npv", False),
-    ("macro_f1", "val_macro_f1", False),
-    ("auc_roc", "val_auc_roc", True),
-    ("avg_precision", "val_avg_precision", True),
-    ("positive_accuracy", "val_positive_accuracy", False),
-    ("negative_accuracy", "val_negative_accuracy", False),
+    ("neutral_to_positive_rate", "val_neutral_to_positive_rate", False),
+    ("neutral_to_negative_rate", "val_neutral_to_negative_rate", False),
+    ("pred_neutral_frac", "val_pred_neutral_frac", False),
+    ("neutral_auc_roc", "val_neutral_auc_roc", True),
+    ("neutral_avg_precision", "val_neutral_avg_precision", True),
 ]
 
 # ──────────────────────────────────────────────
@@ -81,19 +89,31 @@ def write_epoch_metrics_to_file(
         "train_loss": float(train_loss),
         "val_loss": float(val_loss),
         "accuracy": float(metrics.accuracy),
-        "precision": float(metrics.precision),
-        "recall": float(metrics.recall),
-        "f1": float(metrics.f1),
+        "balanced_accuracy": float(metrics.balanced_accuracy),
+        "negative_precision": float(metrics.negative_precision),
+        "negative_recall": float(metrics.negative_recall),
+        "negative_f1": float(metrics.negative_f1),
+        "neutral_precision": float(metrics.neutral_precision),
+        "neutral_recall": float(metrics.neutral_recall),
+        "neutral_f1": float(metrics.neutral_f1),
+        "positive_precision": float(metrics.positive_precision),
+        "positive_recall": float(metrics.positive_recall),
+        "positive_f1": float(metrics.positive_f1),
+        "macro_f1": float(metrics.macro_f1),
+        "weighted_f1": float(metrics.weighted_f1),
         "cohen_kappa": float(metrics.cohen_kappa),
         "mcc": float(metrics.mcc),
-        "npv": float(metrics.npv),
-        "macro_f1": float(metrics.macro_f1),
-        "auc_roc": float(metrics.auc_roc) if metrics.auc_roc is not None else None,
-        "avg_precision": (
-            float(metrics.avg_precision) if metrics.avg_precision is not None else None
+        "neutral_to_positive_rate": float(metrics.neutral_to_positive_rate),
+        "neutral_to_negative_rate": float(metrics.neutral_to_negative_rate),
+        "pred_neutral_frac": float(metrics.pred_neutral_frac),
+        "neutral_auc_roc": (
+            float(metrics.neutral_auc_roc) if metrics.neutral_auc_roc is not None else None
         ),
-        "positive_accuracy": float(metrics.positive_accuracy),
-        "negative_accuracy": float(metrics.negative_accuracy),
+        "neutral_avg_precision": (
+            float(metrics.neutral_avg_precision)
+            if metrics.neutral_avg_precision is not None
+            else None
+        ),
         "epoch": int(epoch),
         "lr": float(lr) if lr is not None else None,
         "_written_by": model_type,
@@ -133,6 +153,8 @@ def _set_ray_gauges(
     gauges["epoch"].set(epoch)
 
     for attr, key, is_optional_none in _METRIC_GAUGE_KEYS:
+        if key not in gauges:
+            continue  # skip keys not in Ray gauges
         value = getattr(metrics, attr)
         if is_optional_none and value is None:
             continue
@@ -163,18 +185,26 @@ def _set_prometheus_gauges(
             TRAINING_LR,
             TRAINING_TRAIN_LOSS,
             TRAINING_VAL_ACCURACY,
-            TRAINING_VAL_AUC_ROC,
-            TRAINING_VAL_AVG_PRECISION,
+            TRAINING_VAL_BALANCED_ACCURACY,
             TRAINING_VAL_COHEN_KAPPA,
-            TRAINING_VAL_F1,
             TRAINING_VAL_LOSS,
             TRAINING_VAL_MACRO_F1,
             TRAINING_VAL_MCC,
-            TRAINING_VAL_NEGATIVE_ACCURACY,
-            TRAINING_VAL_NPV,
-            TRAINING_VAL_POSITIVE_ACCURACY,
-            TRAINING_VAL_PRECISION,
-            TRAINING_VAL_RECALL,
+            TRAINING_VAL_NEGATIVE_F1,
+            TRAINING_VAL_NEGATIVE_PRECISION,
+            TRAINING_VAL_NEGATIVE_RECALL,
+            TRAINING_VAL_NEUTRAL_AUC_ROC,
+            TRAINING_VAL_NEUTRAL_AVG_PRECISION,
+            TRAINING_VAL_NEUTRAL_F1,
+            TRAINING_VAL_NEUTRAL_PRECISION,
+            TRAINING_VAL_NEUTRAL_RECALL,
+            TRAINING_VAL_NEUTRAL_TO_NEGATIVE_RATE,
+            TRAINING_VAL_NEUTRAL_TO_POSITIVE_RATE,
+            TRAINING_VAL_POSITIVE_F1,
+            TRAINING_VAL_POSITIVE_PRECISION,
+            TRAINING_VAL_POSITIVE_RECALL,
+            TRAINING_VAL_PRED_NEUTRAL_FRAC,
+            TRAINING_VAL_WEIGHTED_F1,
         )
     except ImportError:
         return
@@ -185,20 +215,28 @@ def _set_prometheus_gauges(
     TRAINING_EPOCH.labels(**lbl).set(epoch)
     TRAINING_LR.labels(**lbl).set(float(lr))
 
-    # Use the same field mapping table for consistency
+    # Map metrics attributes to Prometheus gauge objects
     _PROM_GAUGE_MAP: dict[str, Any] = {
         "accuracy": TRAINING_VAL_ACCURACY,
-        "precision": TRAINING_VAL_PRECISION,
-        "recall": TRAINING_VAL_RECALL,
-        "f1": TRAINING_VAL_F1,
+        "balanced_accuracy": TRAINING_VAL_BALANCED_ACCURACY,
+        "negative_precision": TRAINING_VAL_NEGATIVE_PRECISION,
+        "negative_recall": TRAINING_VAL_NEGATIVE_RECALL,
+        "negative_f1": TRAINING_VAL_NEGATIVE_F1,
+        "neutral_precision": TRAINING_VAL_NEUTRAL_PRECISION,
+        "neutral_recall": TRAINING_VAL_NEUTRAL_RECALL,
+        "neutral_f1": TRAINING_VAL_NEUTRAL_F1,
+        "positive_precision": TRAINING_VAL_POSITIVE_PRECISION,
+        "positive_recall": TRAINING_VAL_POSITIVE_RECALL,
+        "positive_f1": TRAINING_VAL_POSITIVE_F1,
+        "macro_f1": TRAINING_VAL_MACRO_F1,
+        "weighted_f1": TRAINING_VAL_WEIGHTED_F1,
         "cohen_kappa": TRAINING_VAL_COHEN_KAPPA,
         "mcc": TRAINING_VAL_MCC,
-        "npv": TRAINING_VAL_NPV,
-        "macro_f1": TRAINING_VAL_MACRO_F1,
-        "auc_roc": TRAINING_VAL_AUC_ROC,
-        "avg_precision": TRAINING_VAL_AVG_PRECISION,
-        "positive_accuracy": TRAINING_VAL_POSITIVE_ACCURACY,
-        "negative_accuracy": TRAINING_VAL_NEGATIVE_ACCURACY,
+        "neutral_to_positive_rate": TRAINING_VAL_NEUTRAL_TO_POSITIVE_RATE,
+        "neutral_to_negative_rate": TRAINING_VAL_NEUTRAL_TO_NEGATIVE_RATE,
+        "pred_neutral_frac": TRAINING_VAL_PRED_NEUTRAL_FRAC,
+        "neutral_auc_roc": TRAINING_VAL_NEUTRAL_AUC_ROC,
+        "neutral_avg_precision": TRAINING_VAL_NEUTRAL_AVG_PRECISION,
     }
 
     for attr, gauge in _PROM_GAUGE_MAP.items():
@@ -270,21 +308,22 @@ def publish_epoch_metrics(
         lr=lr,
     )
 
-    # 4. Structured logging — format metrics into message string since this
-    #    module uses logging.getLogger (not structlog), which does not accept
-    #    arbitrary keyword arguments.
-    auc_roc_str = f"{metrics.auc_roc:.4f}" if metrics.auc_roc is not None else "N/A"
-    avg_precision_str = (
-        f"{metrics.avg_precision:.4f}" if metrics.avg_precision is not None else "N/A"
+    # 4. Structured logging
+    neutral_auc_str = (
+        f"{metrics.neutral_auc_roc:.4f}" if metrics.neutral_auc_roc is not None else "N/A"
+    )
+    neutral_ap_str = (
+        f"{metrics.neutral_avg_precision:.4f}"
+        if metrics.neutral_avg_precision is not None
+        else "N/A"
     )
     logger.info(
         f"[{model_type}] [epoch {epoch}] evaluation complete — "
         f"val_loss={val_loss:.4f} accuracy={metrics.accuracy:.4f} "
-        f"precision={metrics.precision:.4f} recall={metrics.recall:.4f} "
-        f"f1={metrics.f1:.4f} cohen_kappa={metrics.cohen_kappa:.4f} "
-        f"mcc={metrics.mcc:.4f} npv={metrics.npv:.4f} "
-        f"macro_f1={metrics.macro_f1:.4f} "
-        f"auc_roc={auc_roc_str} avg_precision={avg_precision_str} "
-        f"pos_acc={metrics.positive_accuracy:.4f} "
-        f"neg_acc={metrics.negative_accuracy:.4f}"
+        f"balanced_accuracy={metrics.balanced_accuracy:.4f} "
+        f"macro_f1={metrics.macro_f1:.4f} weighted_f1={metrics.weighted_f1:.4f} "
+        f"neg_f1={metrics.negative_f1:.4f} neu_f1={metrics.neutral_f1:.4f} "
+        f"pos_f1={metrics.positive_f1:.4f} cohen_kappa={metrics.cohen_kappa:.4f} "
+        f"mcc={metrics.mcc:.4f} "
+        f"neutral_auc_roc={neutral_auc_str} neutral_avg_precision={neutral_ap_str}"
     )

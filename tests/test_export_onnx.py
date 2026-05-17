@@ -44,9 +44,9 @@ class TestRNNOnnxExportMode:
             output_packed = model(inputs, onnx_export=False)
             output_onnx = model(inputs, onnx_export=True)
 
-        # Both should produce valid outputs
-        assert output_packed.shape == (2,)
-        assert output_onnx.shape == (2,)
+        # Both should produce valid outputs (batch_size, num_classes=3)
+        assert output_packed.shape == (2, 3)
+        assert output_onnx.shape == (2, 3)
 
         # Outputs should be different due to different forward paths
         # (but not too different — same model, same weights)

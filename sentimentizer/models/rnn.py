@@ -44,6 +44,7 @@ class RNN(BaseSentimentModel):
         num_layers: int = RNNConfig.num_layers,
         verbose: bool = False,
         dropout: float = RNNConfig.dropout,
+        num_classes: int = RNNConfig.num_classes,
     ) -> None:
         super().__init__()
         emb_dim = emb_weights.shape[1]
@@ -66,13 +67,14 @@ class RNN(BaseSentimentModel):
             bidirectional=True,
         )
 
-        # Classification head: concatenated final hidden states → logit
+        # Classification head: concatenated final hidden states → class logits
         # hidden_size * 2 because bidirectional (forward + backward)
+        self.num_classes = num_classes
         self.classifier = nn.Sequential(
             nn.Linear(hidden_size * 2, hidden_size),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout),
-            nn.Linear(hidden_size, 1),
+            nn.Linear(hidden_size, num_classes),
         )
 
         self.verbose = verbose
@@ -148,8 +150,8 @@ class RNN(BaseSentimentModel):
         if self.verbose:
             logger.info(f"hidden cat shape {hidden_cat.shape}")
 
-        logits = self.classifier(hidden_cat)  # (B, 1)
-        return torch.squeeze(logits)  # (B,)
+        logits = self.classifier(hidden_cat)  # (B, num_classes)
+        return logits
 
 
 def new_model(
@@ -173,6 +175,7 @@ def new_model(
         hidden_size=model_config.hidden_size,
         num_layers=model_config.num_layers,
         dropout=model_config.dropout,
+        num_classes=model_config.num_classes,
     )
     return model
 
@@ -227,12 +230,26 @@ def get_trained_model(
     emb_shape = weights["embed_layer.weight"].shape
     hidden_size = weights["classifier.0.weight"].shape[1] // 2
 
+    # Infer num_classes from the final linear layer output dimension
+    num_classes = weights["classifier.3.weight"].shape[0]
+    if num_classes == 1:
+        raise RuntimeError(
+            "Saved weights are from a binary classification model (num_classes=1). "
+            "3-class migration requires retraining: "
+            "python workflows/driver.py --device cuda --model rnn --type new --save True"
+        )
+
+    # Also check _metadata if available for robust detection
+    if "_metadata" in weights and "num_classes" in weights["_metadata"]:
+        num_classes = weights["_metadata"]["num_classes"]
+
     empty_embeddings = torch.zeros(emb_shape)
     model = RNN(
         emb_weights=empty_embeddings,
         hidden_size=hidden_size,
         num_layers=model_config.num_layers,
         dropout=model_config.dropout,
+        num_classes=num_classes,
     )
 
     try:

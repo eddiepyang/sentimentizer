@@ -428,19 +428,26 @@ The config flows: **`config.py` → `DriverConfig` → `new_model(model_config=.
 
 ## Metrics
 
-All tuning and validation outputs include comprehensive classification metrics via [`sentimentizer/metrics.py`](sentimentizer/metrics.py):
+All tuning and validation outputs include comprehensive 3-class classification metrics via [`sentimentizer/metrics.py`](sentimentizer/metrics.py):
 
 | Metric | Description |
 |--------|-------------|
 | `accuracy` | Overall accuracy (correct / total) |
-| `positive_accuracy` | Accuracy on positive samples only (TP / (TP + FN)) |
-| `negative_accuracy` | Accuracy on negative samples only (TN / (TN + FP)) |
-| `precision` | Positive-class precision (TP / (TP + FP)) |
-| `recall` | Positive-class recall (TP / (TP + FN)) |
-| `f1` | Positive-class F1 score (harmonic mean of precision and recall) |
+| `balanced_accuracy` | Mean of per-class recalls (robust to class imbalance) |
+| `negative_precision` | Precision for the negative class |
+| `negative_recall` | Recall for the negative class |
+| `negative_f1` | F1 score for the negative class |
+| `neutral_precision` | Precision for the neutral class |
+| `neutral_recall` | Recall for the neutral class (critical for minority class detection) |
+| `neutral_f1` | F1 score for the neutral class |
+| `positive_precision` | Precision for the positive class |
+| `positive_recall` | Recall for the positive class |
+| `positive_f1` | F1 score for the positive class |
+| `macro_f1` | Mean of per-class F1 scores (weights classes equally) |
+| `weighted_f1` | Per-class F1 weighted by class frequency |
 | `cohen_kappa` | Cohen's kappa coefficient (agreement beyond chance, -1 to 1) |
-| `auc_roc` | Area under the ROC curve (requires probability scores) |
-| `confusion_matrix` | TP, TN, FP, FN counts |
+| `mcc` | Matthews correlation coefficient (robust to imbalance) |
+| `confusion_matrix` | 3×3 confusion matrix (negative/neutral/positive) |
 
 These metrics are computed in three places:
 
@@ -453,12 +460,12 @@ from sentimentizer.metrics import compute_metrics_from_model, compute_metrics_fr
 
 # From a model and dataloader
 metrics = compute_metrics_from_model(model, val_loader, device="cpu")
-print(f"Accuracy: {metrics.accuracy:.4f}, F1: {metrics.f1:.4f}, Kappa: {metrics.cohen_kappa:.4f}")
+print(f"Accuracy: {metrics.accuracy:.4f}, Macro F1: {metrics.macro_f1:.4f}, Kappa: {metrics.cohen_kappa:.4f}")
 
 # From validation result dicts
 metrics = compute_metrics_from_examples(validation_results)
-print(f"Positive accuracy: {metrics.positive_accuracy:.4f}")
-print(f"Negative accuracy: {metrics.negative_accuracy:.4f}")
+print(f"Neutral recall: {metrics.neutral_recall:.4f}")
+print(f"Positive F1: {metrics.positive_f1:.4f}")
 ```
 
 ## Architecture

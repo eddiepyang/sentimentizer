@@ -38,7 +38,7 @@ def test_load_train_val_corpus_datasets():
         assert isinstance(x, torch.Tensor)
         assert isinstance(y, torch.Tensor)
         assert x.dtype == torch.long
-        assert y.dtype == torch.float32
+        assert y.dtype == torch.long
 
 
 def test_load_train_val_corpus_datasets_balancing():

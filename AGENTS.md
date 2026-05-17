@@ -6,7 +6,24 @@ Sentimentizer is a PyTorch-based sentiment analysis pipeline with three model ar
 
 ## Recent Changes
 
-### torchmetrics Migration (current)
+### 3-Class Classification Migration (current)
+
+**Change**: Migrated from binary classification (negative/positive, BCEWithLogitsLoss) to 3-class classification (negative/neutral/positive, CrossEntropyLoss). All models now output logits of shape `(B, 3)` instead of `(B, 1)`. `predict_text()` returns `dict[str, float]` instead of `float`. Per-class metrics replace single-class metrics throughout the pipeline.
+
+**Key changes**:
+- **Models**: All three models (RNN, Encoder, Decoder) use `num_classes=3` in classifier head, output `(B, 3)` logits, and use `softmax` instead of `sigmoid`
+- **Loss**: `CrossEntropyLoss` with `class_weights` and `label_smoothing=0.1` (or `FocalCrossEntropyLoss` with `loss_type="focal"`)
+- **Config**: `LABEL_NAMES = ["negative", "neutral", "positive"]`, `NUM_CLASSES = 3`, `include_neutral=True`, `TrainerConfig` has `class_weights`, `loss_type`, `focal_gamma`, `label_smoothing`, `weight_smoothing`, `neutral_oversample_ratio`
+- **Tokenizer**: `convert_rating()` maps 1-2★→0, 3★→1, 4-5★→2; `include_neutral=True` keeps 3-star reviews
+- **Metrics**: `ClassificationMetrics` has per-class fields (e.g., `neutral_precision`, `negative_recall`), `balanced_accuracy`, `macro_f1`, `weighted_f1`, `confusion_matrix` (3×3); old binary fields (`tp`, `tn`, `fp`, `fn`, `precision`, `recall`, `f1`, `npv`, `positive_accuracy`, `negative_accuracy`, `auc_roc`, `avg_precision`) removed
+- **Prometheus gauges**: Per-class names (e.g., `TRAINING_VAL_NEUTRAL_F1`) replace binary names (e.g., `TRAINING_VAL_F1`)
+- **Serving**: `_predict_sentiment()` returns `{"model": ..., "label": ..., "scores": {...}}` instead of `{"sentiment_score": float, "label": ...}`
+- **Training pipeline**: `compute_class_weights()` replaces `compute_pos_weight()`; `_balance_dataframe()` / `_balance_ray_dataset()` handle multi-class targets
+- **ONNX**: Metadata JSON includes `num_classes` and `label_names`
+
+**Key files changed**: `config.py`, `tokenizer.py`, `loader.py`, `metrics.py`, `metrics_publisher.py`, `exporter.py`, `trainer.py`, `models/{base,rnn,encoder,decoder}.py`, `losses.py`, `serve.py`, `tuner.py`, `agent/skill.py`, `hf.py`, `export_onnx.py`, `workflows/{cli,stages/train,stages/tune}.py`, `scripts/generate_ray_dashboards.py`
+
+### torchmetrics Migration
 
 **Change**: Replaced custom `_cohen_kappa()`, `_auc_roc()`, and `_auc_roc_manual()` implementations with `torchmetrics` library (`BinaryPrecision`, `BinaryRecall`, `BinaryF1Score`, `BinaryCohenKappa`, `BinaryAUROC`, `BinaryMatthewsCorrCoef`, `BinaryNegativePredictiveValue`, `BinaryAveragePrecision`). This eliminates ~200 lines of hand-rolled metric math and the `sklearn.metrics.roc_auc_score` conditional import.
 
@@ -22,9 +39,9 @@ Sentimentizer is a PyTorch-based sentiment analysis pipeline with three model ar
 - **Empty arrays**: Guard clause returns `ClassificationMetrics(total=0)` before calling torchmetrics (which would crash on empty input).
 
 **Key files changed**:
-- `sentimentizer/metrics.py` — rewrote with torchmetrics `Binary*` classes; added `_to_long_tensor`, `_to_float_tensor`, `_replace_nan_probs`, `_safe_item` helpers; added `mcc`, `npv`, `avg_precision` fields to `ClassificationMetrics`
-- `sentimentizer/trainer.py` — added MCC/NPV/avg_precision gauges, JSON persistence, and logger fields
-- `sentimentizer/exporter.py` — added `TRAINING_VAL_MCC`, `TRAINING_VAL_NPV`, `TRAINING_VAL_AVG_PRECISION` gauges and JSON reading
+- `sentimentizer/metrics.py` — rewrote with torchmetrics `Multiclass*` classes; added `_to_long_tensor`, `_to_float_tensor`, `_replace_nan_probs`, `_safe_item` helpers; added per-class precision/recall/F1, `balanced_accuracy`, `macro_f1`, `weighted_f1`, `mcc`, per-class `auc_roc`/`avg_precision`, confusion matrix 3×3
+- `sentimentizer/trainer.py` — added per-class gauges, JSON persistence, and logger fields
+- `sentimentizer/exporter.py` — added per-class `TRAINING_VAL_*` gauges (negative/neutral/positive precision, recall, F1), `TRAINING_VAL_BALANCED_ACCURACY`, `TRAINING_VAL_MACRO_F1`, `TRAINING_VAL_WEIGHTED_F1`, `TRAINING_VAL_MCC`, `TRAINING_VAL_NEUTRAL_AUC_ROC`, `TRAINING_VAL_NEUTRAL_AVG_PRECISION`, neutral diagnostic gauges
 - `workflows/stages/train.py` — updated `_reset_stale_metrics()` and `_persist_metrics_to_file()` for new metrics
 - `tests/test_metrics.py` — updated for torchmetrics; added `TestHelperFunctions` class; updated `TestCohenKappa.test_single_class_returns_zero`
 - `tests/test_rnn.py` — updated mock_gauges dicts with new keys
@@ -55,9 +72,9 @@ Sentimentizer is a PyTorch-based sentiment analysis pipeline with three model ar
 
 **Solution**: Switched from a single shared JSON file (`/tmp/sentimentizer_training_metrics.json`) to per-model-type JSON files (`/tmp/sentimentizer_metrics/{model_type}_metrics.json`). Each model type writes to its own file, so concurrent training processes never race. The standalone exporter discovers all three files and zeroes gauges for any model type whose file is missing or stale. Added `_written_by` and `_written_at` trace fields to every write, and `_trace.reset_by` / `_trace.reset_at` to reset files, so debugging future issues is trivial: just `cat` the file to see which model_type wrote it and when.
 
-**Important**: `_reset_stale_metrics(model_type)` zeroes **all three** model types (rnn, encoder, decoder), not just the current one, because starting a new training run makes all previous metrics stale — regardless of which model produced them. Otherwise old RNN metrics linger on the dashboard when training encoder.
+**Important**: `_reset_stale_metrics(model_type)` writes zeroed-out JSON files for **all three** model types (rnn, encoder, decoder) so the standalone exporter can clear stale values, but only resets **Prometheus gauges for the current model type**. Other model types' gauges retain their last real values — the exporter skips `_reset: true` files so untrained models don't show `epoch=0` on the dashboard. Each zeroed-out file includes `_reset: true` and `_trace.reset_by` to distinguish stale resets from real training data.
 
-**Tests**: `TestResetStaleMetrics` in `tests/test_training.py` (6 tests covering JSON file cleanup for all model types, stale cross-model-type data overwrite, missing/corrupt files, Prometheus gauge reset for all model types, and Ray gauge cache invalidation).
+**Tests**: `TestResetStaleMetrics` in `tests/test_training.py` (6 tests covering JSON file cleanup for all model types, stale cross-model-type data overwrite, missing/corrupt files, Prometheus gauge reset for current model type only, and Ray gauge cache invalidation).
 
 **Key files changed**:
 - `workflows/stages/train.py` — added `_reset_stale_metrics()` function and call in `run_train()`
@@ -165,30 +182,42 @@ Grafana only reads provisioned dashboard files on **startup**, so a restart is r
 
 1. Add gauge definition in `sentimentizer/exporter.py` (with `model_type` label)
 2. Add gauge in `_get_ray_gauges()` in `sentimentizer/trainer.py`
-3. Set gauge in `Trainer.evaluate()`, `_train_func()`, and `_publish_distributed_metrics()`
-4. Add to `_reset_stale_metrics()` in `workflows/stages/train.py` (reset to 0)
-5. Add to `_persist_metrics_to_file()` and `_update_training_metrics()` in exporter
-6. Add to dashboard in `scripts/generate_ray_dashboards.py`
+3. Add to `_METRIC_GAUGE_KEYS` in `sentimentizer/metrics_publisher.py`
+4. Set gauge in `Trainer.evaluate()`, `_train_func()`, and via `publish_epoch_metrics()`
+5. Add to `_reset_stale_metrics()` in `workflows/stages/train.py` (reset to 0)
+6. Add to `_persist_metrics_to_file()` and `_update_training_metrics()` in exporter
+7. Add to dashboard in `scripts/generate_ray_dashboards.py`
 
 ## Important Conventions
 
-- `_reset_stale_metrics(model_type)` is called at training start to prevent stale cross-model-type metrics
-- Ray 2.55.1 API: use `Checkpoint.from_directory()`, `train.get_dataset_shard()` (not `get_context().get_dataset_shard()`)
-- `prometheus_client` gauges must NOT be created at module import time for Ray workers — use lazy init via `_get_ray_gauges()`
-- `ray.init(ignore_reinit_error=True)` in tests; `ray.shutdown()` in cleanup
+- **3-class classification**: Models output logits of shape `(B, 3)` with label mapping: 0=negative, 1=neutral, 2=positive. `LABEL_NAMES = ["negative", "neutral", "positive"]` is the single source of truth in `config.py` — import it, don't duplicate.
+- **Loss function**: `CrossEntropyLoss` (not `BCEWithLogitsLoss`). Target dtype is `torch.long` (not `torch.float32`). `FocalCrossEntropyLoss` in `sentimentizer/losses.py` for hard-example mining.
+- **`predict_text()` returns `dict[str, float]`**: e.g., `{"negative": 0.05, "neutral": 0.12, "positive": 0.83}`. Never call `.item()` on it — use `max(scores, key=scores.get)` for the predicted label.
+- **`forward()` output shape**: Always `(B, num_classes)`, never squeeze. Batch-of-1 returns `(1, 3)`, not `(3,)`.
+- **`predict()` output**: `torch.softmax(logits, dim=-1)` returns `(B, num_classes)` probability matrix.
+- **`compute_class_weights()`** replaces `compute_pos_weight()`. The old function raises `ValueError` if `num_classes > 2`.
+- **`_replace_nan_probs()`**: Accepts `(N, num_classes)` shape. NaN values replaced with `1/num_classes`. Rows with partial NaN are re-normalized to sum to 1.0.
+- **`ClassificationMetrics`**: 3-class dataclass with per-class fields (`negative_precision`, `neutral_recall`, etc.), `balanced_accuracy`, `macro_f1`, `weighted_f1`, `confusion_matrix` (3×3), `neutral_to_positive_rate`, `neutral_to_negative_rate`, `pred_neutral_frac`. Old binary fields (`tp`, `tn`, `fp`, `fn`, `precision`, `recall`, `f1`, `npv`, `positive_accuracy`, `negative_accuracy`, `auc_roc`, `avg_precision`) no longer exist.
+- **Prometheus gauges**: Per-class names (e.g., `TRAINING_VAL_NEUTRAL_F1`, `TRAINING_VAL_NEGATIVE_PRECISION`), not binary names. Ray gauge dict keys match `_METRIC_GAUGE_KEYS` in `metrics_publisher.py`.
+- **`_reset_stale_metrics(model_type)`** is called at training start to prevent stale cross-model-type metrics. Writes `_reset: true` flag in zeroed-out JSON files.
+- **Ray 2.55.1 API**: use `Checkpoint.from_directory()`, `train.get_dataset_shard()` (not `get_context().get_dataset_shard()`)
+- **`prometheus_client` gauges** must NOT be created at module import time for Ray workers — use lazy init via `_get_ray_gauges()`
+- **`ray.init(ignore_reinit_error=True)`** in tests; `ray.shutdown()` in cleanup
 - All function signatures need type hints
 - **Always run lint before tests after code changes**: `make test-lint` (runs `ruff check .` then `pytest`). Alternatively, run `make lint` first, fix any findings, then `make test`. Never skip lint — it catches issues that tests won't.
 - When iterating over DataFrame or batch columns containing token lists, use `list(doc_tokens)` with a `TypeError` catch — never `str(doc_tokens)`. Numpy arrays from parquet are iterable but not `isinstance(x, list)`, and `str()` produces array representations with wrapping quotes
 - Scheduler `T_max` must match `default_epochs()` for the model type — otherwise LR decays to minimum before training finishes
 - _LinearWarmupCosineScheduler warmup must use `(step + 1) / warmup_steps` to avoid zero LR at step 0
-- PyTorch CUDA torch is installed by default via `make setup` (resolves from PyPI). For CI environments without GPU, use `make setup-ci` to install the CPU-only variant from the PyTorch wheel index. `resolve_device("auto")` warns when torch is CPU-only (`+cpu` suffix) but NVIDIA libraries are installed — this indicates a misconfigured environment where `torch.cuda.is_available()` returns `False` despite hardware being present.
-- `resolve_device("auto")` warns when torch is CPU-only (`+cpu` suffix) but NVIDIA libraries are installed — this indicates a misconfigured environment where `torch.cuda.is_available()` returns `False` despite hardware being present.
-- `_load_model()` is only called in the single-node path. Distributed training (`_run_fit_distributed`) does NOT load the model in the driver process — Ray workers create their own model via `_train_func`. Loading the model in the driver would waste GPU memory for `run_type="update"`.
-- `torchmetrics.BinaryAUROC` silently gives wrong results with NaN input — always call `_replace_nan_probs()` before passing probabilities to it
-- `torchmetrics.BinaryCohenKappa` returns `nan` for single-class targets — always wrap with `_safe_item()` to coerce `nan→0.0` for Prometheus gauge compatibility
+- **Target dtype is `torch.long`** for `CrossEntropyLoss` — never `.float()` on targets. This applies to both DataLoader and Ray paths. The bug was that three `.float()` casts existed in the Ray distributed path — all are now `.long()`.
+- **`_load_model()`** is only called in the single-node path. Distributed training (`_run_fit_distributed`) does NOT load the model in the driver process — Ray workers create their own model via `_train_func`.
+- **`torchmetrics.MulticlassAUROC`** silently gives wrong results with NaN input — always call `_replace_nan_probs()` before passing probabilities to it
+- **`torchmetrics.MulticlassCohenKappa`** returns `nan` for single-class targets — always wrap with `_safe_item()` to coerce `nan→0.0` for Prometheus gauge compatibility
 - Single-class Cohen's kappa is `0.0` (not `1.0`) — this is a behavioral change from the previous custom implementation
 - Empty arrays must be guarded before calling torchmetrics (it crashes on empty input) — use the `if total == 0` early return in `compute_classification_metrics()`
-- **`predict_text(text, tokenizer)` is the preferred way to do single-text inference** — it combines tokenization and model prediction into one call, returning a `float` score. Use `predict(np.ndarray)` only when you already have tokenized input (e.g., batch processing). Never call `tokenizer.tokenize_text()` → `model.predict()` → `.item()` manually when `predict_text()` would suffice — the combined method ensures `torch.no_grad()` and `model.eval()` are always applied correctly.
+- **`_balance_dataframe()`** and **`_balance_ray_dataset()`** handle multi-class targets (0, 1, 2), not just binary (0.0, 1.0)
+- **`weight_smoothing`** parameter (default `0.5`) controls class weight aggressiveness in `compute_class_weights()`: `1.0` = full inverse frequency, `0.0` = uniform weights
+- **`label_smoothing`** default is `0.1` for 3-class `CrossEntropyLoss`
+- **`neutral_oversample_ratio`** (default `0.0`) targets a moderate neutral class ratio; `0.20` = oversample neutral to 20% of training data
 
 ### ONNX Export
 

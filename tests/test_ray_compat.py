@@ -322,7 +322,7 @@ class TestTrainLoopConfigKeys:
             "embeddings_model_name",
             "embeddings_emb_length",
             "input_len",
-            "pos_weight",
+            "loss_type",
         }
 
         # Keys that _train_func reads (must be a subset of setter_keys)
@@ -341,12 +341,12 @@ class TestTrainLoopConfigKeys:
             "embeddings_model_name",
             "embeddings_emb_length",
             "input_len",
-            "pos_weight",
+            "loss_type",
         }
 
-        assert reader_keys.issubset(setter_keys), (
-            f"_train_func reads keys not set by new_ray_trainer: " f"{reader_keys - setter_keys}"
-        )
+        assert reader_keys.issubset(
+            setter_keys
+        ), f"_train_func reads keys not set by new_ray_trainer: {reader_keys - setter_keys}"
 
     def test_no_legacy_embedding_keys_in_config(self) -> None:
         """Config dicts must not contain 'embeddings_file_path' or 'embeddings_sub_file_path'."""
@@ -569,6 +569,6 @@ class TestTuneCallbackAPI:
             "Use: best_metrics = best_result.metrics or {}"
         )
         # trial_result.metrics should also be guarded
-        assert "trial_result.metrics or {}" in source, (
-            "trial_result.metrics can be None in Ray 2.55+. " "Use: trial_result.metrics or {}"
-        )
+        assert (
+            "trial_result.metrics or {}" in source
+        ), "trial_result.metrics can be None in Ray 2.55+. Use: trial_result.metrics or {}"

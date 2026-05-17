@@ -15,8 +15,8 @@ metrics, and an optional trained model saved to disk.
 
 The skill also includes model validation: after tuning, it trains a final
 model with the best config and validates predictions against known
-sentiment examples. If the model doesn't meet quality criteria, it can
-re-tune with adjusted parameters.
+sentiment examples (negative, neutral, positive). If the model doesn't
+meet quality criteria, it can re-tune with adjusted parameters.
 
 Usage::
 
@@ -26,7 +26,7 @@ Usage::
     run = TuningRun(config)
     result = run.execute()
     print(f"Best accuracy: {result.best_accuracy:.4f}")
-    print(f"Best config: {result.best_config}")
+    print(f"Best macro F1: {result.best_macro_f1:.4f}")
     print(f"Validation passed: {result.validation_passed}")
 """
 
@@ -60,10 +60,6 @@ logger = new_logger(DEFAULT_LOG_LEVEL)
 # Known sentiment examples for validation
 # ---------------------------------------------------------------------------
 
-# These are used to verify the model produces sensible predictions.
-# Each example has text and the expected sentiment direction:
-#   positive → expect score > 0.5
-#   negative → expect score < 0.5
 KNOWN_SENTIMENT_EXAMPLES: list[dict[str, Any]] = [
     {"text": "amazing food great service", "expected": "positive"},
     {"text": "terrible experience worst ever", "expected": "negative"},
@@ -73,6 +69,9 @@ KNOWN_SENTIMENT_EXAMPLES: list[dict[str, Any]] = [
     {"text": "best restaurant in town", "expected": "positive"},
     {"text": "would not recommend", "expected": "negative"},
     {"text": "fantastic place", "expected": "positive"},
+    {"text": "it was okay", "expected": "neutral"},
+    {"text": "average experience", "expected": "neutral"},
+    {"text": "nothing special", "expected": "neutral"},
 ]
 
 
@@ -101,6 +100,14 @@ class TuningRunConfig:
         validate_predictions: Whether to validate model predictions after training.
         validation_threshold: Minimum fraction of correct predictions to pass.
         max_retries: Maximum number of re-tuning attempts if validation fails.
+        weight_smoothing: Inverse-frequency exponent for class weights
+            (1.0=full, 0.5=sqrt, 0.0=uniform).
+        loss_type: Loss function type ('cross_entropy' or 'focal').
+        focal_gamma: Focal loss focusing parameter (loss_type='focal' only).
+        label_smoothing: Softens hard targets, reduces overconfident predictions.
+        neutral_oversample_ratio: 0.0=disabled, 0.20=neutral to 20% of data.
+        balance_strategy: Strategy for handling class imbalance
+            ('class_weights_only', 'undersample', 'oversample').
         push_to_hub: Whether to push model weights, dictionary, and model card
             to Hugging Face Hub after successful validation.
     """
@@ -122,7 +129,12 @@ class TuningRunConfig:
     max_retries: int = 2
     balance_classes: bool = False
     balance_seed: int = 42
-    pos_weight: float = 1.0
+    weight_smoothing: float = 0.5
+    loss_type: str = "cross_entropy"
+    focal_gamma: float = 2.0
+    label_smoothing: float = 0.1
+    neutral_oversample_ratio: float = 0.0
+    balance_strategy: str = "class_weights_only"
     push_to_hub: bool = False
 
 
@@ -139,12 +151,20 @@ class TuningRunResult:
         best_config: Best hyperparameter configuration found.
         best_accuracy: Best validation accuracy achieved.
         best_loss: Best validation loss achieved.
-        best_precision: Best positive-class precision achieved.
-        best_recall: Best positive-class recall achieved.
-        best_f1: Best positive-class F1 score achieved.
+        best_balanced_accuracy: Best balanced accuracy (mean of per-class recalls).
+        best_negative_precision: Best precision for the negative class.
+        best_negative_recall: Best recall for the negative class.
+        best_negative_f1: Best F1 score for the negative class.
+        best_neutral_precision: Best precision for the neutral class.
+        best_neutral_recall: Best recall for the neutral class.
+        best_neutral_f1: Best F1 score for the neutral class.
+        best_positive_precision: Best precision for the positive class.
+        best_positive_recall: Best recall for the positive class.
+        best_positive_f1: Best F1 score for the positive class.
+        best_macro_f1: Best macro-averaged F1 (mean of per-class F1).
+        best_weighted_f1: Best weighted-averaged F1 (weighted by class frequency).
         best_cohen_kappa: Best Cohen's kappa coefficient achieved.
-        best_positive_accuracy: Best accuracy on positive samples.
-        best_negative_accuracy: Best accuracy on negative samples.
+        best_mcc: Best Matthews correlation coefficient achieved.
         iterations_completed: Number of tuning iterations completed.
         converged: Whether the agent converged before max iterations.
         history: List of TuningResult dicts from each iteration.
@@ -160,12 +180,20 @@ class TuningRunResult:
     best_config: dict[str, Any] = field(default_factory=dict)
     best_accuracy: float = 0.0
     best_loss: float = float("inf")
-    best_precision: float = 0.0
-    best_recall: float = 0.0
-    best_f1: float = 0.0
+    best_balanced_accuracy: float = 0.0
+    best_negative_precision: float = 0.0
+    best_negative_recall: float = 0.0
+    best_negative_f1: float = 0.0
+    best_neutral_precision: float = 0.0
+    best_neutral_recall: float = 0.0
+    best_neutral_f1: float = 0.0
+    best_positive_precision: float = 0.0
+    best_positive_recall: float = 0.0
+    best_positive_f1: float = 0.0
+    best_macro_f1: float = 0.0
+    best_weighted_f1: float = 0.0
     best_cohen_kappa: float = 0.0
-    best_positive_accuracy: float = 0.0
-    best_negative_accuracy: float = 0.0
+    best_mcc: float = 0.0
     iterations_completed: int = 0
     converged: bool = False
     history: list[dict[str, Any]] = field(default_factory=list)
@@ -334,10 +362,12 @@ class TuningRun:
             "tuning_run_complete",
             best_accuracy=result.best_accuracy,
             best_loss=result.best_loss,
-            best_f1=result.best_f1,
+            best_macro_f1=result.best_macro_f1,
             best_cohen_kappa=result.best_cohen_kappa,
-            best_positive_accuracy=result.best_positive_accuracy,
-            best_negative_accuracy=result.best_negative_accuracy,
+            best_mcc=result.best_mcc,
+            best_balanced_accuracy=result.best_balanced_accuracy,
+            best_positive_f1=result.best_positive_f1,
+            best_negative_f1=result.best_negative_f1,
             iterations=result.iterations_completed,
             converged=result.converged,
             validation_passed=result.validation_passed,
@@ -363,12 +393,20 @@ class TuningRun:
         tuning_result_dict = {
             "best_accuracy": result.best_accuracy,
             "best_loss": result.best_loss,
-            "best_precision": result.best_precision,
-            "best_recall": result.best_recall,
-            "best_f1": result.best_f1,
+            "best_balanced_accuracy": result.best_balanced_accuracy,
+            "best_negative_precision": result.best_negative_precision,
+            "best_negative_recall": result.best_negative_recall,
+            "best_negative_f1": result.best_negative_f1,
+            "best_neutral_precision": result.best_neutral_precision,
+            "best_neutral_recall": result.best_neutral_recall,
+            "best_neutral_f1": result.best_neutral_f1,
+            "best_positive_precision": result.best_positive_precision,
+            "best_positive_recall": result.best_positive_recall,
+            "best_positive_f1": result.best_positive_f1,
+            "best_macro_f1": result.best_macro_f1,
+            "best_weighted_f1": result.best_weighted_f1,
             "best_cohen_kappa": result.best_cohen_kappa,
-            "best_positive_accuracy": result.best_positive_accuracy,
-            "best_negative_accuracy": result.best_negative_accuracy,
+            "best_mcc": result.best_mcc,
             "best_config": result.best_config,
             "validation_passed": result.validation_passed,
             "mode": self.config.mode,
@@ -470,7 +508,10 @@ class TuningRun:
             config_path=self.config.config_path,
             balance_classes=self.config.balance_classes,
             balance_seed=self.config.balance_seed,
-            pos_weight=self.config.pos_weight,
+            weight_smoothing=self.config.weight_smoothing,
+            loss_type=self.config.loss_type,
+            focal_gamma=self.config.focal_gamma,
+            label_smoothing=self.config.label_smoothing,
         )
 
         tuning_result = TuningResult(
@@ -485,12 +526,20 @@ class TuningRun:
             best_config=result["best_config"],
             best_accuracy=result["best_accuracy"],
             best_loss=result["best_loss"],
-            best_precision=result.get("best_precision", 0.0),
-            best_recall=result.get("best_recall", 0.0),
-            best_f1=result.get("best_f1", 0.0),
+            best_balanced_accuracy=result.get("best_balanced_accuracy", 0.0),
+            best_negative_precision=result.get("best_negative_precision", 0.0),
+            best_negative_recall=result.get("best_negative_recall", 0.0),
+            best_negative_f1=result.get("best_negative_f1", 0.0),
+            best_neutral_precision=result.get("best_neutral_precision", 0.0),
+            best_neutral_recall=result.get("best_neutral_recall", 0.0),
+            best_neutral_f1=result.get("best_neutral_f1", 0.0),
+            best_positive_precision=result.get("best_positive_precision", 0.0),
+            best_positive_recall=result.get("best_positive_recall", 0.0),
+            best_positive_f1=result.get("best_positive_f1", 0.0),
+            best_macro_f1=result.get("best_macro_f1", 0.0),
+            best_weighted_f1=result.get("best_weighted_f1", 0.0),
             best_cohen_kappa=result.get("best_cohen_kappa", 0.0),
-            best_positive_accuracy=result.get("best_positive_accuracy", 0.0),
-            best_negative_accuracy=result.get("best_negative_accuracy", 0.0),
+            best_mcc=result.get("best_mcc", 0.0),
             iterations_completed=1,
             converged=True,  # single run is always "converged"
             history=[tuning_result.model_dump()],
@@ -546,7 +595,12 @@ class TuningRun:
             checkpoint_dir=str(self._output_dir / "checkpoints"),
             checkpoint_every=1,
             checkpoint_best=True,
-            pos_weight=self.config.pos_weight,
+            weight_smoothing=self.config.weight_smoothing,
+            loss_type=self.config.loss_type,
+            focal_gamma=self.config.focal_gamma,
+            label_smoothing=self.config.label_smoothing,
+            neutral_oversample_ratio=self.config.neutral_oversample_ratio,
+            balance_strategy=self.config.balance_strategy,
         )
 
         trainer = new_trainer(
@@ -580,13 +634,12 @@ class TuningRun:
         """Validate model predictions against known sentiment examples.
 
         Loads the trained model and tests it against a set of known
-        positive and negative phrases. A prediction is correct if:
-        - For positive text: model output > 0.5
-        - For negative text: model output < 0.5
+        negative, neutral, and positive phrases. A prediction is correct
+        if the highest-probability class label matches the expected label.
 
         Also computes comprehensive classification metrics including
-        per-class accuracy, precision/recall/F1, Cohen's kappa, and
-        AUC-ROC.
+        per-class precision/recall/F1, macro/weighted F1, Cohen's kappa,
+        MCC, balanced accuracy, and per-class AUC-ROC.
 
         Before validation, runs diagnostic checks to detect common
         training issues like dictionary misalignment. If diagnostics
@@ -652,11 +705,12 @@ class TuningRun:
             text = example["text"]
             expected = example["expected"]
 
-            # Tokenize and predict in one call
-            score = model.predict_text(text, tokenizer)
+            # predict_text returns dict like {"negative": 0.05, "neutral": 0.12, "positive": 0.83}
+            scores: dict[str, float] = model.predict_text(text, tokenizer)
 
-            # Determine if prediction is correct
-            is_correct = score > 0.5 if expected == "positive" else score < 0.5
+            # Determine if prediction is correct: highest-probability class matches expected label
+            predicted_label = max(scores, key=scores.get)  # type: ignore[arg-type]
+            is_correct = predicted_label == expected
 
             if is_correct:
                 correct += 1
@@ -665,7 +719,8 @@ class TuningRun:
                 {
                     "text": text,
                     "expected": expected,
-                    "score": round(score, 4),
+                    "scores": {k: round(v, 4) for k, v in scores.items()},
+                    "predicted": predicted_label,
                     "correct": is_correct,
                 }
             )
@@ -674,7 +729,8 @@ class TuningRun:
                 "validation_example",
                 text=text,
                 expected=expected,
-                score=round(score, 4),
+                predicted=predicted_label,
+                scores={k: round(v, 4) for k, v in scores.items()},
                 correct=is_correct,
             )
 
@@ -691,10 +747,13 @@ class TuningRun:
             total=len(KNOWN_SENTIMENT_EXAMPLES),
             accuracy=round(accuracy, 4),
             passed=passed,
-            f1=metrics_obj.f1,
+            balanced_accuracy=metrics_obj.balanced_accuracy,
+            macro_f1=metrics_obj.macro_f1,
             cohen_kappa=metrics_obj.cohen_kappa,
-            positive_accuracy=metrics_obj.positive_accuracy,
-            negative_accuracy=metrics_obj.negative_accuracy,
+            mcc=metrics_obj.mcc,
+            positive_f1=metrics_obj.positive_f1,
+            negative_f1=metrics_obj.negative_f1,
+            neutral_f1=metrics_obj.neutral_f1,
         )
 
         return passed, results, metrics_dict
@@ -722,12 +781,20 @@ class TuningRun:
             "best_config": result.best_config,
             "best_accuracy": result.best_accuracy,
             "best_loss": result.best_loss,
-            "best_precision": result.best_precision,
-            "best_recall": result.best_recall,
-            "best_f1": result.best_f1,
+            "best_balanced_accuracy": result.best_balanced_accuracy,
+            "best_negative_precision": result.best_negative_precision,
+            "best_negative_recall": result.best_negative_recall,
+            "best_negative_f1": result.best_negative_f1,
+            "best_neutral_precision": result.best_neutral_precision,
+            "best_neutral_recall": result.best_neutral_recall,
+            "best_neutral_f1": result.best_neutral_f1,
+            "best_positive_precision": result.best_positive_precision,
+            "best_positive_recall": result.best_positive_recall,
+            "best_positive_f1": result.best_positive_f1,
+            "best_macro_f1": result.best_macro_f1,
+            "best_weighted_f1": result.best_weighted_f1,
             "best_cohen_kappa": result.best_cohen_kappa,
-            "best_positive_accuracy": result.best_positive_accuracy,
-            "best_negative_accuracy": result.best_negative_accuracy,
+            "best_mcc": result.best_mcc,
             "iterations_completed": result.iterations_completed,
             "converged": result.converged,
             "history": result.history,
@@ -997,27 +1064,31 @@ def diagnose_training_issues(model_type: str = "") -> dict[str, Any]:
                 target_counts = processed_df["target"].value_counts().to_dict()
                 balance_check["target_counts"] = {str(k): int(v) for k, v in target_counts.items()}
 
-                pos_count = target_counts.get(1.0, target_counts.get(1, 0))
                 neg_count = target_counts.get(0.0, target_counts.get(0, 0))
-                total = pos_count + neg_count
+                neu_count = target_counts.get(1.0, target_counts.get(1, 0))
+                pos_count = target_counts.get(2.0, target_counts.get(2, 0))
+                total = neg_count + neu_count + pos_count
 
                 if total > 0:
-                    pos_ratio = pos_count / total
-                    balance_check["positive_ratio"] = round(pos_ratio, 4)
-                    balance_check["negative_ratio"] = round(1 - pos_ratio, 4)
-                    balance_check["imbalance_ratio"] = (
-                        round(max(pos_count, neg_count) / min(pos_count, neg_count), 2)
-                        if min(pos_count, neg_count) > 0
-                        else float("inf")
-                    )
+                    balance_check["negative_count"] = neg_count
+                    balance_check["neutral_count"] = neu_count
+                    balance_check["positive_count"] = pos_count
+                    balance_check["negative_ratio"] = round(neg_count / total, 4)
+                    balance_check["neutral_ratio"] = round(neu_count / total, 4)
+                    balance_check["positive_ratio"] = round(pos_count / total, 4)
+                    counts = [c for c in [neg_count, neu_count, pos_count] if c > 0]
+                    if len(counts) >= 2:
+                        balance_check["imbalance_ratio"] = round(max(counts) / min(counts), 2)
+                    else:
+                        balance_check["imbalance_ratio"] = float("inf")
 
                     if balance_check["imbalance_ratio"] > 3:
                         warnings.append(
-                            f"Severe class imbalance: positive={pos_count}, "
-                            f"negative={neg_count}, ratio="
-                            f"{balance_check['imbalance_ratio']}:1. "
+                            f"Severe class imbalance: negative={neg_count}, "
+                            f"neutral={neu_count}, positive={pos_count}, "
+                            f"ratio={balance_check['imbalance_ratio']}:1. "
                             f"Consider enabling class balancing or adjusting "
-                            f"pos_weight."
+                            f"class_weights."
                         )
 
                 balance_check["passed"] = True
@@ -1262,6 +1333,12 @@ def create_tuning_run(
     max_retries: int = 2,
     balance_classes: bool = False,
     balance_seed: int = 42,
+    weight_smoothing: float = 0.5,
+    loss_type: str = "cross_entropy",
+    focal_gamma: float = 2.0,
+    label_smoothing: float = 0.1,
+    neutral_oversample_ratio: float = 0.0,
+    balance_strategy: str = "class_weights_only",
     push_to_hub: bool = False,
 ) -> TuningRunResult:
     """Create and execute a tuning run with sensible defaults.
@@ -1288,6 +1365,9 @@ def create_tuning_run(
         max_retries: Max re-tuning attempts if validation fails.
         balance_classes: Whether to balance classes by undersampling (default: False).
         balance_seed: Random seed for class balancing (default: 42).
+        weight_smoothing: Inverse-frequency exponent for class weights (default: 0.5).
+        loss_type: Loss function type ('cross_entropy' or 'focal', default: 'cross_entropy').
+        balance_strategy: Strategy for class imbalance (default: 'class_weights_only').
         push_to_hub: Whether to push model to Hugging Face Hub after validation (default: False).
 
     Returns:
@@ -1318,6 +1398,12 @@ def create_tuning_run(
         max_retries=max_retries,
         balance_classes=balance_classes,
         balance_seed=balance_seed,
+        weight_smoothing=weight_smoothing,
+        loss_type=loss_type,
+        focal_gamma=focal_gamma,
+        label_smoothing=label_smoothing,
+        neutral_oversample_ratio=neutral_oversample_ratio,
+        balance_strategy=balance_strategy,
         push_to_hub=push_to_hub,
     )
     run = TuningRun(config)

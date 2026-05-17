@@ -30,26 +30,28 @@ TokenizerType = TypeVar("TokenizerType", bound="Tokenizer")
 pattern = re.compile(r"[a-z0-9'-]+")
 
 
-def convert_rating(rating: int) -> float:
-    """Scale a single star rating to binary label.
+def convert_rating(rating: int) -> int:
+    """Scale a single star rating to a class index.
 
+    3-class mapping: 1-2★ → 0 (negative), 3★ → 1 (neutral), 4-5★ → 2 (positive).
     Used for single-item inference (tokenize_text). For batch processing,
     prefer vectorized_convert_ratings() instead.
     """
-    if rating in [4, 5]:
-        return 1.0
-    elif rating in [1, 2]:
-        return 0.0
+    if rating >= 4:
+        return 2  # positive
+    elif rating == 3:
+        return 1  # neutral
     else:
-        return 0.5
+        return 0  # negative
 
 
 def vectorized_convert_ratings(stars: np.ndarray) -> np.ndarray:
     """Vectorized star-to-label conversion using NumPy.
 
+    3-class mapping: 1-2★ → 0, 3★ → 1, 4-5★ → 2.
     ~100x faster than applying convert_rating() per element.
     """
-    return np.where(stars >= 4, 1.0, np.where(stars <= 2, 0.0, 0.5))
+    return np.select([stars <= 2, stars == 3, stars >= 4], [0, 1, 2]).astype(np.int64)
 
 
 def text_sequencer(
@@ -184,7 +186,7 @@ class Tokenizer:
         if cfg.save_dictionary:
             dictionary.save(str(FileConfig.dictionary_file_path))
 
-        logger.info(f"dictionary created: {len(dictionary)} terms, " f"{total_num_docs} documents")
+        logger.info(f"dictionary created: {len(dictionary)} terms, {total_num_docs} documents")
         return cls(dictionary=dictionary, cfg=cfg)
 
     @classmethod
@@ -206,8 +208,11 @@ class Tokenizer:
         dictionary = self.dictionary
         cfg = self.cfg
 
-        # Step 1: Drop neutral (3-star) reviews — use expression-based filter
-        filtered = data_source.filter(col=cfg.label_col, op="ne", value=3)
+        # Step 1: Conditionally drop neutral (3-star) reviews
+        if not cfg.include_neutral:
+            filtered = data_source.filter(col=cfg.label_col, op="ne", value=3)
+        else:
+            filtered = data_source  # keep all reviews including 3-star
 
         # Step 2: Map batches to convert text to sequences
         def transform_batch(batch: dict) -> dict:
@@ -278,7 +283,8 @@ class Tokenizer:
 
         cfg = self.cfg
         data = data.copy()
-        data = data[data[cfg.label_col] != 3].copy()
+        if not cfg.include_neutral:
+            data = data[data[cfg.label_col] != 3].copy()
         data[cfg.inputs] = data[cfg.text_col].map(
             lambda text: text_sequencer(self.dictionary, text, cfg.max_len)
         )
@@ -354,8 +360,9 @@ class Tokenizer:
         dictionary = self.dictionary
         cfg = self.cfg
 
-        # Drop neutral (3-star) reviews for strict binary classification
-        ds = ds.filter(lambda row: row[cfg.label_col] != 3)
+        # Conditionally drop neutral (3-star) reviews
+        if not cfg.include_neutral:
+            ds = ds.filter(lambda row: row[cfg.label_col] != 3)
 
         def transform_batch(batch: dict) -> dict:
             inputs = []
@@ -465,8 +472,7 @@ def _build_dictionary_distributed(ds: ray.data.Dataset, cfg: TokenizerConfig) ->
     # Required for embedding matrix row alignment (row k = token ID k-1).
     dictionary.compactify()
     logger.info(
-        f"dictionary created via Map-Reduce: {len(dictionary)} terms, "
-        f"{total_num_docs} documents"
+        f"dictionary created via Map-Reduce: {len(dictionary)} terms, {total_num_docs} documents"
     )
 
     return dictionary

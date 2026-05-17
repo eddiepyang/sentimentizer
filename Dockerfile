@@ -26,16 +26,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
+# Create non-root user for security (K8s runAsNonRoot compliance)
+RUN useradd -r -s /bin/false -d /app sentimentizer \
+    && chown -R sentimentizer:sentimentizer /app
+
 # Copy installed packages and app from builder
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY --from=builder /app /app
 
+USER sentimentizer
+
 # Ray Serve default port
 EXPOSE 8000
 # Ray dashboard (optional)
 EXPOSE 8265
-
-ENV RAY_SERVE_ENABLE_EXPERIMENTAL_STREAMING=1
 
 CMD ["serve", "run", "sentimentizer.serve:app", "--host", "0.0.0.0", "--port", "8000"]

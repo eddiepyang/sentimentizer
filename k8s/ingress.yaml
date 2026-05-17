@@ -5,15 +5,19 @@ metadata:
   labels:
     app: sentimentizer
   annotations:
-    # Uncomment based on your ingress controller:
-    # nginx.ingress.kubernetes.io/rewrite-target: /
-    # nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    # cert-manager.io/cluster-issuer: letsencrypt-prod
+    # --- TLS via cert-manager ---
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # --- NGINX rate limiting ---
+    nginx.ingress.kubernetes.io/limit-rps: "10"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "3"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    # --- Request size limit (prevents oversized payloads) ---
+    nginx.ingress.kubernetes.io/proxy-body-size: "1m"
 spec:
-  # tls:
-  # - hosts:
-  #   - sentimentizer.example.com
-  #   secretName: sentimentizer-tls
+  tls:
+  - hosts:
+    - sentimentizer.example.com
+    secretName: sentimentizer-tls
   rules:
   - host: sentimentizer.example.com
     http:

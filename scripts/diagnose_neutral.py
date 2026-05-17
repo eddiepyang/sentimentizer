@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Diagnose how binary-trained models score 3-star (neutral) reviews.
+"""Diagnose how models score 3-star (neutral) reviews.
 
 Loads the trained RNN, Encoder, and Decoder models and runs inference on
 samples of 1-star, 2-star, 3-star, 4-star, and 5-star reviews.
-Prints per-star score distributions (mean, std, percentiles) and a
-simple ASCII histogram so we can see where neutral reviews cluster.
+Prints per-star per-class probability distributions and a simple ASCII
+histogram so we can see where neutral reviews cluster.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from sentimentizer.config import FileConfig
+from sentimentizer.config import FileConfig, LABEL_NAMES
 from sentimentizer.models.rnn import get_trained_model as get_rnn
 from sentimentizer.models.encoder import get_trained_model as get_encoder
 from sentimentizer.models.decoder import get_trained_model as get_decoder
@@ -77,70 +77,66 @@ def main() -> None:
 
     # Stack into a single tensor for batched inference
     batch_size = 256
-    all_scores: dict[str, list[float]] = {name: [] for name in models}
+    # Per-class scores per model: {model_name: {label: [scores]}}
+    all_probs: dict[str, dict[str, list[float]]] = {
+        name: {label: [] for label in LABEL_NAMES} for name in models
+    }
 
     print("Running inference …")
     with torch.no_grad():
         for model_name, model in models.items():
             model.eval()
-            scores: list[float] = []
             for i in range(0, len(token_arrays), batch_size):
                 batch = np.vstack(token_arrays[i : i + batch_size])  # (B, max_len)
                 batch_t = torch.from_numpy(batch).to(device)
                 logits = model(batch_t)
-                probs = torch.sigmoid(logits).cpu().numpy()
-                scores.extend(probs.tolist())
-            all_scores[model_name] = scores
+                probs = torch.softmax(logits, dim=-1).cpu().numpy()  # (B, num_classes)
+                for j in range(probs.shape[0]):
+                    for k, label in enumerate(LABEL_NAMES):
+                        all_probs[model_name][label].append(float(probs[j, k]))
 
     # Build a results DataFrame
-    results = pd.DataFrame(
-        {
-            "stars": all_stars,
-            "text": all_texts,
-            "rnn_score": all_scores["rnn"],
-            "encoder_score": all_scores["encoder"],
-            "decoder_score": all_scores["decoder"],
-        }
-    )
+    results_data: dict[str, list] = {"stars": all_stars, "text": all_texts}
+    for model_name in models:
+        for label in LABEL_NAMES:
+            results_data[f"{model_name}_{label}"] = all_probs[model_name][label]
+    results = pd.DataFrame(results_data)
 
     print("\n" + "=" * 70)
-    print("SCORE DISTRIBUTIONS BY STAR RATING")
+    print("PER-CLASS SCORE DISTRIBUTIONS BY STAR RATING")
     print("=" * 70)
 
     for star in [1, 2, 3, 4, 5]:
         subset = results[results["stars"] == star]
         print(f"\n--- {star}-star reviews (n={len(subset)}) ---")
         for model_name in models:
-            scores = subset[f"{model_name}_score"].values
-            print(
-                f"  {model_name:8s}:  mean={scores.mean():.4f}  std={scores.std():.4f}  "
-                f"min={scores.min():.4f}  max={scores.max():.4f}"
-            )
-            print(
-                f"            p05={np.percentile(scores, 5):.4f}  "
-                f"p25={np.percentile(scores, 25):.4f}  "
-                f"median={np.median(scores):.4f}  "
-                f"p75={np.percentile(scores, 75):.4f}  "
-                f"p95={np.percentile(scores, 95):.4f}"
-            )
+            print(f"  {model_name}:")
+            for label in LABEL_NAMES:
+                scores = subset[f"{model_name}_{label}"].values
+                print(
+                    f"    {label:8s}: mean={scores.mean():.4f}  std={scores.std():.4f}  "
+                    f"p25={np.percentile(scores, 25):.4f}  "
+                    f"median={np.median(scores):.4f}  "
+                    f"p75={np.percentile(scores, 75):.4f}"
+                )
 
     print("\n" + "=" * 70)
-    print("3-STAR (NEUTRAL) SCORE HISTOGRAMS")
+    print("3-STAR (NEUTRAL) PROBABILITY HISTOGRAMS")
     print("=" * 70)
+    neutral = results[results["stars"] == 3]
     for model_name in models:
-        scores = results[results["stars"] == 3][f"{model_name}_score"].values
-        print(f"\n{model_name.upper()} — 3-star scores:")
-        print(_ascii_histogram(scores, bins=10, width=50))
+        print(f"\n{model_name.upper()} — 3-star neutral probability:")
+        print(_ascii_histogram(neutral[f"{model_name}_neutral"].values, bins=10, width=50))
 
-    # Overlap analysis: how many 3-star reviews fall inside the
-    # inter-quartile range of 1-2 star or 4-5 star?
+    # Overlap analysis: how do neutral review probabilities compare with
+    # negative and positive review probabilities?
     print("\n" + "=" * 70)
-    print("OVERLAP ANALYSIS")
+    print("NEUTRAL CLASS PROBABILITY OVERLAP ANALYSIS")
     print("=" * 70)
     for model_name in models:
-        neg = results[results["stars"].isin([1, 2])][f"{model_name}_score"].values
-        pos = results[results["stars"].isin([4, 5])][f"{model_name}_score"].values
-        neu = results[results["stars"] == 3][f"{model_name}_score"].values
+        neg = results[results["stars"].isin([1, 2])][f"{model_name}_neutral"].values
+        pos = results[results["stars"].isin([4, 5])][f"{model_name}_neutral"].values
+        neu = neutral[f"{model_name}_neutral"].values
 
         neg_q1, neg_q3 = np.percentile(neg, [25, 75])
         pos_q1, pos_q3 = np.percentile(pos, [25, 75])
@@ -149,10 +145,26 @@ def main() -> None:
         in_pos_iqr = ((neu >= pos_q1) & (neu <= pos_q3)).mean()
         in_gap = ((neu > neg_q3) & (neu < pos_q1)).mean()
 
-        print(f"\n{model_name.upper()}:")
+        print(f"\n{model_name.upper()} neutral-class probability:")
         print(f"  3-star inside negative IQR  [{neg_q1:.4f}, {neg_q3:.4f}]: {in_neg_iqr:.1%}")
         print(f"  3-star inside positive IQR  [{pos_q1:.4f}, {pos_q3:.4f}]: {in_pos_iqr:.1%}")
         print(f"  3-star in gap between them: {in_gap:.1%}")
+
+    # Neutral detection rate: fraction of 3-star reviews where neutral is
+    # the highest-probability class
+    print("\n" + "=" * 70)
+    print("NEUTRAL DETECTION RATE")
+    print("=" * 70)
+    for model_name in models:
+        prob_cols = [f"{model_name}_{label}" for label in LABEL_NAMES]
+        predicted = neutral[prob_cols].values.argmax(axis=1)  # 0=neg, 1=neu, 2=pos
+        neutral_rate = (predicted == 1).mean()
+        positive_rate = (predicted == 2).mean()
+        negative_rate = (predicted == 0).mean()
+        print(
+            f"  {model_name}: neutral={neutral_rate:.1%}  "
+            f"positive={positive_rate:.1%}  negative={negative_rate:.1%}"
+        )
 
     # Save raw results for further analysis
     out_path = "/tmp/neutral_diagnostic_scores.parquet"

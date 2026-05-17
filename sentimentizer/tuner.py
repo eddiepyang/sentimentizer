@@ -75,15 +75,17 @@ class TunePrometheusCallback(TuneCallback):
                 TUNE_TRIAL_COMPLETED_COUNT,
                 TUNE_TRIAL_COUNT,
                 TUNE_TRIAL_EPOCH,
-                TUNE_TRIAL_NEGATIVE_ACCURACY,
-                TUNE_TRIAL_POSITIVE_ACCURACY,
                 TUNE_TRIAL_TRAIN_LOSS,
                 TUNE_TRIAL_VAL_ACCURACY,
+                TUNE_TRIAL_VAL_BALANCED_ACCURACY,
                 TUNE_TRIAL_VAL_COHEN_KAPPA,
-                TUNE_TRIAL_VAL_F1,
                 TUNE_TRIAL_VAL_LOSS,
-                TUNE_TRIAL_VAL_PRECISION,
-                TUNE_TRIAL_VAL_RECALL,
+                TUNE_TRIAL_VAL_MACRO_F1,
+                TUNE_TRIAL_VAL_MCC,
+                TUNE_TRIAL_VAL_NEGATIVE_F1,
+                TUNE_TRIAL_VAL_NEUTRAL_F1,
+                TUNE_TRIAL_VAL_POSITIVE_F1,
+                TUNE_TRIAL_VAL_WEIGHTED_F1,
             )
 
             TUNE_TRIAL_VAL_ACCURACY.labels(trial_id=trial_id, model_type=self.model_type).set(
@@ -95,23 +97,30 @@ class TunePrometheusCallback(TuneCallback):
             TUNE_TRIAL_TRAIN_LOSS.labels(trial_id=trial_id, model_type=self.model_type).set(
                 metrics.get("train_loss", 0.0)
             )
-            TUNE_TRIAL_VAL_F1.labels(trial_id=trial_id, model_type=self.model_type).set(
-                metrics.get("val_f1", 0.0)
-            )
             TUNE_TRIAL_VAL_COHEN_KAPPA.labels(trial_id=trial_id, model_type=self.model_type).set(
                 metrics.get("val_cohen_kappa", 0.0)
             )
-            TUNE_TRIAL_VAL_PRECISION.labels(trial_id=trial_id, model_type=self.model_type).set(
-                metrics.get("val_precision", 0.0)
+            positive_f1 = metrics.get("val_positive_f1", 0.0)
+            TUNE_TRIAL_VAL_BALANCED_ACCURACY.labels(
+                trial_id=trial_id, model_type=self.model_type
+            ).set(metrics.get("val_balanced_accuracy", 0.0))
+            TUNE_TRIAL_VAL_NEGATIVE_F1.labels(trial_id=trial_id, model_type=self.model_type).set(
+                metrics.get("val_negative_f1", 0.0)
             )
-            TUNE_TRIAL_VAL_RECALL.labels(trial_id=trial_id, model_type=self.model_type).set(
-                metrics.get("val_recall", 0.0)
+            TUNE_TRIAL_VAL_NEUTRAL_F1.labels(trial_id=trial_id, model_type=self.model_type).set(
+                metrics.get("val_neutral_f1", 0.0)
             )
-            TUNE_TRIAL_POSITIVE_ACCURACY.labels(trial_id=trial_id, model_type=self.model_type).set(
-                metrics.get("val_positive_accuracy", 0.0)
+            TUNE_TRIAL_VAL_POSITIVE_F1.labels(trial_id=trial_id, model_type=self.model_type).set(
+                metrics.get("val_positive_f1", 0.0)
             )
-            TUNE_TRIAL_NEGATIVE_ACCURACY.labels(trial_id=trial_id, model_type=self.model_type).set(
-                metrics.get("val_negative_accuracy", 0.0)
+            TUNE_TRIAL_VAL_MACRO_F1.labels(trial_id=trial_id, model_type=self.model_type).set(
+                metrics.get("val_macro_f1", 0.0)
+            )
+            TUNE_TRIAL_VAL_WEIGHTED_F1.labels(trial_id=trial_id, model_type=self.model_type).set(
+                metrics.get("val_weighted_f1", 0.0)
+            )
+            TUNE_TRIAL_VAL_MCC.labels(trial_id=trial_id, model_type=self.model_type).set(
+                metrics.get("val_mcc", 0.0)
             )
             TUNE_TRIAL_EPOCH.labels(trial_id=trial_id, model_type=self.model_type).set(
                 metrics.get("epoch", 0)
@@ -120,7 +129,7 @@ class TunePrometheusCallback(TuneCallback):
             # Track best metrics across trials
             val_accuracy = metrics.get("val_accuracy", 0.0)
             val_loss = metrics.get("val_loss", float("inf"))
-            val_f1 = metrics.get("val_f1", 0.0)
+            positive_f1 = metrics.get("val_positive_f1", 0.0)
 
             if val_accuracy > self._best_accuracy:
                 self._best_accuracy = val_accuracy
@@ -134,8 +143,8 @@ class TunePrometheusCallback(TuneCallback):
 
                 TUNE_BEST_VAL_LOSS.labels(model_type=self.model_type).set(self._best_loss)
 
-            if val_f1 > self._best_f1:
-                self._best_f1 = val_f1
+            if positive_f1 > self._best_f1:
+                self._best_f1 = positive_f1
                 from sentimentizer.exporter import TUNE_BEST_VAL_F1
 
                 TUNE_BEST_VAL_F1.labels(model_type=self.model_type).set(self._best_f1)
@@ -266,7 +275,7 @@ def load_search_space(
     if model_type not in tuner_config.search_spaces:
         available = list(tuner_config.search_spaces.keys())
         raise ValueError(
-            f"No search space defined for model type '{model_type}'. " f"Available: {available}"
+            f"No search space defined for model type '{model_type}'. Available: {available}"
         )
 
     return tuner_config.search_spaces[model_type]
@@ -357,7 +366,7 @@ def _get_scheduler(
         )
     else:
         raise ValueError(
-            f"Unknown scheduler: {tuner_config.scheduler}. " "Use 'asha', 'hyperband', or 'median'."
+            f"Unknown scheduler: {tuner_config.scheduler}. Use 'asha', 'hyperband', or 'median'."
         )
 
 
@@ -426,8 +435,12 @@ def _trainable_wrapper(config: dict, train_dataset: Any = None, val_dataset: Any
     trainer_config = TrainerConfig(
         epochs=config.get("epochs", 4),
         device=device,
-        dataloader_workers=0,  # Avoid multiprocessing in Ray workers
-        pos_weight=config.get("pos_weight", 1.0),
+        dataloader_workers=0,
+        class_weights=config.get("class_weights"),
+        weight_smoothing=config.get("weight_smoothing", 0.5),
+        loss_type=config.get("loss_type", "cross_entropy"),
+        focal_gamma=config.get("focal_gamma", 2.0),
+        label_smoothing=config.get("label_smoothing", 0.1),
     )
 
     trainer = new_trainer(
@@ -472,14 +485,19 @@ def _trainable_wrapper(config: dict, train_dataset: Any = None, val_dataset: Any
         tune.report(
             {
                 "val_accuracy": metrics.accuracy,
+                "val_balanced_accuracy": metrics.balanced_accuracy,
                 "val_loss": val_loss,
                 "train_loss": trainer.losses[-1] if trainer.losses else 0.0,
-                "val_precision": metrics.precision,
-                "val_recall": metrics.recall,
-                "val_f1": metrics.f1,
+                "val_precision": metrics.positive_precision,
+                "val_recall": metrics.positive_recall,
+                "val_f1": metrics.positive_f1,
                 "val_cohen_kappa": metrics.cohen_kappa,
-                "val_positive_accuracy": metrics.positive_accuracy,
-                "val_negative_accuracy": metrics.negative_accuracy,
+                "val_negative_f1": metrics.negative_f1,
+                "val_neutral_f1": metrics.neutral_f1,
+                "val_positive_f1": metrics.positive_f1,
+                "val_macro_f1": metrics.macro_f1,
+                "val_weighted_f1": metrics.weighted_f1,
+                "val_mcc": metrics.mcc,
                 "epoch": epoch,
             }
         )
@@ -532,7 +550,11 @@ def tune_model(
     config_path: str | Path | None = None,
     balance_classes: bool = False,
     balance_seed: int = 42,
-    pos_weight: float = 1.0,
+    class_weights: list[float] | None = None,
+    weight_smoothing: float = 0.5,
+    loss_type: str = "cross_entropy",
+    focal_gamma: float = 2.0,
+    label_smoothing: float = 0.1,
 ) -> dict[str, Any]:
     """Run hyperparameter tuning using Ray Tune + Optuna.
 
@@ -554,13 +576,18 @@ def tune_model(
         Dict with keys:
         - 'best_config': dict of best hyperparameters
         - 'best_accuracy': float — overall accuracy
+        - 'best_balanced_accuracy': float — mean of per-class recalls
         - 'best_loss': float — best validation loss
         - 'best_precision': float — positive-class precision
         - 'best_recall': float — positive-class recall
         - 'best_f1': float — positive-class F1 score
         - 'best_cohen_kappa': float — Cohen's kappa coefficient
-        - 'best_positive_accuracy': float — accuracy on positive samples
-        - 'best_negative_accuracy': float — accuracy on negative samples
+        - 'best_negative_f1': float — negative-class F1 score
+        - 'best_neutral_f1': float — neutral-class F1 score
+        - 'best_positive_f1': float — positive-class F1 score
+        - 'best_macro_f1': float — macro-averaged F1 score
+        - 'best_weighted_f1': float — weighted-averaged F1 score
+        - 'best_mcc': float — Matthews correlation coefficient
         - 'trial_count': int
         - 'results': list of all trial results
     """
@@ -582,7 +609,11 @@ def tune_model(
     search_space["embeddings_emb_length"] = DriverConfig.embeddings.emb_length
     search_space["balance_classes"] = balance_classes
     search_space["balance_seed"] = balance_seed
-    search_space["pos_weight"] = pos_weight
+    search_space["class_weights"] = class_weights
+    search_space["weight_smoothing"] = weight_smoothing
+    search_space["loss_type"] = loss_type
+    search_space["focal_gamma"] = focal_gamma
+    search_space["label_smoothing"] = label_smoothing
 
     from sentimentizer.loader import load_train_val_corpus_datasets
 
@@ -602,12 +633,17 @@ def tune_model(
     reporter = CLIReporter(
         metric_columns=[
             "val_accuracy",
+            "val_balanced_accuracy",
             "val_loss",
             "train_loss",
             "val_f1",
             "val_cohen_kappa",
-            "val_positive_accuracy",
-            "val_negative_accuracy",
+            "val_negative_f1",
+            "val_neutral_f1",
+            "val_positive_f1",
+            "val_macro_f1",
+            "val_weighted_f1",
+            "val_mcc",
             "epoch",
         ],
     )
@@ -684,13 +720,18 @@ def tune_model(
     output = {
         "best_config": clean_config,
         "best_accuracy": best_metrics.get("val_accuracy", 0.0),
+        "best_balanced_accuracy": best_metrics.get("val_balanced_accuracy", 0.0),
         "best_loss": best_metrics.get("val_loss", float("inf")),
         "best_precision": best_metrics.get("val_precision", 0.0),
         "best_recall": best_metrics.get("val_recall", 0.0),
         "best_f1": best_metrics.get("val_f1", 0.0),
         "best_cohen_kappa": best_metrics.get("val_cohen_kappa", 0.0),
-        "best_positive_accuracy": best_metrics.get("val_positive_accuracy", 0.0),
-        "best_negative_accuracy": best_metrics.get("val_negative_accuracy", 0.0),
+        "best_negative_f1": best_metrics.get("val_negative_f1", 0.0),
+        "best_neutral_f1": best_metrics.get("val_neutral_f1", 0.0),
+        "best_positive_f1": best_metrics.get("val_positive_f1", 0.0),
+        "best_macro_f1": best_metrics.get("val_macro_f1", 0.0),
+        "best_weighted_f1": best_metrics.get("val_weighted_f1", 0.0),
+        "best_mcc": best_metrics.get("val_mcc", 0.0),
         "trial_count": len(result),
         "results": all_results,
     }
@@ -698,11 +739,15 @@ def tune_model(
     logger.info(
         "tuning_complete",
         best_accuracy=output["best_accuracy"],
+        best_balanced_accuracy=output["best_balanced_accuracy"],
         best_loss=output["best_loss"],
         best_f1=output["best_f1"],
         best_cohen_kappa=output["best_cohen_kappa"],
-        best_positive_accuracy=output["best_positive_accuracy"],
-        best_negative_accuracy=output["best_negative_accuracy"],
+        best_negative_f1=output["best_negative_f1"],
+        best_neutral_f1=output["best_neutral_f1"],
+        best_positive_f1=output["best_positive_f1"],
+        best_macro_f1=output["best_macro_f1"],
+        best_mcc=output["best_mcc"],
         trial_count=output["trial_count"],
         best_config=clean_config,
     )

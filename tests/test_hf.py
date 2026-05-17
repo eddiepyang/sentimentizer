@@ -222,12 +222,13 @@ class TestCreateModelCard:
         tuning_result = {
             "best_accuracy": 0.8923,
             "best_loss": 0.3145,
-            "best_precision": 0.8812,
-            "best_recall": 0.9034,
-            "best_f1": 0.8921,
+            "best_balanced_accuracy": 0.8765,
             "best_cohen_kappa": 0.7843,
-            "best_positive_accuracy": 0.9156,
-            "best_negative_accuracy": 0.8690,
+            "best_mcc": 0.7812,
+            "best_negative_f1": 0.8690,
+            "best_neutral_f1": 0.7521,
+            "best_positive_f1": 0.9156,
+            "best_macro_f1": 0.8456,
             "best_config": {"lr": 0.001, "hidden_size": 256},
             "validation_passed": True,
             "mode": "standalone",
@@ -240,7 +241,7 @@ class TestCreateModelCard:
         assert "## Metrics" in card
         assert "| Accuracy | 0.8923 |" in card
         assert "| Loss | 0.3145 |" in card
-        assert "| F1 | 0.8921 |" in card
+        assert "| Negative F1 | 0.8690 |" in card
         assert "✅ Passed" in card
         assert "Mode: `standalone`" in card
         assert "Iterations: 1" in card

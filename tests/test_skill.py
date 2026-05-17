@@ -50,6 +50,12 @@ class TestTuningRunConfig:
         assert config.config_path is None
         assert config.search_space_overrides is None
         assert config.push_to_hub is False
+        assert config.weight_smoothing == 0.5
+        assert config.loss_type == "cross_entropy"
+        assert config.focal_gamma == 2.0
+        assert config.label_smoothing == 0.1
+        assert config.neutral_oversample_ratio == 0.0
+        assert config.balance_strategy == "class_weights_only"
 
     def test_custom_values(self) -> None:
         """TuningRunConfig should accept custom values."""
@@ -100,12 +106,11 @@ class TestTuningRunResult:
         assert result.best_config == {}
         assert result.best_accuracy == 0.0
         assert result.best_loss == float("inf")
-        assert result.best_precision == 0.0
-        assert result.best_recall == 0.0
-        assert result.best_f1 == 0.0
+        assert result.best_macro_f1 == 0.0
         assert result.best_cohen_kappa == 0.0
-        assert result.best_positive_accuracy == 0.0
-        assert result.best_negative_accuracy == 0.0
+        assert result.best_negative_f1 == 0.0
+        assert result.best_neutral_f1 == 0.0
+        assert result.best_positive_f1 == 0.0
         assert result.iterations_completed == 0
         assert result.converged is False
         assert result.history == []
@@ -123,12 +128,11 @@ class TestTuningRunResult:
             best_config={"lr": 0.001, "hidden_size": 256},
             best_accuracy=0.89,
             best_loss=0.31,
-            best_precision=0.88,
-            best_recall=0.90,
-            best_f1=0.89,
+            best_negative_f1=0.87,
+            best_neutral_f1=0.78,
+            best_positive_f1=0.92,
+            best_macro_f1=0.86,
             best_cohen_kappa=0.78,
-            best_positive_accuracy=0.92,
-            best_negative_accuracy=0.86,
             iterations_completed=3,
             converged=True,
             validation_passed=True,
@@ -137,12 +141,11 @@ class TestTuningRunResult:
         assert result.best_config == {"lr": 0.001, "hidden_size": 256}
         assert result.best_accuracy == 0.89
         assert result.best_loss == 0.31
-        assert result.best_precision == 0.88
-        assert result.best_recall == 0.90
-        assert result.best_f1 == 0.89
+        assert result.best_negative_f1 == 0.87
+        assert result.best_neutral_f1 == 0.78
+        assert result.best_positive_f1 == 0.92
+        assert result.best_macro_f1 == 0.86
         assert result.best_cohen_kappa == 0.78
-        assert result.best_positive_accuracy == 0.92
-        assert result.best_negative_accuracy == 0.86
         assert result.iterations_completed == 3
         assert result.converged is True
         assert result.validation_passed is True
@@ -231,9 +234,9 @@ class TestKnownSentimentExamples:
             assert "expected" in example
 
     def test_expected_values_are_valid(self) -> None:
-        """Each expected value should be 'positive' or 'negative'."""
+        """Each expected value should be 'positive', 'negative', or 'neutral'."""
         for example in KNOWN_SENTIMENT_EXAMPLES:
-            assert example["expected"] in ("positive", "negative")
+            assert example["expected"] in ("positive", "negative", "neutral")
 
     def test_no_good_is_negative(self) -> None:
         """'no good' should be classified as negative sentiment."""
@@ -242,11 +245,13 @@ class TestKnownSentimentExamples:
         assert no_good[0]["expected"] == "negative"
 
     def test_has_positive_and_negative_examples(self) -> None:
-        """Should have at least one positive and one negative example."""
+        """Should have at least one positive, one negative, and one neutral example."""
         positives = [e for e in KNOWN_SENTIMENT_EXAMPLES if e["expected"] == "positive"]
         negatives = [e for e in KNOWN_SENTIMENT_EXAMPLES if e["expected"] == "negative"]
+        neutrals = [e for e in KNOWN_SENTIMENT_EXAMPLES if e["expected"] == "neutral"]
         assert len(positives) >= 1
         assert len(negatives) >= 1
+        assert len(neutrals) >= 1
 
 
 # ─── TuningRun Class Tests ────────────────────────────────────────────

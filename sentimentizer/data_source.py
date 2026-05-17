@@ -224,8 +224,7 @@ class PandasDataSource:
     ) -> Self:
         if predicate is not None and (col is not None or op is not None):
             raise ValueError(
-                "Cannot specify both predicate and col/op/value. "
-                "Use one filtering style at a time."
+                "Cannot specify both predicate and col/op/value. Use one filtering style at a time."
             )
 
         # Expression-based filter (Risk 9 mitigation: vectorized path)
@@ -318,23 +317,24 @@ class PandasDataSource:
     # --- Balancing ---------------------------------------------------------
 
     def balance(self, target_col: str, random_state: int = 42) -> Self:
-        neg_count = int((self._df[target_col] == 0.0).sum())
-        pos_count = int((self._df[target_col] == 1.0).sum())
+        """Undersample majority classes to match the minority class count.
 
-        if pos_count > neg_count:
-            pos_df = self._df[self._df[target_col] == 1.0].sample(
-                n=neg_count, random_state=random_state
-            )
-            neg_df = self._df[self._df[target_col] == 0.0]
-        elif neg_count > pos_count:
-            neg_df = self._df[self._df[target_col] == 0.0].sample(
-                n=pos_count, random_state=random_state
-            )
-            pos_df = self._df[self._df[target_col] == 1.0]
-        else:
-            return self
+        Works with both binary (2-class) and multi-class (3-class) targets.
+        """
+        class_counts = self._df[target_col].value_counts()
+        min_count = int(class_counts.min())
 
-        balanced = pd.concat([neg_df, pos_df]).sample(frac=1, random_state=random_state)
+        if (class_counts == min_count).all():
+            return self  # already balanced
+
+        dfs = []
+        for cls_val in class_counts.index:
+            cls_df = self._df[self._df[target_col] == cls_val]
+            if len(cls_df) > min_count:
+                cls_df = cls_df.sample(n=min_count, random_state=random_state)
+            dfs.append(cls_df)
+
+        balanced = pd.concat(dfs).sample(frac=1, random_state=random_state)
         return PandasDataSource(balanced)
 
     # --- I/O ---------------------------------------------------------------
@@ -411,8 +411,7 @@ class RayDataSource:
     ) -> Self:
         if predicate is not None and (col is not None or op is not None):
             raise ValueError(
-                "Cannot specify both predicate and col/op/value. "
-                "Use one filtering style at a time."
+                "Cannot specify both predicate and col/op/value. Use one filtering style at a time."
             )
 
         # Expression-based filter: compile to a row predicate for Ray
@@ -466,23 +465,42 @@ class RayDataSource:
     # --- Balancing ---------------------------------------------------------
 
     def balance(self, target_col: str, random_state: int = 42) -> Self:
-        neg_ds = self._ds.filter(lambda row: row[target_col] == 0.0)
-        pos_ds = self._ds.filter(lambda row: row[target_col] == 1.0)
-        neg_count = neg_ds.count()
-        pos_count = pos_ds.count()
+        """Undersample majority classes to match the minority class count.
 
-        if pos_count > neg_count and neg_count > 0:
-            keep_ratio = neg_count / pos_count
-            pos_keep = pos_ds.random_sample(keep_ratio, seed=random_state)
-            balanced = pos_keep.union(neg_ds)
-        elif neg_count > pos_count and pos_count > 0:
-            keep_ratio = pos_count / neg_count
-            neg_keep = neg_ds.random_sample(keep_ratio, seed=random_state)
-            balanced = neg_keep.union(pos_ds)
-        else:
+        Works with both binary (2-class) and multi-class (3-class) targets.
+        """
+        # Get all unique class values
+        unique_vals = self._ds.to_pandas()[target_col].unique()
+        if len(unique_vals) <= 1:
             return self
 
-        return RayDataSource(balanced.random_shuffle(seed=random_state))
+        # Split by class and find minimum count
+        class_dses = {}
+        class_counts = {}
+        for val in unique_vals:
+            cls_ds = self._ds.filter(lambda row, v=val: row[target_col] == v)
+            class_dses[val] = cls_ds
+            class_counts[val] = cls_ds.count()
+
+        min_count = min(class_counts.values())
+
+        if all(c == min_count for c in class_counts.values()):
+            return self  # already balanced
+
+        # Undersample each class to min_count
+        undersampled = []
+        for val, cls_ds in class_dses.items():
+            if class_counts[val] > min_count:
+                ratio = min_count / class_counts[val]
+                undersampled.append(cls_ds.random_sample(ratio, seed=random_state))
+            else:
+                undersampled.append(cls_ds)
+
+        result = undersampled[0]
+        for ds in undersampled[1:]:
+            result = result.union(ds)
+
+        return RayDataSource(result.random_shuffle(seed=random_state))
 
     # --- I/O ---------------------------------------------------------------
 

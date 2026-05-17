@@ -35,26 +35,27 @@ from sentimentizer.trainer import (
 class TinyModel(nn.Module):
     """Minimal model for fast training tests."""
 
-    def __init__(self, input_dim: int = 10, hidden_dim: int = 16) -> None:
+    def __init__(self, input_dim: int = 10, hidden_dim: int = 16, num_classes: int = 3) -> None:
         super().__init__()
         self.linear1 = nn.Linear(input_dim, hidden_dim)
         self.relu = nn.ReLU()
-        self.linear2 = nn.Linear(hidden_dim, 1)
+        self.linear2 = nn.Linear(hidden_dim, num_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.linear2(self.relu(self.linear1(x))).squeeze(-1)
+        return self.linear2(self.relu(self.linear1(x)))
 
 
 class FloatDataset(torch.utils.data.Dataset):
-    """Simple dataset yielding (float_data, float_target) pairs.
+    """Simple dataset yielding (float_data, long_target) pairs.
 
     Unlike CorpusDataset which converts data to long tensors for embedding
     layers, this dataset keeps data as float32 for testing with linear models.
+    Targets are class indices (0, 1, 2) for 3-class classification.
     """
 
     def __init__(self, n: int = 32, input_dim: int = 10) -> None:
         self.data = torch.randn(n, input_dim)
-        self.targets = torch.randint(0, 2, (n,)).float()
+        self.targets = torch.randint(0, 3, (n,))
 
     def __len__(self) -> int:
         return len(self.data)
@@ -73,10 +74,10 @@ class TestTrainStep:
         """train_step should return a scalar loss value."""
         model = TinyModel()
         optimizer = torch.optim.AdamW(model.parameters(), lr=0.01)
-        loss_fn = nn.BCEWithLogitsLoss()
+        loss_fn = nn.CrossEntropyLoss()
 
         data = torch.randn(4, 10)
-        target = torch.randint(0, 2, (4,)).float()
+        target = torch.randint(0, 3, (4,)).long()
 
         loss = train_step(model, data, target, optimizer, loss_fn)
         assert isinstance(loss, float)
@@ -86,10 +87,10 @@ class TestTrainStep:
         """train_step should modify model weights."""
         model = TinyModel()
         optimizer = torch.optim.AdamW(model.parameters(), lr=0.01)
-        loss_fn = nn.BCEWithLogitsLoss()
+        loss_fn = nn.CrossEntropyLoss()
 
         data = torch.randn(4, 10)
-        target = torch.randint(0, 2, (4,)).float()
+        target = torch.randint(0, 3, (4,)).long()
 
         weights_before = {n: p.clone() for n, p in model.named_parameters()}
         train_step(model, data, target, optimizer, loss_fn)
@@ -102,10 +103,10 @@ class TestTrainStep:
         """train_step should clip gradients by default (max_grad_norm=1.0)."""
         model = TinyModel()
         optimizer = torch.optim.AdamW(model.parameters(), lr=0.01)
-        loss_fn = nn.BCEWithLogitsLoss()
+        loss_fn = nn.CrossEntropyLoss()
 
         data = torch.randn(4, 10)
-        target = torch.randint(0, 2, (4,)).float()
+        target = torch.randint(0, 3, (4,)).long()
 
         # After train_step, all grad norms should be <= max_grad_norm
         train_step(model, data, target, optimizer, loss_fn, max_grad_norm=1.0)
@@ -123,10 +124,10 @@ class TestValStep:
     def test_val_step_returns_float(self) -> None:
         """val_step should return a scalar loss value."""
         model = TinyModel()
-        loss_fn = nn.BCEWithLogitsLoss()
+        loss_fn = nn.CrossEntropyLoss()
 
         data = torch.randn(4, 10)
-        target = torch.randint(0, 2, (4,)).float()
+        target = torch.randint(0, 3, (4,)).long()
 
         loss = val_step(model, data, target, loss_fn)
         assert isinstance(loss, float)
@@ -135,10 +136,10 @@ class TestValStep:
     def test_val_step_no_grad(self) -> None:
         """val_step should not compute gradients."""
         model = TinyModel()
-        loss_fn = nn.BCEWithLogitsLoss()
+        loss_fn = nn.CrossEntropyLoss()
 
         data = torch.randn(4, 10)
-        target = torch.randint(0, 2, (4,)).float()
+        target = torch.randint(0, 3, (4,)).long()
 
         # Zero out any existing gradients
         for p in model.parameters():
@@ -175,7 +176,7 @@ class TestSingleNodeTraining:
 
         optimizer = torch.optim.AdamW(model.parameters(), lr=0.01)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=2)
-        loss_fn = nn.BCEWithLogitsLoss()
+        loss_fn = nn.CrossEntropyLoss()
 
         trainer = Trainer(
             loss_function=loss_fn,
@@ -206,7 +207,7 @@ class TestSingleNodeTraining:
 
         optimizer = torch.optim.AdamW(model.parameters(), lr=0.01)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=5)
-        loss_fn = nn.BCEWithLogitsLoss()
+        loss_fn = nn.CrossEntropyLoss()
 
         trainer = Trainer(
             loss_function=loss_fn,
@@ -243,7 +244,7 @@ class TestSingleNodeTraining:
 
             optimizer = torch.optim.AdamW(model.parameters(), lr=0.01)
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=2)
-            loss_fn = nn.BCEWithLogitsLoss()
+            loss_fn = nn.CrossEntropyLoss()
 
             trainer = Trainer(
                 loss_function=loss_fn,
@@ -679,6 +680,7 @@ class TestResetStaleMetrics:
             result = json.loads(metrics_file.read_text())
             assert result["train_loss"] == 0.0
             assert result["epoch"] == 0
+            assert result.get("_reset") is True
             assert "_trace" in result
             assert result["_trace"]["reset_by"] == "encoder"
 
@@ -697,6 +699,7 @@ class TestResetStaleMetrics:
             assert metrics_file.exists()
             result = json.loads(metrics_file.read_text())
             assert result["epoch"] == 0
+            assert result.get("_reset") is True
             assert "_trace" in result
             assert result["_trace"]["reset_by"] == "decoder"
 
@@ -733,7 +736,8 @@ class TestResetStaleMetrics:
                     "val_loss": 0.6,
                     "accuracy": 0.75,
                     "epoch": 5,
-                    "_trace": {"reset_by": "rnn", "reset_at": 12345.0},
+                    "_written_by": "rnn",
+                    "_written_at": 12345.0,
                 }
             )
         )
@@ -745,12 +749,13 @@ class TestResetStaleMetrics:
         assert rnn_data["train_loss"] == 0.0
         assert rnn_data["accuracy"] == 0.0
         assert rnn_data["epoch"] == 0
+        assert rnn_data.get("_reset") is True
         assert rnn_data["_trace"]["reset_by"] == "encoder"
 
-    def test_resets_prometheus_gauges_all_model_types(
+    def test_resets_prometheus_gauges_current_model_type_only(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """_reset_stale_metrics resets prometheus_client gauges for ALL model types to 0."""
+        """_reset_stale_metrics resets prometheus_client gauges for the current model type only."""
         from workflows.stages.train import _reset_stale_metrics
 
         monkeypatch.setattr("workflows.stages.train._METRICS_DIR", tmp_path)
@@ -765,13 +770,19 @@ class TestResetStaleMetrics:
 
         _reset_stale_metrics("encoder")
 
-        # Both should be zeroed — not just encoder
-        for mt in ("encoder", "rnn", "decoder"):
-            value = REGISTRY.get_sample_value(
-                "sentimentizer_training_val_accuracy",
-                {"model_type": mt},
-            )
-            assert value == 0.0, f"{mt} accuracy gauge should be 0"
+        # Only the current model type (encoder) should be zeroed
+        encoder_val = REGISTRY.get_sample_value(
+            "sentimentizer_training_val_accuracy",
+            {"model_type": "encoder"},
+        )
+        assert encoder_val == 0.0, "encoder accuracy gauge should be 0"
+
+        # Other model types should retain their previous values
+        rnn_val = REGISTRY.get_sample_value(
+            "sentimentizer_training_val_accuracy",
+            {"model_type": "rnn"},
+        )
+        assert rnn_val == 0.88, "rnn accuracy gauge should retain its value"
 
     def test_clears_ray_gauges_cache_all_model_types(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -799,9 +810,17 @@ class TestMetricsIntegration:
 
     def test_compute_classification_metrics_after_training(self) -> None:
         """After a training step, metrics should be computable."""
-        predictions = np.array([1, 0, 1, 0, 1])
-        targets = np.array([1, 0, 0, 0, 1])
-        probabilities = np.array([0.9, 0.2, 0.6, 0.3, 0.8])
+        predictions = np.array([2, 0, 2, 0, 2])
+        targets = np.array([2, 0, 0, 0, 2])
+        probabilities = np.array(
+            [
+                [0.05, 0.05, 0.9],
+                [0.8, 0.1, 0.1],
+                [0.3, 0.2, 0.5],
+                [0.6, 0.2, 0.2],
+                [0.1, 0.1, 0.8],
+            ]
+        )
 
         metrics = compute_classification_metrics(
             predictions=predictions,
@@ -810,21 +829,17 @@ class TestMetricsIntegration:
         )
 
         assert 0.0 <= metrics.accuracy <= 1.0
-        assert 0.0 <= metrics.f1 <= 1.0
+        assert 0.0 <= metrics.macro_f1 <= 1.0
         assert metrics.total == 5
-        assert metrics.tp == 2
-        assert metrics.tn == 2
-        assert metrics.fp == 1
-        assert metrics.fn == 0
 
     def test_metrics_from_model_output(self) -> None:
-        """Metrics should work with raw model logits (sigmoid -> probabilities)."""
+        """Metrics should work with raw model logits (softmax -> probabilities)."""
         model = TinyModel(input_dim=10)
         data = torch.randn(8, 10)
         logits = model(data)
-        probabilities = torch.sigmoid(logits).detach().numpy().flatten()
-        predictions = (probabilities >= 0.5).astype(int)
-        targets = np.random.randint(0, 2, size=8)
+        probabilities = torch.softmax(logits, dim=-1).detach().numpy()
+        predictions = probabilities.argmax(axis=1)
+        targets = np.random.randint(0, 3, size=8)
 
         metrics = compute_classification_metrics(
             predictions=predictions,
@@ -858,22 +873,27 @@ class TestMetricsPersistence:
 
         metrics = ClassificationMetrics(
             accuracy=0.8,
-            precision=0.75,
-            recall=0.7,
-            f1=0.72,
+            balanced_accuracy=0.75,
+            negative_precision=0.7,
+            negative_recall=0.65,
+            negative_f1=0.67,
+            neutral_precision=0.5,
+            neutral_recall=0.6,
+            neutral_f1=0.55,
+            positive_precision=0.85,
+            positive_recall=0.8,
+            positive_f1=0.82,
+            macro_f1=0.65,
+            weighted_f1=0.75,
+            confusion_matrix=[[3, 0, 1], [0, 3, 2], [1, 0, 8]],
+            neutral_to_positive_rate=0.2,
+            neutral_to_negative_rate=0.1,
+            pred_negative_frac=0.22,
+            pred_neutral_frac=0.17,
+            pred_positive_frac=0.61,
             cohen_kappa=0.5,
             mcc=0.4,
-            npv=0.6,
-            macro_f1=0.65,
-            auc_roc=0.85,
-            avg_precision=0.78,
-            positive_accuracy=0.8,
-            negative_accuracy=0.7,
-            tp=4,
-            tn=3,
-            fp=1,
-            fn=1,
-            total=9,
+            total=18,
         )
 
         _write_epoch_metrics_to_file(
@@ -896,7 +916,7 @@ class TestMetricsPersistence:
         path.unlink(missing_ok=True)
 
     def test_write_epoch_metrics_includes_all_new_metrics(self) -> None:
-        """mcc, npv, macro_f1, avg_precision must be in the persisted JSON."""
+        """3-class metrics must be in the persisted JSON."""
         from pathlib import Path
 
         from sentimentizer.metrics import ClassificationMetrics
@@ -904,22 +924,27 @@ class TestMetricsPersistence:
 
         metrics = ClassificationMetrics(
             accuracy=0.8,
-            precision=0.75,
-            recall=0.7,
-            f1=0.72,
+            balanced_accuracy=0.75,
+            negative_precision=0.7,
+            negative_recall=0.65,
+            negative_f1=0.67,
+            neutral_precision=0.5,
+            neutral_recall=0.6,
+            neutral_f1=0.55,
+            positive_precision=0.85,
+            positive_recall=0.8,
+            positive_f1=0.82,
+            macro_f1=0.65,
+            weighted_f1=0.75,
+            confusion_matrix=[[3, 0, 1], [0, 3, 2], [1, 0, 8]],
+            neutral_to_positive_rate=0.2,
+            neutral_to_negative_rate=0.1,
+            pred_negative_frac=0.22,
+            pred_neutral_frac=0.17,
+            pred_positive_frac=0.61,
             cohen_kappa=0.5,
             mcc=0.4,
-            npv=0.6,
-            macro_f1=0.65,
-            auc_roc=0.85,
-            avg_precision=0.78,
-            positive_accuracy=0.8,
-            negative_accuracy=0.7,
-            tp=4,
-            tn=3,
-            fp=1,
-            fn=1,
-            total=9,
+            total=18,
         )
 
         _write_epoch_metrics_to_file(
@@ -935,9 +960,11 @@ class TestMetricsPersistence:
         assert path.exists()
         data = json.loads(path.read_text())
         assert data["mcc"] == 0.4
-        assert data["npv"] == 0.6
+        assert data["negative_f1"] == 0.67
         assert data["macro_f1"] == 0.65
-        assert data["avg_precision"] == 0.78
+        assert data["neutral_avg_precision"] is None
+        assert data["balanced_accuracy"] == 0.75
+        assert data["weighted_f1"] == 0.75
         path.unlink(missing_ok=True)
 
     def test_publish_epoch_metrics_no_type_error_with_standard_logger(self) -> None:
@@ -956,22 +983,27 @@ class TestMetricsPersistence:
 
         metrics = ClassificationMetrics(
             accuracy=0.8,
-            precision=0.75,
-            recall=0.7,
-            f1=0.72,
+            balanced_accuracy=0.75,
+            negative_precision=0.7,
+            negative_recall=0.65,
+            negative_f1=0.67,
+            neutral_precision=0.5,
+            neutral_recall=0.6,
+            neutral_f1=0.55,
+            positive_precision=0.85,
+            positive_recall=0.8,
+            positive_f1=0.82,
+            macro_f1=0.65,
+            weighted_f1=0.75,
+            confusion_matrix=[[3, 0, 1], [0, 3, 2], [1, 0, 8]],
+            neutral_to_positive_rate=0.2,
+            neutral_to_negative_rate=0.1,
+            pred_negative_frac=0.22,
+            pred_neutral_frac=0.17,
+            pred_positive_frac=0.61,
             cohen_kappa=0.5,
             mcc=0.4,
-            npv=0.6,
-            macro_f1=0.65,
-            auc_roc=0.85,
-            avg_precision=0.78,
-            positive_accuracy=0.8,
-            negative_accuracy=0.7,
-            tp=4,
-            tn=3,
-            fp=1,
-            fn=1,
-            total=9,
+            total=18,
         )
 
         # publish_epoch_metrics must not raise TypeError
@@ -1000,11 +1032,13 @@ class TestMetricsPersistence:
         mock_model = MagicMock()
         mock_loader = MagicMock()
         mock_loader.dataset = [1, 2]
-        mock_loader.__iter__.return_value = iter([(torch.zeros(2, 10), torch.ones(2, 1))])
+        mock_loader.__iter__.return_value = iter(
+            [(torch.zeros(2, 10), torch.ones(2, dtype=torch.long))]
+        )
 
         cfg = TrainerConfig(device="cpu")
         trainer = Trainer(
-            loss_function=torch.nn.BCEWithLogitsLoss(),
+            loss_function=torch.nn.CrossEntropyLoss(),
             optimizer=MagicMock(),
             scheduler=MagicMock(),
             cfg=cfg,
@@ -1017,17 +1051,25 @@ class TestMetricsPersistence:
                 "train_loss",
                 "val_loss",
                 "val_accuracy",
-                "val_precision",
-                "val_recall",
-                "val_f1",
+                "val_balanced_accuracy",
+                "val_negative_precision",
+                "val_negative_recall",
+                "val_negative_f1",
+                "val_neutral_precision",
+                "val_neutral_recall",
+                "val_neutral_f1",
+                "val_positive_precision",
+                "val_positive_recall",
+                "val_positive_f1",
                 "val_cohen_kappa",
                 "val_mcc",
-                "val_npv",
                 "val_macro_f1",
-                "val_auc_roc",
-                "val_avg_precision",
-                "val_positive_accuracy",
-                "val_negative_accuracy",
+                "val_weighted_f1",
+                "val_neutral_auc_roc",
+                "val_neutral_avg_precision",
+                "val_neutral_to_positive_rate",
+                "val_neutral_to_negative_rate",
+                "val_pred_neutral_frac",
                 "epoch",
                 "lr",
             ]
@@ -1035,24 +1077,9 @@ class TestMetricsPersistence:
 
         with (
             patch("sentimentizer.trainer._get_ray_gauges", return_value=mock_gauges),
-            patch("sentimentizer.exporter.TRAINING_TRAIN_LOSS", create=True),
-            patch("sentimentizer.exporter.TRAINING_EPOCH", create=True),
-            patch("sentimentizer.exporter.TRAINING_LR", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_LOSS", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_ACCURACY", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_PRECISION", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_RECALL", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_F1", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_COHEN_KAPPA", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_MCC", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_NPV", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_MACRO_F1", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_AUC_ROC", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_AVG_PRECISION", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_POSITIVE_ACCURACY", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_NEGATIVE_ACCURACY", create=True),
+            patch("sentimentizer.metrics_publisher._set_prometheus_gauges"),
         ):
-            mock_model.return_value = torch.randn(2, 1)
+            mock_model.return_value = torch.randn(2, 3)
             trainer.evaluate(mock_model, mock_loader, epoch=1)
 
             # The train_loss gauge must have been set
@@ -1074,11 +1101,13 @@ class TestMetricsPersistence:
         mock_model = MagicMock()
         mock_loader = MagicMock()
         mock_loader.dataset = [1, 2]
-        mock_loader.__iter__.return_value = iter([(torch.zeros(2, 10), torch.ones(2, 1))])
+        mock_loader.__iter__.return_value = iter(
+            [(torch.zeros(2, 10), torch.ones(2, dtype=torch.long))]
+        )
 
         cfg = TrainerConfig(device="cpu")
         trainer = Trainer(
-            loss_function=torch.nn.BCEWithLogitsLoss(),
+            loss_function=torch.nn.CrossEntropyLoss(),
             optimizer=MagicMock(),
             scheduler=MagicMock(),
             cfg=cfg,
@@ -1091,17 +1120,25 @@ class TestMetricsPersistence:
                 "train_loss",
                 "val_loss",
                 "val_accuracy",
-                "val_precision",
-                "val_recall",
-                "val_f1",
+                "val_balanced_accuracy",
+                "val_negative_precision",
+                "val_negative_recall",
+                "val_negative_f1",
+                "val_neutral_precision",
+                "val_neutral_recall",
+                "val_neutral_f1",
+                "val_positive_precision",
+                "val_positive_recall",
+                "val_positive_f1",
                 "val_cohen_kappa",
                 "val_mcc",
-                "val_npv",
                 "val_macro_f1",
-                "val_auc_roc",
-                "val_avg_precision",
-                "val_positive_accuracy",
-                "val_negative_accuracy",
+                "val_weighted_f1",
+                "val_neutral_auc_roc",
+                "val_neutral_avg_precision",
+                "val_neutral_to_positive_rate",
+                "val_neutral_to_negative_rate",
+                "val_pred_neutral_frac",
                 "epoch",
                 "lr",
             ]
@@ -1109,24 +1146,9 @@ class TestMetricsPersistence:
 
         with (
             patch("sentimentizer.trainer._get_ray_gauges", return_value=mock_gauges),
-            patch("sentimentizer.exporter.TRAINING_TRAIN_LOSS", create=True),
-            patch("sentimentizer.exporter.TRAINING_EPOCH", create=True),
-            patch("sentimentizer.exporter.TRAINING_LR", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_LOSS", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_ACCURACY", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_PRECISION", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_RECALL", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_F1", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_COHEN_KAPPA", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_MCC", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_NPV", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_MACRO_F1", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_AUC_ROC", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_AVG_PRECISION", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_POSITIVE_ACCURACY", create=True),
-            patch("sentimentizer.exporter.TRAINING_VAL_NEGATIVE_ACCURACY", create=True),
+            patch("sentimentizer.metrics_publisher._set_prometheus_gauges"),
         ):
-            mock_model.return_value = torch.randn(2, 1)
+            mock_model.return_value = torch.randn(2, 3)
             trainer.evaluate(mock_model, mock_loader, epoch=1)
 
         # Check the JSON file was written with train_loss

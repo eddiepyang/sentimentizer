@@ -28,38 +28,37 @@ class BaseSentimentModel(nn.Module):
     previously duplicated across RNN, Encoder, and Decoder. Subclasses
     must implement forward().
 
-    The predict() method:
-    1. Disables gradient computation (torch.no_grad)
-    2. Sets the model to eval mode
-    3. Moves input to the model's device
-    4. Returns sigmoid(forward(x)) — a probability in [0, 1]
-
-    The predict_text() method combines tokenization and prediction:
-    1. Tokenizes raw text using the provided Tokenizer
-    2. Calls predict() on the resulting token IDs
-    3. Returns a float sentiment score
+    Output contract (3-class):
+    - forward(): returns (B, num_classes) raw logits — never squeeze
+    - predict(): returns (B, num_classes) softmax probabilities
+    - predict_text(): returns dict[str, float] mapping label names to
+      probabilities, e.g. {"negative": 0.05, "neutral": 0.12, "positive": 0.83}
     """
+
+    LABEL_NAMES: list[str] = ["negative", "neutral", "positive"]
+    NUM_CLASSES: int = 3
 
     def __init__(self, tokenizer: Tokenizer | None = None) -> None:
         super().__init__()
         self.tokenizer = tokenizer  # Tokenizer will be set externally after model creation
 
     def predict(self, converted_text: np.ndarray) -> torch.Tensor:
-        """Run inference with sigmoid activation.
+        """Run inference with softmax activation.
 
         Args:
-            converted_text: Token IDs as numpy array
+            converted_text: Token IDs as numpy array, shape (B, seq_len)
 
         Returns:
-            Sentiment score between 0 (negative) and 1 (positive)
+            Probability matrix of shape (B, num_classes) with softmax
+            probabilities for each class [negative, neutral, positive].
         """
         with torch.no_grad():
             self.eval()
             device = next(self.parameters()).device
             output = torch.from_numpy(converted_text).to(device)
-            return torch.sigmoid(self.forward(output))
+            return torch.softmax(self.forward(output), dim=-1)
 
-    def predict_text(self, text: str) -> float:
+    def predict_text(self, text: str) -> dict[str, float]:
         """Tokenize raw text and run sentiment prediction in one call.
 
         Combines tokenization and model inference, eliminating the need
@@ -67,14 +66,14 @@ class BaseSentimentModel(nn.Module):
 
         Args:
             text: Raw text string to classify.
-            tokenizer: A Tokenizer instance with a loaded dictionary.
 
         Returns:
-            Sentiment score between 0.0 (negative) and 1.0 (positive).
+            Dict mapping label names to probabilities, e.g.
+            {"negative": 0.05, "neutral": 0.12, "positive": 0.83}.
         """
         token_ids = self.tokenizer.tokenize_text(text)
-        score = self.predict(token_ids).item()
-        return score
+        probs = self.predict(token_ids)  # (1, num_classes)
+        return {label: probs[0, i].item() for i, label in enumerate(self.LABEL_NAMES)}
 
 
 # ──────────────────────────────────────────────
@@ -197,6 +196,18 @@ def get_trained_model(model_type: str, device: str) -> nn.Module:
     empty_embeddings = torch.zeros(emb_shape)
 
     # Build model kwargs based on model type
+    # Infer num_classes from the final linear layer output dimension
+    num_classes = weights["classifier.3.weight"].shape[0]
+    if num_classes == 1:
+        raise RuntimeError(
+            f"Saved weights are from a binary classification model (num_classes=1). "
+            f"3-class migration requires retraining: "
+            f"python workflows/driver.py --device cuda --model {model_type} --type new --save True"
+        )
+    # Also check _metadata if available for robust detection
+    if "_metadata" in weights and "num_classes" in weights["_metadata"]:
+        num_classes = weights["_metadata"]["num_classes"]
+
     if model_type == "rnn":
         hidden_size = weights["classifier.0.weight"].shape[1] // 2
         model = model_class(
@@ -204,6 +215,7 @@ def get_trained_model(model_type: str, device: str) -> nn.Module:
             hidden_size=hidden_size,
             num_layers=config.num_layers,
             dropout=config.dropout,
+            num_classes=num_classes,
         )
     elif model_type == "encoder":
         d_model = weights["proj.weight"].shape[0]
@@ -214,6 +226,7 @@ def get_trained_model(model_type: str, device: str) -> nn.Module:
             n_layers=config.n_layers,
             dropout=config.dropout,
             ff_multiplier=config.ff_multiplier,
+            num_classes=num_classes,
         )
     elif model_type == "decoder":
         d_model = weights["proj.weight"].shape[0]
@@ -225,6 +238,7 @@ def get_trained_model(model_type: str, device: str) -> nn.Module:
             n_decoder_layers=config.n_decoder_layers,
             dropout=config.dropout,
             ff_multiplier=config.ff_multiplier,
+            num_classes=num_classes,
         )
 
     try:

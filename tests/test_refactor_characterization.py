@@ -1,8 +1,8 @@
 """Characterization tests for the predict_text refactoring.
 
 These tests verify that the combined predict_text() method on BaseSentimentModel
-produces identical results to the previous two-step pattern of
-tokenizer.tokenize_text() → model.predict() → .item().
+produces identical results to the previous two-step pattern.
+predict_text() now returns dict[str, float] for 3-class output.
 """
 
 import pytest
@@ -122,69 +122,70 @@ class TestPredictTextCharacterization:
         return _make_tokenizer(tmp_path)
 
     def test_predict_text_matches_two_step_rnn(self, tokenizer):
-        """predict_text should give same result as tokenize → predict → item for RNN."""
+        """predict_text should give same result as tokenize -> predict for RNN."""
         model = _make_rnn_model()
         model.tokenizer = tokenizer
         text = "the good great"
 
-        # Two-step pattern
+        # Two-step pattern: predict returns (B, 3) softmax probabilities
         token_ids = tokenizer.tokenize_text(text)
-        two_step_score = model.predict(token_ids).item()
+        two_step_probs = model.predict(token_ids)  # (1, 3)
 
-        # Combined method
-        combined_score = model.predict_text(text)
+        # Combined method returns dict
+        combined_result = model.predict_text(text)
 
-        assert combined_score == pytest.approx(two_step_score)
+        # Verify each class probability matches
+        for i, label in enumerate(model.LABEL_NAMES):
+            assert combined_result[label] == pytest.approx(two_step_probs[0, i].item(), abs=1e-6)
 
     def test_predict_text_matches_two_step_encoder(self, tokenizer):
-        """predict_text should give same result as tokenize → predict → item for Encoder."""
+        """predict_text should give same result as tokenize -> predict for Encoder."""
         model = _make_encoder_model()
         model.tokenizer = tokenizer
         text = "the good great"
 
-        # Two-step pattern
         token_ids = tokenizer.tokenize_text(text)
-        two_step_score = model.predict(token_ids).item()
+        two_step_probs = model.predict(token_ids)  # (1, 3)
+        combined_result = model.predict_text(text)
 
-        # Combined method
-        combined_score = model.predict_text(text)
-
-        assert combined_score == pytest.approx(two_step_score)
+        for i, label in enumerate(model.LABEL_NAMES):
+            assert combined_result[label] == pytest.approx(two_step_probs[0, i].item(), abs=1e-6)
 
     def test_predict_text_matches_two_step_decoder(self, tokenizer):
-        """predict_text should give same result as tokenize → predict → item for Decoder."""
+        """predict_text should give same result as tokenize -> predict for Decoder."""
         model = _make_decoder_model()
         model.tokenizer = tokenizer
         text = "the good great"
 
-        # Two-step pattern
         token_ids = tokenizer.tokenize_text(text)
-        two_step_score = model.predict(token_ids).item()
+        two_step_probs = model.predict(token_ids)  # (1, 3)
+        combined_result = model.predict_text(text)
 
-        # Combined method
-        combined_score = model.predict_text(text)
+        for i, label in enumerate(model.LABEL_NAMES):
+            assert combined_result[label] == pytest.approx(two_step_probs[0, i].item(), abs=1e-6)
 
-        assert combined_score == pytest.approx(two_step_score)
-
-    def test_predict_text_returns_float(self, tokenizer):
-        """predict_text should return a Python float, not a tensor."""
+    def test_predict_text_returns_dict(self, tokenizer):
+        """predict_text should return a dict mapping label names to floats."""
         model = _make_rnn_model()
         model.tokenizer = tokenizer
-        score = model.predict_text("the good great")
-        assert isinstance(score, float)
+        result = model.predict_text("the good great")
+        assert isinstance(result, dict)
+        assert set(result.keys()) == {"negative", "neutral", "positive"}
+        assert all(isinstance(v, float) for v in result.values())
 
-    def test_predict_text_score_in_range(self, tokenizer):
-        """predict_text score should be between 0 and 1 (sigmoid output)."""
+    def test_predict_text_probabilities_sum_to_one(self, tokenizer):
+        """predict_text probabilities should sum to approximately 1.0 (softmax)."""
         model = _make_rnn_model()
         model.tokenizer = tokenizer
-        score = model.predict_text("the good great")
-        assert 0.0 <= score <= 1.0
+        result = model.predict_text("the good great")
+        total = sum(result.values())
+        assert total == pytest.approx(1.0, abs=1e-5)
 
     def test_predict_text_no_gradient(self, tokenizer):
         """predict_text should not compute gradients."""
         model = _make_rnn_model()
         model.tokenizer = tokenizer
         with torch.no_grad():
-            # Calling predict_text inside no_grad should work fine
-            score = model.predict_text("the good great")
-        assert isinstance(score, float)
+            result = model.predict_text("the good great")
+        assert isinstance(result, dict)
+        assert "positive" in result

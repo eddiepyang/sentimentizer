@@ -1,0 +1,44 @@
+# Version control
+.git/
+.gitignore
+
+# Python environments
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+
+# Development tools
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+.vscode/
+.bsp/
+
+# Notebooks and scratch
+*.ipynb
+notebooks/
+scratch/
+.ipynb_checkpoints/
+
+# Test and docs (not needed in runtime image)
+tests/
+docs/
+test_dashboards/
+
+# Data files (weights are downloaded at runtime or mounted)
+*.parquet
+*.tar
+
+# Other
+*.md
+!README.md
+Makefile
+go.mod
+main.go
+k8s/
+metrics/
+scripts/
+workflows/

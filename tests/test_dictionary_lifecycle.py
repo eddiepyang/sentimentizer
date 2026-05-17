@@ -287,6 +287,6 @@ def test_build_dictionary_deterministic_ordering(ray_init, temp_data_dir):
     ), f"Dictionaries have different sizes: {len(dict1)} vs {len(dict2)}"
 
     for word in dict1.token2id:
-        assert dict1.token2id[word] == dict2.token2id[word], (
-            f"Token ID mismatch for {word!r}: " f"{dict1.token2id[word]} vs {dict2.token2id[word]}"
-        )
+        assert (
+            dict1.token2id[word] == dict2.token2id[word]
+        ), f"Token ID mismatch for {word!r}: {dict1.token2id[word]} vs {dict2.token2id[word]}"
