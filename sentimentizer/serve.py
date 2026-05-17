@@ -229,10 +229,12 @@ class SentimentizerDeployment:
         for i, text in enumerate(texts):
             scores = {lbl: probs[i, j].item() for j, lbl in enumerate(label_names)}
             label = max(scores, key=scores.get)
-            results.append({
-                "text": text,
-                "prediction": {"model": resolved_name, "label": label, "scores": scores},
-            })
+            results.append(
+                {
+                    "text": text,
+                    "prediction": {"model": resolved_name, "label": label, "scores": scores},
+                }
+            )
         return results
 
     # ---- Router prediction logic --------------------------------------------

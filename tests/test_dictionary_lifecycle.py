@@ -198,9 +198,9 @@ def test_from_dataset_no_save_when_disabled(ray_init, temp_data_dir):
     tokenizer = Tokenizer.from_dataset(ds, cfg=cfg)
 
     # Dictionary should NOT have been saved to disk
-    assert not os.path.exists(dict_path), (
-        "Dictionary was saved to disk even though save_dictionary=False"
-    )
+    assert not os.path.exists(
+        dict_path
+    ), "Dictionary was saved to disk even though save_dictionary=False"
 
     # But the in-memory dictionary should still have words
     assert len(tokenizer.dictionary) > 0, "In-memory dictionary is empty"
@@ -258,9 +258,9 @@ def test_update_run_loads_existing_dictionary(ray_init, temp_data_dir):
     # The loaded dictionary should contain the initial words
     assert "initial" in tokenizer.dictionary.token2id
     assert "hello" in tokenizer.dictionary.token2id
-    assert tokenizer.dictionary.token2id["hello"] == initial_id, (
-        "Token IDs should be preserved when loading an existing dictionary"
-    )
+    assert (
+        tokenizer.dictionary.token2id["hello"] == initial_id
+    ), "Token IDs should be preserved when loading an existing dictionary"
 
 
 def test_build_dictionary_deterministic_ordering(ray_init, temp_data_dir):
@@ -282,11 +282,11 @@ def test_build_dictionary_deterministic_ordering(ray_init, temp_data_dir):
     dict1 = _build_dictionary_distributed(ds, cfg)
     dict2 = _build_dictionary_distributed(ds, cfg)
 
-    assert len(dict1) == len(dict2), (
-        f"Dictionaries have different sizes: {len(dict1)} vs {len(dict2)}"
-    )
+    assert len(dict1) == len(
+        dict2
+    ), f"Dictionaries have different sizes: {len(dict1)} vs {len(dict2)}"
 
     for word in dict1.token2id:
-        assert dict1.token2id[word] == dict2.token2id[word], (
-            f"Token ID mismatch for {word!r}: {dict1.token2id[word]} vs {dict2.token2id[word]}"
-        )
+        assert (
+            dict1.token2id[word] == dict2.token2id[word]
+        ), f"Token ID mismatch for {word!r}: {dict1.token2id[word]} vs {dict2.token2id[word]}"
