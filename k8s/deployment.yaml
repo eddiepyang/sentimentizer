@@ -19,50 +19,50 @@ spec:
       securityContext:
         runAsNonRoot: true
       containers:
-      - name: sentimentizer
-        image: sentimentizer:latest
-        imagePullPolicy: IfNotPresent
-        ports:
-        - name: http
-          containerPort: 8000
-          protocol: TCP
-        env:
-        # Load only the models you need to reduce memory and startup time.
-        # Comma-separated list: rnn, encoder, decoder (default: all three).
-        - name: SENTIMENTIZER_MODELS
-          value: "rnn"
-        resources:
-          requests:
-            memory: "1Gi"
-            cpu: "500m"
-          limits:
-            memory: "4Gi"
-            cpu: "2000m"
-        # Startup probe: generous timeout for cold starts (model download
-        # from HF Hub can take minutes). Checked before liveness/readiness.
-        startupProbe:
-          httpGet:
-            path: /health
-            port: 8000
-          initialDelaySeconds: 10
-          periodSeconds: 10
-          failureThreshold: 30  # up to 5 minutes
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: 8000
-          periodSeconds: 10
-          timeoutSeconds: 5
-          failureThreshold: 3
-        readinessProbe:
-          httpGet:
-            path: /health
-            port: 8000
-          periodSeconds: 5
-          timeoutSeconds: 3
-          failureThreshold: 3
-        lifecycle:
-          preStop:
-            exec:
-              # Allow load balancer to drain connections before SIGTERM
-              command: ["sleep", "5"]
+        - name: sentimentizer
+          image: sentimentizer:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            # Load only the models you need to reduce memory and startup time.
+            # Comma-separated list: rnn, encoder, decoder (default: all three).
+            - name: SENTIMENTIZER_MODELS
+              value: "encoder"
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"
+          # Startup probe: generous timeout for cold starts (model download
+          # from HF Hub can take minutes). Checked before liveness/readiness.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 30 # up to 5 minutes
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                # Allow load balancer to drain connections before SIGTERM
+                command: ["sleep", "5"]

@@ -22,6 +22,7 @@ Endpoints:
     GET  /router/models    — Router model metadata
 """
 
+import contextlib
 import dataclasses
 import os
 import time
@@ -184,13 +185,11 @@ class SentimentizerDeployment:
 
     def __del__(self) -> None:
         """Log clean shutdown for observability."""
-        try:
+        with contextlib.suppress(Exception):
             logger.info(
                 "SentimentizerDeployment shutting down",
                 models=list(getattr(self, "models", {}).keys()),
             )
-        except Exception:
-            pass
 
     # ---- Sentiment prediction logic ----------------------------------------
 
