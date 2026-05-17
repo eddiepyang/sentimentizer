@@ -68,11 +68,6 @@ class ServiceMetrics:
             return self.total_latency_s / self.request_count if self.request_count else 0
 
 
-# Singleton instances — one for sentiment, one for router
-sentiment_metrics = ServiceMetrics(prefix="sentimentizer")
-router_metrics = ServiceMetrics(prefix="router")
-
-
 def build_predict_response(
     text: str,
     prediction: dict[str, Any],

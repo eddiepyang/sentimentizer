@@ -9,7 +9,7 @@ description = "smole language models"
 readme = "README.md"
 authors = [{ name = "Edward Yang", email = "edwardpyang@gmail.com" }]
 license = "MIT"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 classifiers = [
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python",
@@ -86,7 +86,7 @@ dev = [
 ]
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 line-length = 100
 exclude = ["scripts"]
 
@@ -110,7 +110,7 @@ ignore = [
 
 [tool.black]
 line-length = 100
-target-version = ["py311"]
+target-version = ["py312"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

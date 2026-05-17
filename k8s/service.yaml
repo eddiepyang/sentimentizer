@@ -11,9 +11,5 @@ spec:
     port: 8000
     targetPort: 8000
     protocol: TCP
-  - name: dashboard
-    port: 8265
-    targetPort: 8265
-    protocol: TCP
   selector:
     app: sentimentizer
