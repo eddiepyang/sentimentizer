@@ -32,6 +32,7 @@ predictor.predict("amazing restaurant!")
 predictor.predict_batch(["Great food!", "Terrible service."])
 # >> [{"label": "positive", "score": 0.88,
 #      "token_count": 2, "model": "encoder"}, ...]
+```
 
 For advanced use, you can also call tokenization and prediction separately:
 
