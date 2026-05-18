@@ -18,24 +18,11 @@ uv add "sentimentizer[ray]"
 ```
 
 ## Quick Start
-
-```python
-from sentimentizer.tokenizer import get_trained_tokenizer
-from sentimentizer.models.rnn import get_trained_model
-
-model = get_trained_model(device="cpu")
-tokenizer = get_trained_tokenizer()
-
-review_text = "greatest pie ever, best in town!"
-model.predict_text(review_text, tokenizer)
-# >> {'negative': 0.03, 'neutral': 0.05, 'positive': 0.92}
-```
-
+  
 `predict_text()` on `BaseSentimentModel` returns all 3 class probabilities. For the serving API, responses include `label`, `score`, `token_count`, and `model`:
 
 ```python
 from sentimentizer.predictor import SentimentPredictor         # Predictor (model loading, inference)
-from sentimentizer.predictor import SentimentPredictor             # Predictor (model loading, inference)
 
 predictor = SentimentPredictor(model_name="encoder")
 predictor.predict("amazing restaurant!")
