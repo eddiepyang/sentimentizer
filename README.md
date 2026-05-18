@@ -19,7 +19,7 @@ uv add "sentimentizer[ray]"
 
 ## Quick Start
   
-`predict_text()` on `BaseSentimentModel` returns all 3 class probabilities. For the serving API, responses include `label`, `score`, `token_count`, and `model`:
+Run the model locally to get responses that include `label`, `score`, `token_count`, and `model`:
 
 ```python
 from sentimentizer.predictor import SentimentPredictor         # Predictor (model loading, inference)
