@@ -1,8 +1,8 @@
 # Sentimentizer Router Configuration
-# Controls the SetFit router training and augmentation pipeline.
+# Controls the router training and augmentation pipeline.
 # CLI flags override these defaults when provided.
 
-# Training configuration (SetFit)
+# Training configuration (sentence-transformers + sklearn)
 training:
   base_model: "BAAI/bge-base-en-v1.5"  # BGE-Base: 109M params, 768-dim, strong MTEB scores
   num_iterations: 20               # Contrastive pairs per example

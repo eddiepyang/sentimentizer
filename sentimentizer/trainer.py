@@ -3,9 +3,8 @@ from __future__ import annotations
 import math
 import os
 import time
-from collections import deque
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +12,8 @@ import numpy as np
 import torch
 from torch import optim
 from torch.utils.data import DataLoader
+from tqdm import tqdm
+from tqdm.contrib.logging import logging_redirect_tqdm
 
 try:
     import ray
@@ -730,43 +731,41 @@ class Trainer:
     scheduler: optim.lr_scheduler.LRScheduler
     cfg: TrainerConfig
     model_type: str
-    losses: deque[float] = field(default_factory=lambda: deque(maxlen=1000))
-    _recent_losses: deque[float] = field(default_factory=lambda: deque(maxlen=120), repr=False)
-    total_train_loss: float = 0.0
-    train_step_count: int = 0
     val_loss: float = float("inf")
     latest_train_loss: float = 0.0
     latest_epoch: int = 0
     latest_metrics: ClassificationMetrics | None = None
 
     def _train_epoch(self, model: torch.nn.Module, train_loader: DataLoader, epoch: int) -> None:
-        i = 0
-        n = len(train_loader.dataset)  # type: ignore[arg-type]
         model.train()
+        epoch_loss_sum = 0.0
+        epoch_sample_count = 0
+        loss_ema = 0.0
+        update_every = 50  # update tqdm postfix every N batches
 
-        for j, (sent, target) in enumerate(train_loader):
-            loss_val = train_step(
-                model,
-                data=sent.to(self.cfg.device),
-                target=target.to(self.cfg.device),
-                optimizer=self.optimizer,
-                loss_function=self.loss_function,
-            )
+        with logging_redirect_tqdm():
+            pbar = tqdm(train_loader, desc=f"[{self.model_type}] epoch {epoch}", leave=False)
+            for i, (sent, target) in enumerate(pbar):
+                batch_size = target.size(0)
+                loss_val = train_step(
+                    model,
+                    data=sent.to(self.cfg.device),
+                    target=target.to(self.cfg.device),
+                    optimizer=self.optimizer,
+                    loss_function=self.loss_function,
+                )
+                epoch_loss_sum += loss_val * batch_size
+                epoch_sample_count += batch_size
+                loss_ema = 0.9 * loss_ema + 0.1 * loss_val if i > 0 else loss_val
+                if i % update_every == 0:
+                    pbar.set_postfix(
+                        loss=f"{loss_ema:.4f}",
+                        lr=f"{self.optimizer.param_groups[0]['lr']:.6f}",
+                    )
 
-            i += len(target)
-            self.losses.append(loss_val)
-            self._recent_losses.append(loss_val)
-            self.total_train_loss += loss_val
-            self.train_step_count += 1
-            if i % (self.cfg.batch_size * 250) == 0:
-                current_loss = float(np.mean(self._recent_losses))
-                logger.info(
-                    f"[{self.model_type}] [epoch {epoch}] {i / n:.2f} of rows completed in "
-                    f"{j + 1} cycles, current loss at {current_loss:.4f}"
-                )
-                logger.info(
-                    f"[{self.model_type}] [epoch {epoch}] current learning rate at {self.optimizer.param_groups[0]['lr']:.4f}"  # noqa: E501
-                )
+        # Store per-epoch weighted average for evaluate() to consume
+        self._epoch_loss_sum = epoch_loss_sum  # type: ignore[attr-defined]
+        self._epoch_sample_count = epoch_sample_count  # type: ignore[attr-defined]
 
     def fit(
         self, model: torch.nn.Module, train_data: CorpusDataset, val_data: CorpusDataset
@@ -857,27 +856,35 @@ class Trainer:
 
         all_probs: list[torch.Tensor] = []
         all_targets: list[torch.Tensor] = []
-        losses = []
+        val_loss_sum = 0.0
+        val_sample_count = 0
 
-        with torch.no_grad():
-            for sent, target in val_loader:
-                sent = sent.to(self.cfg.device)
-                target = target.to(self.cfg.device)
-                logits = model(sent)
-                loss_val = self.loss_function(logits, target)
-                losses.append(loss_val.item())
+        with logging_redirect_tqdm():
+            pbar = tqdm(val_loader, desc=f"[{self.model_type}] eval {epoch}", leave=False)
+            with torch.no_grad():
+                for sent, target in pbar:
+                    batch_size = target.size(0)
+                    sent = sent.to(self.cfg.device)
+                    target = target.to(self.cfg.device)
+                    logits = model(sent)
+                    loss_val = self.loss_function(logits, target)
+                    val_loss_sum += loss_val.item() * batch_size
+                    val_sample_count += batch_size
 
-                all_probs.append(torch.softmax(logits, dim=-1).cpu())
-                all_targets.append(target.cpu())
+                    all_probs.append(torch.softmax(logits, dim=-1).cpu())
+                    all_targets.append(target.cpu())
 
         probabilities = torch.cat(all_probs).numpy()
         targets = torch.cat(all_targets).numpy()
 
         metrics = compute_epoch_metrics(probabilities, targets, self.model_type)
 
-        self.val_loss = float(np.mean(losses))
+        self.val_loss = val_loss_sum / val_sample_count if val_sample_count > 0 else 0.0
+        # Per-epoch weighted train loss from _train_epoch
+        train_loss_sum = getattr(self, "_epoch_loss_sum", 0.0)
+        train_sample_count = getattr(self, "_epoch_sample_count", 0)
         self.latest_train_loss = (
-            self.total_train_loss / self.train_step_count if self.train_step_count > 0 else 0.0
+            train_loss_sum / train_sample_count if train_sample_count > 0 else 0.0
         )
         self.latest_epoch = epoch
         self.latest_metrics = metrics
@@ -931,41 +938,59 @@ def _run_training_loop(
     for epoch in range(1, epochs + 1):
         # Training
         model.train()
-        epoch_losses = []
-        for data, target in train_iter:
-            loss_val = train_step(
-                model,
-                data=data,
-                target=target,
-                optimizer=optimizer,
-                loss_function=loss_function,
-            )
-            epoch_losses.append(loss_val)
-            state.running_loss_mean = (
-                (state.running_loss_mean * state.steps + loss_val) / (state.steps + 1)
-                if state.steps > 0
-                else loss_val
-            )
-            state.steps += 1
+        epoch_loss_sum = 0.0
+        epoch_sample_count = 0
 
-        train_loss = float(np.mean(epoch_losses)) if epoch_losses else 0.0
+        loss_ema = 0.0
+        update_every = 50
+
+        with logging_redirect_tqdm():
+            pbar = tqdm(train_iter, desc=f"[{model_type}] epoch {epoch}", leave=False)
+            for i, (data, target) in enumerate(pbar):
+                batch_size = target.size(0)
+                loss_val = train_step(
+                    model,
+                    data=data,
+                    target=target,
+                    optimizer=optimizer,
+                    loss_function=loss_function,
+                )
+                epoch_loss_sum += loss_val * batch_size
+                epoch_sample_count += batch_size
+                state.running_loss_mean = (
+                    (state.running_loss_mean * state.steps + loss_val) / (state.steps + 1)
+                    if state.steps > 0
+                    else loss_val
+                )
+                state.steps += 1
+                loss_ema = 0.9 * loss_ema + 0.1 * loss_val if i > 0 else loss_val
+                if i % update_every == 0:
+                    pbar.set_postfix(
+                        loss=f"{loss_ema:.4f}",
+                        lr=f"{optimizer.param_groups[0]['lr']:.6f}",
+                    )
+
+        train_loss = epoch_loss_sum / epoch_sample_count if epoch_sample_count > 0 else 0.0
         state.latest_train_loss = train_loss
 
         # Validation
         model.eval()
-        val_losses = []
+        val_loss_sum = 0.0
+        val_sample_count = 0
         all_probs = []
         all_targets = []
         with torch.no_grad():
             for data, target in val_iter:
+                batch_size = target.size(0)
                 output = model(data)
                 loss_val = loss_function(output, target)
-                val_losses.append(loss_val.item())
+                val_loss_sum += loss_val.item() * batch_size
+                val_sample_count += batch_size
 
                 all_probs.append(torch.softmax(output, dim=-1).cpu())
                 all_targets.append(target.cpu())
 
-        val_loss = float(np.mean(val_losses)) if val_losses else 0.0
+        val_loss = val_loss_sum / val_sample_count if val_sample_count > 0 else 0.0
         probabilities = torch.cat(all_probs).numpy() if all_probs else np.array([])
         targets = torch.cat(all_targets).numpy() if all_targets else np.array([])
 
@@ -1227,26 +1252,50 @@ def _train_func(config: dict) -> None:
         f"use_warmup={use_warmup}, warmup_steps={warmup_steps}, total_steps={total_steps}"
     )
 
+    is_rank_0 = train.get_context().get_world_rank() == 0
+
     for epoch in range(1, epochs + 1):
         model.train()
-        epoch_losses = []
+        epoch_loss_sum = 0.0
+        epoch_sample_count = 0
 
-        for _i, batch in enumerate(train_shard.iter_torch_batches(batch_size=batch_size)):
-            loss_val = train_step(
-                model,
-                data=batch["data"].long().to(device),
-                target=batch["target"].long().to(device),
-                optimizer=optimizer,
-                loss_function=loss_function,
+        ray_loss_ema = 0.0
+        ray_update_every = 50
+
+        with logging_redirect_tqdm():
+            train_pbar = tqdm(
+                train_shard.iter_torch_batches(batch_size=batch_size),
+                desc=f"[{model_type}] epoch {epoch}",
+                leave=False,
+                disable=not is_rank_0,
             )
-            epoch_losses.append(loss_val)
+            for i, batch in enumerate(train_pbar):
+                data = batch["data"].long().to(device)
+                target = batch["target"].long().to(device)
+                bs = target.size(0)
+                loss_val = train_step(
+                    model,
+                    data=data,
+                    target=target,
+                    optimizer=optimizer,
+                    loss_function=loss_function,
+                )
+                epoch_loss_sum += loss_val * bs
+                epoch_sample_count += bs
+                ray_loss_ema = 0.9 * ray_loss_ema + 0.1 * loss_val if i > 0 else loss_val
+                if i % ray_update_every == 0:
+                    train_pbar.set_postfix(
+                        loss=f"{ray_loss_ema:.4f}",
+                        lr=f"{optimizer.param_groups[0]['lr']:.6f}",
+                    )
 
         if scheduler:
             scheduler.step()
 
         # Validation
         logger.info(f"[{model_type}] [epoch {epoch}] evaluating predictions...")
-        val_losses = []
+        val_loss_sum = 0.0
+        val_sample_count = 0
         all_probs = []
         all_targets = []
         model.eval()
@@ -1254,15 +1303,17 @@ def _train_func(config: dict) -> None:
             for batch in val_shard.iter_torch_batches(batch_size=batch_size):
                 data = batch["data"].long().to(device)
                 target = batch["target"].long().to(device)
+                bs = target.size(0)
                 logits = model(data)
                 loss_val = loss_function(logits, target)
-                val_losses.append(loss_val.item())
+                val_loss_sum += loss_val.item() * bs
+                val_sample_count += bs
 
                 all_probs.append(torch.softmax(logits, dim=-1).cpu())
                 all_targets.append(target.cpu())
 
-        val_loss = float(np.mean(val_losses)) if val_losses else 0.0
-        train_loss = float(np.mean(epoch_losses)) if epoch_losses else 0.0
+        val_loss = val_loss_sum / val_sample_count if val_sample_count > 0 else 0.0
+        train_loss = epoch_loss_sum / epoch_sample_count if epoch_sample_count > 0 else 0.0
 
         probabilities = torch.cat(all_probs).numpy()
         targets = torch.cat(all_targets).numpy()

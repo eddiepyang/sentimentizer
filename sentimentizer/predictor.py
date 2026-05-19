@@ -38,21 +38,12 @@ from sentimentizer.models.base import BaseSentimentModel, get_trained_model
 from sentimentizer.tokenizer import Tokenizer, get_trained_tokenizer, regex_tokenize, text_sequencer
 
 # ---------------------------------------------------------------------------
-# Router imports (optional — SetFit may not be installed)
+# Router imports (optional — sentence-transformers may not be installed)
 # ---------------------------------------------------------------------------
 
 try:
-    import sentimentizer.compat  # noqa: F401, I001 — must patch transformers BEFORE setfit import
-
-    from setfit import SetFitModel
-
-    _SETFIT_AVAILABLE = True
-except ImportError:
-    _SETFIT_AVAILABLE = False
-
-try:
-    from sentimentizer.router.config import RouteLabels, SetFitConfig
-    from sentimentizer.router.train_router import _load_setfit_model
+    from sentimentizer.router.config import RouteLabels
+    from sentimentizer.router.model import RouterModel
 
     _ROUTER_AVAILABLE = True
 except ImportError:
@@ -119,13 +110,13 @@ class SentimentPredictor:
             return None, str(exc)
 
     def _load_router_model(self, router_model_path: str) -> tuple[Any, str | None]:
-        """Load the SetFit router model. Returns (model, error).
+        """Load the RouterModel. Returns (model, error).
 
         Returns (None, error_message) on failure so callers can return 503
         instead of crashing the whole deployment.
         """
-        if not _ROUTER_AVAILABLE or not _SETFIT_AVAILABLE:
-            msg = "setfit package not installed"
+        if not _ROUTER_AVAILABLE:
+            msg = "sentence-transformers package not installed"
             logger.warning(f"Router not available: {msg}")
             return None, msg
 
@@ -133,11 +124,11 @@ class SentimentPredictor:
         try:
             if path.exists():
                 logger.info(f"Loading router model from {path}")
-                model = SetFitModel.from_pretrained(str(path))
+                model = RouterModel.from_pretrained(str(path))
             else:
-                logger.info("Loading router base model with classification head")
-                config = SetFitConfig()
-                model = _load_setfit_model(config.base_model, num_classes=RouteLabels.num_classes())
+                msg = f"Router model path not found: {path}"
+                logger.warning(msg)
+                return None, msg
             return model, None
         except Exception as exc:
             logger.exception("Failed to load router model")

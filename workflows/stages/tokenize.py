@@ -31,6 +31,13 @@ def run_tokenize(state: State, *, resume: bool = False) -> None:
     existing_rows = _parquet_row_count(DriverConfig.files.processed_reviews_file_path)
     skip_data = existing_rows >= stop
 
+    # A "new" run should always re-transform data from scratch — the
+    # dictionary, tokenizer config (e.g. include_neutral), or class
+    # mapping may have changed since the last run, so stale parquet
+    # files with old targets would break 3-class training.
+    if state.run_type == "new":
+        skip_data = False
+
     if skip_data and (resume or state.run_type == "update"):
         logger.info(f"skipping tokenize: {existing_rows} rows already exist (need {stop})")
         return
@@ -41,11 +48,8 @@ def run_tokenize(state: State, *, resume: bool = False) -> None:
     data_source = read_parquet(DriverConfig.files.raw_reviews_file_path, use_ray=use_ray)
 
     if state.run_type == "new":
-        # Always build dictionary (matching old behavior where from_data/from_dataset
-        # was called regardless of skip_data)
+        # Always build dictionary from scratch
         tokenizer = Tokenizer.build_dictionary(data_source)
-        if skip_data:
-            logger.info(f"skipping data creation: {existing_rows} rows already exist (need {stop})")
 
     elif resume or state.run_type == "update":
         dictionary = corpora.Dictionary.load(DriverConfig.files.dictionary_file_path)

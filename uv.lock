@@ -23,24 +23,6 @@ resolution-markers = [
 ]
 
 [[package]]
-name = "accelerate"
-version = "1.13.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "huggingface-hub" },
-    { name = "numpy" },
-    { name = "packaging" },
-    { name = "psutil" },
-    { name = "pyyaml" },
-    { name = "safetensors" },
-    { name = "torch" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/ca/14/787e5498cd062640f0f3d92ef4ae4063174f76f9afd29d13fc52a319daae/accelerate-1.13.0.tar.gz", hash = "sha256:d631b4e0f5b3de4aff2d7e9e6857d164810dfc3237d54d017f075122d057b236", size = 402835, upload-time = "2026-03-04T19:34:12.359Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/7e/46/02ac5e262d4af18054b3e922b2baedbb2a03289ee792162de60a865defc5/accelerate-1.13.0-py3-none-any.whl", hash = "sha256:cf1a3efb96c18f7b152eb0fa7490f3710b19c3f395699358f08decca2b8b62e0", size = 383744, upload-time = "2026-03-04T19:34:10.313Z" },
-]
-
-[[package]]
 name = "aiohappyeyeballs"
 version = "2.6.1"
 source = { registry = "https://pypi.org/simple" }
@@ -714,28 +696,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/fc/f8/98eea607f65de6527f8a2e8885fc8015d3e6f5775df186e443e0964a11c3/distro-1.9.0.tar.gz", hash = "sha256:2fa77c6fd8940f116ee1d6b94a2f90b13b5ea8d019b98bc8bafdcabcdd9bdbed", size = 60722, upload-time = "2023-12-24T09:54:32.31Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/12/b3/231ffd4ab1fc9d679809f356cebee130ac7daa00d6d6f3206dd4fd137e9e/distro-1.9.0-py3-none-any.whl", hash = "sha256:7bffd925d65168f85027d8da9af6bddab658135b840670a223589bc0c8ef02b2", size = 20277, upload-time = "2023-12-24T09:54:30.421Z" },
-]
-
-[[package]]
-name = "evaluate"
-version = "0.4.6"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "datasets" },
-    { name = "dill" },
-    { name = "fsspec", extra = ["http"] },
-    { name = "huggingface-hub" },
-    { name = "multiprocess" },
-    { name = "numpy" },
-    { name = "packaging" },
-    { name = "pandas" },
-    { name = "requests" },
-    { name = "tqdm" },
-    { name = "xxhash" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/ad/d0/0c17a8e6e8dc7245f22dea860557c32bae50fc4d287ae030cb0e8ab8720f/evaluate-0.4.6.tar.gz", hash = "sha256:e07036ca12b3c24331f83ab787f21cc2dbf3631813a1631e63e40897c69a3f21", size = 65716, upload-time = "2025-09-18T13:06:30.581Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/3e/af/3e990d8d4002bbc9342adb4facd59506e653da93b2417de0fa6027cb86b1/evaluate-0.4.6-py3-none-any.whl", hash = "sha256:bca85bc294f338377b7ac2f861e21c308b11b2a285f510d7d5394d5df437db29", size = 84069, upload-time = "2025-09-18T13:06:29.265Z" },
 ]
 
 [[package]]
@@ -3387,12 +3347,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/55/20/18416624bcbae866ec0b111979766cebabe8e5ff7563ab953ecbaf3ff9e7/sentence_transformers-5.5.0-py3-none-any.whl", hash = "sha256:75313fdcc2397ec4b58297c25d6187fcca5a6b2aeb09570a72eff5a3223d8d58", size = 588665, upload-time = "2026-05-12T14:05:40.899Z" },
 ]
 
-[package.optional-dependencies]
-train = [
-    { name = "accelerate" },
-    { name = "datasets" },
-]
-
 [[package]]
 name = "sentimentizer"
 version = "0.310.1"
@@ -3418,6 +3372,7 @@ dependencies = [
     { name = "structlog" },
     { name = "torch" },
     { name = "torchmetrics" },
+    { name = "tqdm" },
 ]
 
 [package.optional-dependencies]
@@ -3441,7 +3396,7 @@ ray = [
 router = [
     { name = "datasets" },
     { name = "requests" },
-    { name = "setfit" },
+    { name = "sentence-transformers" },
 ]
 
 [package.dev-dependencies]
@@ -3489,11 +3444,12 @@ requires-dist = [
     { name = "rich", specifier = ">=15.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15.0" },
     { name = "scikit-learn", specifier = ">=1.8.0" },
-    { name = "setfit", marker = "extra == 'router'", specifier = ">=1.1.0" },
+    { name = "sentence-transformers", marker = "extra == 'router'", specifier = ">=4.0.0" },
     { name = "smart-open", specifier = ">=7.6.0" },
     { name = "structlog", specifier = ">=25.5.0" },
     { name = "torch", specifier = ">=2.11.0" },
     { name = "torchmetrics", specifier = ">=1.9.0" },
+    { name = "tqdm", specifier = ">=4.67.0" },
 ]
 provides-extras = ["ray", "router", "onnx", "dev"]
 
@@ -3506,24 +3462,6 @@ dev = [
     { name = "pytest", specifier = ">=9.0.0" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
     { name = "ruff", specifier = ">=0.15.0" },
-]
-
-[[package]]
-name = "setfit"
-version = "1.1.3"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "datasets" },
-    { name = "evaluate" },
-    { name = "huggingface-hub" },
-    { name = "packaging" },
-    { name = "scikit-learn" },
-    { name = "sentence-transformers", extra = ["train"] },
-    { name = "transformers" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/ac/f5/5dbca5ff076524daccf6a63062f8903d97c0c56c4a631f17730ae5723b1f/setfit-1.1.3.tar.gz", hash = "sha256:db54a7b6e86118343275cc70c39749f71e10aa226fef510543bcd7c8b00b9f19", size = 84459, upload-time = "2025-08-05T13:22:38.727Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/7d/14/2e284bdb5e51052246235cc1e95658ea11855b99ca738492e06f7ec8512a/setfit-1.1.3-py3-none-any.whl", hash = "sha256:18affb2936cf4158885c49a1a828f4225f8d96b28224c13193ab268ab35ef76a", size = 75597, upload-time = "2025-08-05T13:22:37.421Z" },
 ]
 
 [[package]]

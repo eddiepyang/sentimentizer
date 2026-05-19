@@ -1,7 +1,7 @@
 """Golden example utterances for the Yelp review router.
 
 Contains 10 seed utterances per category (Dietary, Service, General)
-for use in SetFit contrastive learning. These are expanded via
+for use in contrastive learning. These are expanded via
 augment.py (GLM 5.1 via Ollama) to generate hard negatives.
 """
 

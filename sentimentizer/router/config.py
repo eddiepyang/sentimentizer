@@ -1,4 +1,4 @@
-"""Configuration for the SetFit router training pipeline.
+"""Configuration for the router training pipeline.
 
 Default base model is BAAI/bge-base-en-v1.5 (109M params, 768-dim
 embeddings, strong MTEB scores). Switch to mxbai-embed-large-v1
@@ -18,8 +18,8 @@ import yaml
 
 
 @dataclass(frozen=True)
-class SetFitConfig:
-    """Configuration for the SetFit router training pipeline.
+class RouterConfig:
+    """Configuration for the router training pipeline.
 
     Attributes:
         base_model: HuggingFace model ID for the sentence-transformer backbone.
@@ -38,6 +38,11 @@ class SetFitConfig:
     max_seq_length: int = 512
     seed: int = 42
     output_dir: Path = Path("models/router")
+
+
+# Backward-compatible alias — existing code that references SetFitConfig
+# will continue to work.
+SetFitConfig = RouterConfig
 
 
 @dataclass(frozen=True)
@@ -91,7 +96,7 @@ def _get_default_config_path() -> Path:
 
 def load_router_config(
     path: str | Path | None = None,
-) -> tuple[SetFitConfig, AugmentConfig]:
+) -> tuple[RouterConfig, AugmentConfig]:
     """Load router configuration from a YAML file.
 
     Args:
@@ -99,7 +104,7 @@ def load_router_config(
               config.yaml bundled with the package.
 
     Returns:
-        Tuple of (SetFitConfig, AugmentConfig) with all settings populated.
+        Tuple of (RouterConfig, AugmentConfig) with all settings populated.
 
     Raises:
         FileNotFoundError: If the config file doesn't exist.
@@ -119,4 +124,4 @@ def load_router_config(
 
     augmentation_dict = raw.get("augmentation", {})
 
-    return SetFitConfig(**training_dict), AugmentConfig(**augmentation_dict)
+    return RouterConfig(**training_dict), AugmentConfig(**augmentation_dict)

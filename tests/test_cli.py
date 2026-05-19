@@ -356,10 +356,15 @@ def test_resolve_device_no_warning_when_no_nvidia_libs(
     assert not any("CPU-only" in rec.message for rec in caplog.records)
 
 
-def test_run_tokenize_new_skips_data_when_rows_exist(
+def test_run_tokenize_new_retransforms_data_when_rows_exist(
     monkeypatch: pytest.MonkeyPatch, tmp_path: str
 ) -> None:
-    """run_type='new' should create dictionary but skip data when parquet has enough rows."""
+    """run_type='new' should always re-transform data, even when parquet has enough rows.
+
+    A 'new' run rebuilds everything from scratch — the tokenizer config
+    (e.g. include_neutral) or class mapping may have changed, so stale
+    parquet files must be re-created.
+    """
     from sentimentizer.config import DriverConfig
     from workflows.driver import State
 
@@ -408,7 +413,7 @@ def test_run_tokenize_new_skips_data_when_rows_exist(
     run_tokenize(state)
 
     assert "build_dictionary" in calls, "Dictionary should have been created"
-    assert "transform" not in calls, "Data should not have been transformed"
+    assert "transform" in calls, "Data should always be re-transformed on 'new' run"
 
 
 def test_run_tokenize_new_creates_data_when_rows_insufficient(

@@ -59,7 +59,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import Response as StarletteResponse
 
-import sentimentizer.compat  # noqa: F401
 from sentimentizer import logger
 from sentimentizer.predictor import _MODEL_CONFIGS, SentimentPredictor
 from sentimentizer.serve.base import ServiceMetrics, serve
