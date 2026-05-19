@@ -1080,7 +1080,7 @@ class _LinearWarmupCosineScheduler(torch.optim.lr_scheduler.LambdaLR):
         def lr_lambda(step: int) -> float:
             if step < warmup_steps:
                 return (step + 1) / max(1, warmup_steps)
-            progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+            progress = min(1.0, (step - warmup_steps) / max(1, total_steps - warmup_steps))
             return eta_min + (1.0 - eta_min) * 0.5 * (1.0 + math.cos(math.pi * progress))
 
         super().__init__(optimizer, lr_lambda)
@@ -1289,9 +1289,6 @@ def _train_func(config: dict) -> None:
                         lr=f"{optimizer.param_groups[0]['lr']:.6f}",
                     )
 
-        if scheduler:
-            scheduler.step()
-
         # Validation
         logger.info(f"[{model_type}] [epoch {epoch}] evaluating predictions...")
         val_loss_sum = 0.0
@@ -1319,6 +1316,9 @@ def _train_func(config: dict) -> None:
         targets = torch.cat(all_targets).numpy()
 
         metrics = compute_epoch_metrics(probabilities, targets, model_type)
+
+        if scheduler:
+            scheduler.step()
 
         # Publish metrics from rank 0 to prevent worker collisions
         if train.get_context().get_world_rank() == 0:
