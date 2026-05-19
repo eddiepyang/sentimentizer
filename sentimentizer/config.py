@@ -105,6 +105,11 @@ class SchedulerParams:
 class EncoderSchedulerParams(SchedulerParams):
     """Scheduler params for Encoder model.
 
+    T_max is 2x default_epochs("encoder") (= 8), not equal to it: training
+    uses only the gentle first half of the cosine curve so the LR stays
+    productive through the final epoch instead of decaying to eta_min.
+    The invariant is T_max >= epochs_trained — never train more epochs
+    than T_max (see TuningRun._train_final_model).
     Includes warmup_epochs for linear LR warmup at the start of training.
     Inherits eta_min and last_epoch from SchedulerParams; overrides T_max
     and adds warmup_epochs.
@@ -118,15 +123,18 @@ class EncoderSchedulerParams(SchedulerParams):
 class DecoderSchedulerParams(SchedulerParams):
     """Scheduler params for Decoder model.
 
-    Uses a higher minimum LR than the encoder because the decoder has
-    more parameters and is more prone to overfitting during early training.
+    T_max is 2x default_epochs("decoder") (= 8) for the same gentle-decay
+    reason as EncoderSchedulerParams; the T_max >= epochs_trained invariant
+    applies here too. Uses a higher minimum LR than the encoder because the
+    decoder has more parameters and is more prone to overfitting during
+    early training.
     Inherits last_epoch from SchedulerParams; overrides T_max, eta_min,
     and adds warmup_epochs.
     """
 
     T_max: int = 16
     eta_min: float = 1e-5
-    warmup_epochs: int = 3  # longer warmup for stable decoder training
+    warmup_epochs: int = 3  # linear warmup for this many epochs
 
 
 @dataclass(frozen=True)

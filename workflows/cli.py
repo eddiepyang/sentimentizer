@@ -194,14 +194,18 @@ def train(ctx: click.Context, resume: bool, **kwargs: Any) -> None:
 )
 @click.option("--agent-config", default=None, type=str, help="Path to agent config YAML")
 @click.option(
-    "--samples", "tune_samples", default=20, type=int, help="Ray Tune trials per iteration"
+    "--samples",
+    "tune_samples",
+    default=None,
+    type=int,
+    help="Ray Tune trials per iteration (default: from agent config YAML)",
 )
 @click.option(
     "--max-iterations",
     "tune_max_iterations",
-    default=5,
+    default=None,
     type=int,
-    help="Maximum agent tuning iterations",
+    help="Maximum agent tuning iterations (default: from agent config YAML)",
 )
 @click.option(
     "--output-dir",
@@ -320,7 +324,8 @@ def router() -> None:
 @router.command("train")
 @click.option("--data", type=click.Path(exists=True), help="Path to augmented JSONL data")
 @click.option(
-    "--base-model", default=None,
+    "--base-model",
+    default=None,
     help="Sentence-transformer base model (overrides config default)",
 )
 @click.option("--output-dir", default=None, help="Output directory for trained model")

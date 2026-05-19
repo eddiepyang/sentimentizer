@@ -296,8 +296,8 @@ The `--distributed` flag enables Ray Train, which distributes data and model tra
 | `--agent-config` | `None` | Path to agent config YAML (default: `sentimentizer/agent/config.yaml`) |
 | `--tune` | off | Use TuningRun skill to tune hyperparameters and validate model predictions (flag, no value needed) |
 | `--tune-mode` | `agent` | Tuning mode: `agent` (LLM-guided loop) or `standalone` (single Ray Tune run) |
-| `--tune-samples` | `20` | Number of Ray Tune trials per tuning iteration |
-| `--tune-max-iterations`| `5` | Maximum agent tuning iterations |
+| `--tune-samples` | _config YAML (`20`)_ | Number of Ray Tune trials per tuning iteration. Unset → use the tuner config YAML value. |
+| `--tune-max-iterations`| _config YAML (`5`)_ | Maximum agent tuning iterations. Unset → use the agent config YAML value. |
 | `--no-validate` | off | Skip model prediction validation after tuning (flag, no value needed) |
 | `--validation-threshold`| `0.75` | Minimum fraction of correct predictions to pass validation |
 | `--max-retries` | `2` | Maximum re-tuning attempts if validation fails |

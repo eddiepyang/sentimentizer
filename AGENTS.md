@@ -56,15 +56,16 @@ Sentimentizer is a PyTorch-based sentiment analysis pipeline with three model ar
 
 **Fix**: Changed the fallback in `new_dictionary()` and `_count_vocab_batch()` to `list(doc_tokens)` with a `TypeError` catch for genuinely non-iterable types. Same fix in `workflows/stages/tokenize.py` for the resume path.
 
-**Related fix — scheduler**: `EncoderSchedulerParams.T_max` was `4` but `default_epochs("encoder")` is `8`, causing the LR to decay to minimum after half the epochs. Changed `T_max` to `8`. Also fixed `_LinearWarmupCosineScheduler` which returned `0.0` at step 0 (zero LR for the entire first epoch) — changed from `step / warmup_steps` to `(step + 1) / warmup_steps`.
+**Related fix — scheduler**: `EncoderSchedulerParams.T_max` was `4` but `default_epochs("encoder")` is `8`, causing the LR to decay to minimum after half the epochs. `T_max` for both transformer schedulers is now `16` — twice `default_epochs` — so training uses only the gentle first half of the cosine curve and stays productive through the final epoch; `warmup_epochs` is `3`. The invariant is `T_max >= epochs_trained`, **not** `T_max == default_epochs`. Also fixed `_LinearWarmupCosineScheduler` which returned `0.0` at step 0 (zero LR for the entire first epoch) — changed from `step / warmup_steps` to `(step + 1) / warmup_steps` — and clamped `progress` to `1.0` so stepping past `total_steps` can't bounce the LR back up. Separately, `TuningRun._train_final_model` trained `2 * default_epochs` epochs while `T_max` was `16`, re-creating the dead-LR-at-the-end problem; final training now uses `default_epochs(model_type)` and relies on early stopping.
 
 **Tests**: `TestDictionaryNumpyArrays` in `tests/test_loader.py`, `TestSchedulerCorrectness` in `tests/test_training.py`, `TestCountVocabBatch.test_numpy_array_tokens` and `TestCountVocabBatch.test_pandas_series_tokens` in `tests/test_dictionary_lifecycle.py`.
 
 **Key files changed**:
 - `sentimentizer/tokenizer.py` — numpy array handling in `new_dictionary()` and `_count_vocab_batch()`
 - `workflows/stages/tokenize.py` — numpy array handling in resume path
-- `sentimentizer/config.py` — `EncoderSchedulerParams.T_max` changed from 4 to 8
-- `sentimentizer/trainer.py` — `_LinearWarmupCosineScheduler` warmup formula fix
+- `sentimentizer/config.py` — `Encoder`/`DecoderSchedulerParams.T_max` set to 16 (= 2× `default_epochs`), `warmup_epochs` set to 3
+- `sentimentizer/trainer.py` — `_LinearWarmupCosineScheduler` warmup formula fix + `progress` clamp; `_train_func` steps scheduler after validation
+- `sentimentizer/agent/skill.py` — final training uses `default_epochs` (not 2×); sidecar config JSON for exact model reconstruction
 
 ### Stale Metrics Cleanup
 
@@ -235,8 +236,9 @@ Grafana only reads provisioned dashboard files on **startup**, so a restart is r
 - All function signatures need type hints
 - **Always run lint before tests after code changes**: `make test-lint` (runs `ruff check .` then `pytest`). Alternatively, run `make lint` first, fix any findings, then `make test`. Never skip lint — it catches issues that tests won't.
 - When iterating over DataFrame or batch columns containing token lists, use `list(doc_tokens)` with a `TypeError` catch — never `str(doc_tokens)`. Numpy arrays from parquet are iterable but not `isinstance(x, list)`, and `str()` produces array representations with wrapping quotes
-- Scheduler `T_max` must match `default_epochs()` for the model type — otherwise LR decays to minimum before training finishes
-- _LinearWarmupCosineScheduler warmup must use `(step + 1) / warmup_steps` to avoid zero LR at step 0
+- Scheduler invariant: `T_max >= epochs_trained`. Transformers set `T_max = 2 * default_epochs` (gentle half-cosine); never train more epochs than `T_max` (this includes `_train_final_model`, which must use `default_epochs`, not a multiple)
+- `_LinearWarmupCosineScheduler` warmup must use `(step + 1) / warmup_steps` to avoid zero LR at step 0, and clamp `progress` to `1.0`
+- Tuned models save a sidecar config JSON (`best_model_<type>_config.json`) — `n_heads` can't be inferred from weights, so reconstruction needs it
 - **Target dtype is `torch.long`** for `CrossEntropyLoss` — never `.float()` on targets. This applies to both DataLoader and Ray paths. The bug was that three `.float()` casts existed in the Ray distributed path — all are now `.long()`.
 - **`_load_model()`** is only called in the single-node path. Distributed training (`_run_fit_distributed`) does NOT load the model in the driver process — Ray workers create their own model via `_train_func`.
 - **`torchmetrics.MulticlassAUROC`** silently gives wrong results with NaN input — always call `_replace_nan_probs()` before passing probabilities to it

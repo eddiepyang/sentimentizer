@@ -474,9 +474,7 @@ class TestContrastivePairs:
         pairs = generate_contrastive_pairs(texts, labels, num_iterations=2, seed=42)
         # For the same-class pair of "only dietary", it must pair with itself
         # since it's the only example in class 0
-        same_class_label0 = [
-            p for p in pairs if p.label == 1.0 and p.texts[0] == "only dietary"
-        ]
+        same_class_label0 = [p for p in pairs if p.label == 1.0 and p.texts[0] == "only dietary"]
         assert len(same_class_label0) == 1  # one self-pair as fallback
 
 
@@ -492,10 +490,14 @@ class TestRouterModel:
         from sentimentizer.router.model import RouterModel
 
         # Create a minimal mock model
-        mock_backbone = type("MockBackbone", (), {
-            "encode": lambda self, texts, convert_to_numpy=True: np.random.rand(len(texts), 10),
-            "save": lambda self, path: None,
-        })()
+        mock_backbone = type(
+            "MockBackbone",
+            (),
+            {
+                "encode": lambda self, texts, convert_to_numpy=True: np.random.rand(len(texts), 10),
+                "save": lambda self, path: None,
+            },
+        )()
         mock_head = LogisticRegression()
         # Fit the head with dummy data so it can predict
         X_dummy = np.random.rand(10, 10)
@@ -503,7 +505,8 @@ class TestRouterModel:
         mock_head.fit(X_dummy, y_dummy)
 
         model = RouterModel(
-            backbone=mock_backbone, head=mock_head,
+            backbone=mock_backbone,
+            head=mock_head,
             labels=["dietary", "service", "general"],
         )
 
@@ -529,10 +532,14 @@ class TestRouterModel:
 
         from sentimentizer.router.model import RouterModel
 
-        mock_backbone = type("MockBackbone", (), {
-            "encode": lambda self, texts, convert_to_numpy=True: np.random.rand(len(texts), 10),
-            "save": lambda self, path: None,
-        })()
+        mock_backbone = type(
+            "MockBackbone",
+            (),
+            {
+                "encode": lambda self, texts, convert_to_numpy=True: np.random.rand(len(texts), 10),
+                "save": lambda self, path: None,
+            },
+        )()
         mock_head = LogisticRegression()
         X_dummy = np.random.rand(10, 10)
         y_dummy = [0, 1, 2] * 3 + [0]
@@ -572,7 +579,8 @@ class TestRouterModel:
                 return np.random.rand(len(texts), 10)
 
         model = RouterModel(
-            backbone=MockBackbone(), head=head,
+            backbone=MockBackbone(),
+            head=head,
             labels=["dietary", "service", "general"],
         )
         preds = model.predict(["test text"])
@@ -594,7 +602,8 @@ class TestRouterModel:
                 return np.random.rand(len(texts), 10)
 
         model = RouterModel(
-            backbone=MockBackbone(), head=head,
+            backbone=MockBackbone(),
+            head=head,
             labels=["dietary", "service", "general"],
         )
         probs = model.predict_proba(["test text"])
