@@ -45,12 +45,16 @@ class RNN(BaseSentimentModel):
         verbose: bool = False,
         dropout: float = RNNConfig.dropout,
         num_classes: int = RNNConfig.num_classes,
+        freeze_embeddings: bool = True,
     ) -> None:
         super().__init__()
         emb_dim = emb_weights.shape[1]
 
-        # Embedding layer with pre-trained GloVe weights
-        self.embed_layer = nn.Embedding(emb_weights.shape[0], emb_dim)
+        # Embedding layer with pre-trained GloVe weights.  padding_idx=0 keeps
+        # the pad token's vector fixed at zero so it doesn't drift during
+        # training (pack_padded_sequence excludes pad positions from the LSTM
+        # but the embedding still receives gradients without padding_idx).
+        self.embed_layer = nn.Embedding(emb_weights.shape[0], emb_dim, padding_idx=0)
         self.fc0 = nn.Linear(emb_dim, emb_dim)
 
         self.dropout = dropout
@@ -79,8 +83,17 @@ class RNN(BaseSentimentModel):
 
         self.verbose = verbose
 
-        # Load embedding weights immediately
+        # Load pre-trained GloVe weights, freeze all rows except OOV (last row).
+        # See encoder.py for the full rationale and the per-row hook pattern.
         self.embed_layer.load_state_dict({"weight": emb_weights})  # type: ignore
+
+        if freeze_embeddings:
+            def _freeze_glove_grads(grad: torch.Tensor) -> torch.Tensor:
+                grad = grad.clone()
+                grad[:-1] = 0.0  # zero GloVe rows; row 0 (pad) already zeroed by padding_idx
+                return grad
+
+            self.embed_layer.weight.register_hook(_freeze_glove_grads)
 
     def forward(self, inputs: torch.Tensor, onnx_export: bool = False) -> torch.Tensor:
         """Forward pass producing raw logits.
@@ -158,6 +171,7 @@ def new_model(
     dict_path: str,
     embeddings_config: EmbeddingsConfig,
     model_config: RNNConfig = _DEFAULT_RNN_CONFIG,
+    freeze_embeddings: bool = True,
 ) -> RNN:
     """Create a new RNN model with pre-trained GloVe embeddings.
 
@@ -176,6 +190,7 @@ def new_model(
         num_layers=model_config.num_layers,
         dropout=model_config.dropout,
         num_classes=model_config.num_classes,
+        freeze_embeddings=freeze_embeddings,
     )
     return model
 

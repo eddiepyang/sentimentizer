@@ -646,11 +646,24 @@ def _create_training_components(
     betas = betas if betas is not None else opt_params.betas
     weight_decay = weight_decay if weight_decay is not None else opt_params.weight_decay
 
+    # Exclude 1-D params (biases, LayerNorm scale/shift) from weight decay.
+    # Applying WD to these interferes with learned offsets and normalization
+    # scales — standard practice since BERT/GPT-2.
+    decay, no_decay = [], []
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        if param.ndim == 1 or name.endswith(".bias") or "embed" in name:
+            no_decay.append(param)
+        else:
+            decay.append(param)
     optimizer = torch.optim.AdamW(
-        model.parameters(),
+        [
+            {"params": decay, "weight_decay": weight_decay},
+            {"params": no_decay, "weight_decay": 0.0},
+        ],
         lr=lr,
         betas=betas,
-        weight_decay=weight_decay,
     )
 
     # Use warmup+cosine for transformer models, simple cosine for RNN
@@ -1067,7 +1080,9 @@ class _LinearWarmupCosineScheduler(torch.optim.lr_scheduler.LambdaLR):
     """Linear warmup followed by cosine decay.
 
     During warmup, LR increases linearly from base_lr/warmup_steps to base_lr.
-    After warmup, follows CosineAnnealing decay to eta_min.
+    After warmup, follows CosineAnnealing decay so that the final LR equals
+    ``eta_min`` (matching the semantics of ``CosineAnnealingLR`` used for the
+    RNN path).
     """
 
     def __init__(
@@ -1077,13 +1092,26 @@ class _LinearWarmupCosineScheduler(torch.optim.lr_scheduler.LambdaLR):
         total_steps: int,
         eta_min: float = 1e-6,
     ) -> None:
-        def lr_lambda(step: int) -> float:
-            if step < warmup_steps:
-                return (step + 1) / max(1, warmup_steps)
-            progress = min(1.0, (step - warmup_steps) / max(1, total_steps - warmup_steps))
-            return eta_min + (1.0 - eta_min) * 0.5 * (1.0 + math.cos(math.pi * progress))
+        # LambdaLR multiplies base_lr by the lambda's return value, so to land
+        # at an absolute eta_min we have to feed in eta_min / base_lr.  Without
+        # this rescaling, the multiplier itself decays to eta_min and the
+        # effective LR bottoms out at base_lr * eta_min (e.g. 1e-4 * 1e-6 = 1e-10).
+        base_lrs = [g["lr"] for g in optimizer.param_groups]
 
-        super().__init__(optimizer, lr_lambda)
+        def make_lambda(base_lr: float) -> Callable[[int], float]:
+            relative_eta_min = eta_min / base_lr if base_lr > 0 else 0.0
+
+            def lr_lambda(step: int) -> float:
+                if step < warmup_steps:
+                    return (step + 1) / max(1, warmup_steps)
+                progress = min(1.0, (step - warmup_steps) / max(1, total_steps - warmup_steps))
+                return relative_eta_min + (1.0 - relative_eta_min) * 0.5 * (
+                    1.0 + math.cos(math.pi * progress)
+                )
+
+            return lr_lambda
+
+        super().__init__(optimizer, [make_lambda(lr) for lr in base_lrs])
 
 
 def new_trainer(
@@ -1158,6 +1186,7 @@ def _train_func(config: dict) -> None:
     dict_path = config["dict_path"]
     embeddings_model_name = config["embeddings_model_name"]
     embeddings_emb_length = config["embeddings_emb_length"]
+    freeze_embeddings = config.get("freeze_embeddings", True)
     # input_len is no longer needed by new_model() — removed from config
 
     # Create model on this worker
@@ -1180,7 +1209,7 @@ def _train_func(config: dict) -> None:
     model = new_model(
         dict_path=dict_path,
         embeddings_config=embeddings_config,
-        # input_len removed from new_model() signatures
+        freeze_embeddings=freeze_embeddings,
     )
 
     # Prepare model for distributed training (DDP) and move to correct device
@@ -1189,12 +1218,22 @@ def _train_func(config: dict) -> None:
     # Determine device from model (set by prepare_model)
     device = next(model.parameters()).device
 
-    # Set up optimizer (AdamW for all models)
+    # Set up optimizer — exclude 1-D params from weight decay (same as single-node path).
+    _decay, _no_decay = [], []
+    for _name, _param in model.named_parameters():
+        if not _param.requires_grad:
+            continue
+        if _param.ndim == 1 or _name.endswith(".bias") or "embed" in _name:
+            _no_decay.append(_param)
+        else:
+            _decay.append(_param)
     optimizer = torch.optim.AdamW(
-        model.parameters(),
+        [
+            {"params": _decay, "weight_decay": weight_decay},
+            {"params": _no_decay, "weight_decay": 0.0},
+        ],
         lr=lr,
         betas=betas,
-        weight_decay=weight_decay,
     )
 
     # Set up scheduler (warmup+cosine for transformers, cosine for RNN)
@@ -1338,8 +1377,14 @@ def _train_func(config: dict) -> None:
 
         import ray.cloudpickle as pickle
 
+        # prepare_model() wraps the model in DDP, which prefixes every key
+        # in state_dict with "module.".  Loading those keys into a non-DDP
+        # model (e.g. via get_trained_model() for serving) raises
+        # "Missing key(s) in state_dict".  Unwrap to .module here so the
+        # saved checkpoint matches the bare model architecture.
+        inner_model = model.module if hasattr(model, "module") else model
         checkpoint_data = {
-            "model_state_dict": model.state_dict(),
+            "model_state_dict": inner_model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "epoch": epoch,
         }
@@ -1492,6 +1537,7 @@ def new_ray_trainer(
     cfg: TrainerConfig,
     model_type: str,
     driver_config: type[DriverConfig] = DriverConfig,
+    freeze_embeddings: bool = True,
 ) -> TorchTrainer:
     """Factory function to create a Ray Train TorchTrainer for distributed training.
 
@@ -1538,6 +1584,7 @@ def new_ray_trainer(
         "dict_path": driver_config.files.dictionary_file_path,
         "embeddings_model_name": driver_config.embeddings.model_name,
         "embeddings_emb_length": driver_config.embeddings.emb_length,
+        "freeze_embeddings": freeze_embeddings,
         "loss_type": cfg.loss_type,
         "label_smoothing": cfg.label_smoothing,
         "focal_gamma": cfg.focal_gamma,

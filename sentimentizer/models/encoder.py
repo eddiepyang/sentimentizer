@@ -80,14 +80,20 @@ class Encoder(BaseSentimentModel):
         dropout: float = EncoderConfig.dropout,
         ff_multiplier: int = EncoderConfig.ff_multiplier,
         num_classes: int = EncoderConfig.num_classes,
+        freeze_embeddings: bool = True,
     ) -> None:
         super().__init__()
         self.d_model = d_model
         self.verbose = verbose
         self.num_classes = num_classes
 
-        # Embedding layer (vocab_size, emb_dim)
-        self.embed_layer = nn.Embedding(emb_weights.shape[0], emb_weights.shape[1])
+        # Embedding layer (vocab_size, emb_dim).  padding_idx=0 keeps the pad
+        # token's vector fixed at zero — without it, the pad embedding receives
+        # gradients and drifts, injecting semantic noise via the attention mask's
+        # ignored positions.
+        self.embed_layer = nn.Embedding(
+            emb_weights.shape[0], emb_weights.shape[1], padding_idx=0
+        )
 
         # Project GloVe embeddings to d_model dimension
         self.proj = nn.Linear(emb_weights.shape[1], d_model)
@@ -98,13 +104,19 @@ class Encoder(BaseSentimentModel):
         # Positional encoding (default max_len=500)
         self.pos_encoder = PositionalEncoding(d_model, dropout=dropout)
 
-        # Transformer encoder with batch_first=True
+        # Transformer encoder with batch_first=True.
+        # norm_first=True (Pre-LN): normalise before each sublayer so gradients
+        # are well-behaved at init — the default Post-LN order can cause
+        # instability in shallow models trained from scratch.
+        # activation="gelu": smoother gradient signal than ReLU in attention blocks.
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=n_heads,
             dim_feedforward=d_model * ff_multiplier,
             dropout=dropout,
             batch_first=True,
+            norm_first=True,
+            activation="gelu",
         )
         self.encoder = nn.TransformerEncoder(
             encoder_layer=encoder_layer,
@@ -120,8 +132,21 @@ class Encoder(BaseSentimentModel):
             nn.Linear(d_model, num_classes),
         )
 
-        # Load embedding weights immediately
+        # Load pre-trained GloVe weights, then freeze all rows except the OOV
+        # row (last row).  Freezing preserves GloVe's semantic geometry and cuts
+        # ~2M trainable parameters, reducing overfitting.  The OOV row stays
+        # trainable so the model can learn an optimal "unknown word" vector.
+        # PyTorch does not support per-row requires_grad on a single tensor, so
+        # we register a gradient hook that zeroes every row except the last one.
         self.embed_layer.load_state_dict({"weight": emb_weights})  # type: ignore
+
+        if freeze_embeddings:
+            def _freeze_glove_grads(grad: torch.Tensor) -> torch.Tensor:
+                grad = grad.clone()
+                grad[:-1] = 0.0  # zero GloVe rows; row 0 (pad) already zeroed by padding_idx
+                return grad
+
+            self.embed_layer.weight.register_hook(_freeze_glove_grads)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         """Forward pass producing raw logits.
@@ -168,10 +193,15 @@ class Encoder(BaseSentimentModel):
         if self.verbose:
             logger.info(f"encoder out shape {encoded.shape}")
 
-        # Pool from CLS token position
-        cls_out = encoded[:, 0, :]  # (B, d_model)
+        # Mean-pool over non-padding token positions (skip CLS at index 0).
+        # In a shallow 4-layer transformer trained from scratch, the CLS token
+        # has limited depth to accumulate context from the full sequence; mean
+        # pooling guarantees every real token contributes to the representation.
+        non_pad = (~pad_mask).unsqueeze(-1).float()  # (B, seq_len, 1) — 1 where real token
+        token_out = encoded[:, 1:, :]  # (B, seq_len, d_model) — drop CLS position
+        cls_out = (token_out * non_pad).sum(dim=1) / non_pad.sum(dim=1).clamp(min=1)
         if self.verbose:
-            logger.info(f"cls out shape {cls_out.shape}")
+            logger.info(f"pooled out shape {cls_out.shape}")
 
         # Classify
         logits = self.classifier(cls_out)  # (B, num_classes)
@@ -182,6 +212,7 @@ def new_model(
     dict_path: str,
     embeddings_config: EmbeddingsConfig,
     model_config: EncoderConfig = _DEFAULT_ENCODER_CONFIG,
+    freeze_embeddings: bool = True,
 ) -> Encoder:
     """Create a new Encoder model with pre-trained GloVe embeddings.
 
@@ -201,6 +232,7 @@ def new_model(
         dropout=model_config.dropout,
         ff_multiplier=model_config.ff_multiplier,
         num_classes=model_config.num_classes,
+        freeze_embeddings=freeze_embeddings,
     )
     return model
 

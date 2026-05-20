@@ -71,14 +71,20 @@ class Decoder(BaseSentimentModel):
         dropout: float = DecoderConfig.dropout,
         ff_multiplier: int = DecoderConfig.ff_multiplier,
         num_classes: int = DecoderConfig.num_classes,
+        freeze_embeddings: bool = True,
     ) -> None:
         super().__init__()
         self.d_model = d_model
         self.verbose = verbose
         self.num_classes = num_classes
 
-        # Embedding layer
-        self.embed_layer = nn.Embedding(emb_weights.shape[0], emb_weights.shape[1])
+        # Embedding layer.  padding_idx=0 keeps the pad token's vector fixed
+        # at zero so it doesn't drift during training (the encoder/decoder
+        # attention masks ignore these positions, but the embedding still
+        # receives gradients without padding_idx).
+        self.embed_layer = nn.Embedding(
+            emb_weights.shape[0], emb_weights.shape[1], padding_idx=0
+        )
 
         # Project GloVe embeddings to d_model
         self.proj = nn.Linear(emb_weights.shape[1], d_model)
@@ -89,13 +95,16 @@ class Decoder(BaseSentimentModel):
         # Positional encoding for the input sequence (default max_len=500)
         self.pos_encoder = PositionalEncoding(d_model, dropout=dropout)
 
-        # Transformer encoder — encodes input text into memory
+        # Transformer encoder — encodes input text into memory.
+        # Pre-LN + GELU for stable gradients from init (see encoder.py rationale).
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=n_heads,
             dim_feedforward=d_model * ff_multiplier,
             dropout=dropout,
             batch_first=True,
+            norm_first=True,
+            activation="gelu",
         )
         self.encoder = nn.TransformerEncoder(
             encoder_layer=encoder_layer,
@@ -103,13 +112,16 @@ class Decoder(BaseSentimentModel):
             enable_nested_tensor=False,
         )
 
-        # Transformer decoder — query token cross-attends to encoded memory
+        # Transformer decoder — query token cross-attends to encoded memory.
+        # Pre-LN + GELU for the same stability reasons as the encoder above.
         decoder_layer = nn.TransformerDecoderLayer(
             d_model=d_model,
             nhead=n_heads,
             dim_feedforward=d_model * ff_multiplier,
             dropout=dropout,
             batch_first=True,
+            norm_first=True,
+            activation="gelu",
         )
         self.decoder = nn.TransformerDecoder(
             decoder_layer=decoder_layer,
@@ -124,8 +136,17 @@ class Decoder(BaseSentimentModel):
             nn.Linear(d_model, num_classes),
         )
 
-        # Load embedding weights immediately
+        # Load pre-trained GloVe weights, freeze the matrix, keep OOV row trainable.
+        # See encoder.py for the full rationale.
         self.embed_layer.load_state_dict({"weight": emb_weights})  # type: ignore
+
+        if freeze_embeddings:
+            def freeze_glove_grads(grad: torch.Tensor) -> torch.Tensor:
+                grad = grad.clone()
+                grad[:-1] = 0.0
+                return grad
+
+            self.embed_layer.weight.register_hook(freeze_glove_grads)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         """Forward pass producing raw logits.
@@ -142,7 +163,7 @@ class Decoder(BaseSentimentModel):
         if self.verbose:
             logger.info(f"embedding shape {embeds.shape}")
 
-        projected = self.proj(embeds)  # (B, seq_len, d_model)
+        projected = self.proj(embeds) * math.sqrt(self.d_model)  # (B, seq_len, d_model)
 
         # Add positional encoding to input
         memory_input = self.pos_encoder(projected)  # (B, seq_len, d_model)
@@ -178,6 +199,7 @@ def new_model(
     dict_path: str,
     embeddings_config: EmbeddingsConfig,
     model_config: DecoderConfig = _DEFAULT_DECODER_CONFIG,
+    freeze_embeddings: bool = True,
 ) -> Decoder:
     """Create a new Decoder model with pre-trained GloVe embeddings.
 
@@ -199,6 +221,7 @@ def new_model(
         dropout=model_config.dropout,
         ff_multiplier=model_config.ff_multiplier,
         num_classes=model_config.num_classes,
+        freeze_embeddings=freeze_embeddings,
     )
     return model
 
