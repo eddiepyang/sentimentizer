@@ -82,9 +82,7 @@ class Decoder(BaseSentimentModel):
         # at zero so it doesn't drift during training (the encoder/decoder
         # attention masks ignore these positions, but the embedding still
         # receives gradients without padding_idx).
-        self.embed_layer = nn.Embedding(
-            emb_weights.shape[0], emb_weights.shape[1], padding_idx=0
-        )
+        self.embed_layer = nn.Embedding(emb_weights.shape[0], emb_weights.shape[1], padding_idx=0)
 
         # Project GloVe embeddings to d_model
         self.proj = nn.Linear(emb_weights.shape[1], d_model)
@@ -141,6 +139,7 @@ class Decoder(BaseSentimentModel):
         self.embed_layer.load_state_dict({"weight": emb_weights})  # type: ignore
 
         if freeze_embeddings:
+
             def freeze_glove_grads(grad: torch.Tensor) -> torch.Tensor:
                 grad = grad.clone()
                 grad[:-1] = 0.0

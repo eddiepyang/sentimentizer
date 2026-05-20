@@ -91,9 +91,7 @@ class Encoder(BaseSentimentModel):
         # token's vector fixed at zero — without it, the pad embedding receives
         # gradients and drifts, injecting semantic noise via the attention mask's
         # ignored positions.
-        self.embed_layer = nn.Embedding(
-            emb_weights.shape[0], emb_weights.shape[1], padding_idx=0
-        )
+        self.embed_layer = nn.Embedding(emb_weights.shape[0], emb_weights.shape[1], padding_idx=0)
 
         # Project GloVe embeddings to d_model dimension
         self.proj = nn.Linear(emb_weights.shape[1], d_model)
@@ -141,6 +139,7 @@ class Encoder(BaseSentimentModel):
         self.embed_layer.load_state_dict({"weight": emb_weights})  # type: ignore
 
         if freeze_embeddings:
+
             def _freeze_glove_grads(grad: torch.Tensor) -> torch.Tensor:
                 grad = grad.clone()
                 grad[:-1] = 0.0  # zero GloVe rows; row 0 (pad) already zeroed by padding_idx

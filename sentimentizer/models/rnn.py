@@ -88,6 +88,7 @@ class RNN(BaseSentimentModel):
         self.embed_layer.load_state_dict({"weight": emb_weights})  # type: ignore
 
         if freeze_embeddings:
+
             def _freeze_glove_grads(grad: torch.Tensor) -> torch.Tensor:
                 grad = grad.clone()
                 grad[:-1] = 0.0  # zero GloVe rows; row 0 (pad) already zeroed by padding_idx
