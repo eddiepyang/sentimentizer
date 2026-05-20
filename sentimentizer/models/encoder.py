@@ -49,7 +49,7 @@ class PositionalEncoding(nn.Module):
         Returns:
             Tensor of shape (batch, seq_len, d_model) with position info added
         """
-        x = x + self.pe[:, : x.size(1), :]
+        x = x + self.pe.narrow(1, 0, x.size(1))
         return self.dropout(x)
 
 
@@ -109,6 +109,7 @@ class Encoder(BaseSentimentModel):
         self.encoder = nn.TransformerEncoder(
             encoder_layer=encoder_layer,
             num_layers=n_layers,
+            enable_nested_tensor=False,
         )
 
         # Classification head: CLS token → class logits
@@ -139,9 +140,14 @@ class Encoder(BaseSentimentModel):
         # Project to d_model
         projected = self.proj(embeds)  # (B, seq_len, d_model)
 
-        # Prepend CLS token
-        cls = self.cls_token.expand(inputs.size(0), -1, -1)  # (B, 1, d_model)
-        x = torch.cat([cls, projected], dim=1)  # (B, seq_len+1, d_model)
+        B = inputs.size(0)
+        L = inputs.size(1)
+
+        # Prepend CLS token using dynamic allocation to avoid hardcoding shapes in JIT tracing
+        cls = self.cls_token.expand(B, -1, -1)  # (B, 1, d_model)
+        x = torch.empty(B, L + 1, projected.size(2), device=projected.device, dtype=projected.dtype)
+        x[:, 0:1, :] = cls
+        x[:, 1:, :] = projected
 
         # Add positional encoding
         x = self.pos_encoder(x)  # (B, seq_len+1, d_model)
@@ -149,8 +155,11 @@ class Encoder(BaseSentimentModel):
         # Padding mask: True where padding (so attention ignores those positions).
         # CLS token at position 0 is never padded, so prepend False.
         pad_mask = inputs == 0  # (B, seq_len)
-        cls_mask = torch.zeros(inputs.size(0), 1, dtype=torch.bool, device=inputs.device)
-        src_key_padding_mask = torch.cat([cls_mask, pad_mask], dim=1)  # (B, seq_len+1)
+        cls_mask = torch.zeros(B, 1, dtype=torch.bool, device=inputs.device)
+
+        src_key_padding_mask = torch.empty(B, L + 1, dtype=torch.bool, device=inputs.device)
+        src_key_padding_mask[:, 0:1] = cls_mask
+        src_key_padding_mask[:, 1:] = pad_mask
 
         # Transformer encoder — self-attention with padding mask
         encoded = self.encoder(

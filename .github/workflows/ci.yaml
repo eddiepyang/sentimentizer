@@ -31,8 +31,8 @@ jobs:
       with:
         enable-cache: true
 
-    - name: install dependencies (CPU-only torch + ray)
-      run: uv sync --extra dev,ray
+    - name: install dependencies (CPU-only torch + ray + onnx + router)
+      run: uv sync --extra dev,ray,onnx,router
 
     - name: ruff lint
       run: uv run ruff check .

@@ -108,26 +108,48 @@ def export_model_to_onnx(
     export_model = _RNNOnnxWrapper(model) if model_type == "rnn" else model
 
     # Create dummy input (token IDs, zero-padded)
-    dummy_input = torch.randint(1, 100, (1, seq_len), dtype=torch.long)
+    # RNN export works best with batch size 1 to avoid LSTM initial state shape assumptions
+    batch_size = 1 if model_type == "rnn" else 2
+    dummy_input = torch.randint(1, 100, (batch_size, seq_len), dtype=torch.long)
 
     # Move model to CPU for export
     export_model = export_model.cpu()
 
     logger.info(f"Exporting {model_type} model to ONNX (opset {opset_version})...")
 
-    torch.onnx.export(
-        export_model,
-        (dummy_input,),
-        str(output_path),
-        opset_version=opset_version,
-        input_names=["input"],
-        output_names=["logits"],
-        dynamic_axes={
-            "input": {0: "batch_size", 1: "seq_len"},
-            "logits": {0: "batch_size"},
-        },
-        do_constant_folding=True,
-    )
+    if model_type == "rnn":
+        torch.onnx.export(
+            export_model,
+            (dummy_input,),
+            str(output_path),
+            opset_version=opset_version,
+            input_names=["input"],
+            output_names=["logits"],
+            dynamic_axes={
+                "input": {0: "batch_size", 1: "seq_len"},
+                "logits": {0: "batch_size"},
+            },
+            do_constant_folding=True,
+            dynamo=False,
+        )
+    else:
+        dynamic_shapes = {
+            "inputs": {
+                0: torch.export.Dim.DYNAMIC,
+                1: torch.export.Dim.DYNAMIC,
+            }
+        }
+        torch.onnx.export(
+            export_model,
+            (dummy_input,),
+            str(output_path),
+            opset_version=opset_version,
+            input_names=["input"],
+            output_names=["logits"],
+            dynamic_shapes=dynamic_shapes,
+            do_constant_folding=True,
+            dynamo=True,
+        )
 
     logger.info(f"Exported {model_type} to {output_path}")
     return output_path
