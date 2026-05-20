@@ -67,7 +67,7 @@ def _get_model_config(model_type: str) -> Any:
         raise ValueError(f"no matching model config for {model_type}")
 
 
-def _load_model(state: State, device: str) -> Any:
+def _load_model(state: State, device: str, freeze_embeddings: bool = True) -> Any:
     """Load a model, either fresh (new) or from checkpoint (update)."""
 
     from sentimentizer.config import DriverConfig
@@ -94,6 +94,7 @@ def _load_model(state: State, device: str) -> Any:
             dict_path=DriverConfig.files.dictionary_file_path,
             embeddings_config=DriverConfig.embeddings(),
             model_config=model_config,
+            freeze_embeddings=freeze_embeddings,
         )
     elif state.run_type == "update":
         model = get_trained_model(

@@ -89,6 +89,11 @@ def shared_train_options(func: click.Command) -> click.Command:
             type=click.Choice(["class_weights_only", "undersample", "oversample"]),
             help="Class balancing strategy",
         ),
+        click.option(
+            "--freeze-embeddings/--no-freeze-embeddings",
+            default=True,
+            help="Freeze pre-trained GloVe embedding weights (unfreeze to fine-tune)",
+        ),
         click.option("--push-to-hub", is_flag=True, help="Push model weights to Hugging Face Hub"),
         click.option(
             "--pull-from-hub", is_flag=True, help="Pull model weights from Hugging Face Hub"

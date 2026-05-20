@@ -174,6 +174,7 @@ def run_train(
     weight_smoothing: float = 0.5,
     neutral_oversample_ratio: float = 0.0,
     balance_strategy: str = "class_weights_only",
+    freeze_embeddings: bool = True,
     push_to_hub: bool = False,
     pull_from_hub: bool = False,
     hf_repo: str | None = None,
@@ -244,12 +245,13 @@ def run_train(
             weight_smoothing=weight_smoothing,
             neutral_oversample_ratio=neutral_oversample_ratio,
             balance_strategy=balance_strategy,
+            freeze_embeddings=freeze_embeddings,
             save=save,
             push_to_hub=push_to_hub,
             hf_repo=hf_repo,
         )
     else:
-        model = _load_model(state, device)
+        model = _load_model(state, device, freeze_embeddings=freeze_embeddings)
         _run_fit_single(
             state=state,
             device=device,
@@ -396,6 +398,7 @@ def _run_fit_distributed(
     weight_smoothing: float,
     neutral_oversample_ratio: float,
     balance_strategy: str,
+    freeze_embeddings: bool,
     save: bool,
     push_to_hub: bool,
     hf_repo: str | None,
@@ -450,6 +453,7 @@ def _run_fit_distributed(
         val_ds=val_ds,
         cfg=cfg,
         model_type=state.model,
+        freeze_embeddings=freeze_embeddings,
     )
 
     try:

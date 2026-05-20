@@ -10,14 +10,15 @@ now use a single publish_epoch_metrics() function.
 from __future__ import annotations
 
 import json
-import logging
 import time
 from pathlib import Path
 from typing import Any
 
+from sentimentizer import new_logger
+from sentimentizer.config import DEFAULT_LOG_LEVEL
 from sentimentizer.metrics import ClassificationMetrics
 
-logger = logging.getLogger(__name__)
+logger = new_logger(DEFAULT_LOG_LEVEL)
 
 # ──────────────────────────────────────────────
 # Metric field definitions
@@ -318,7 +319,7 @@ def publish_epoch_metrics(
         else "N/A"
     )
     logger.info(
-        f"[{model_type}] [epoch {epoch}] evaluation complete — "
+        f"[{model_type}] [epoch {epoch}] evaluation complete - "
         f"val_loss={val_loss:.4f} accuracy={metrics.accuracy:.4f} "
         f"balanced_accuracy={metrics.balanced_accuracy:.4f} "
         f"macro_f1={metrics.macro_f1:.4f} weighted_f1={metrics.weighted_f1:.4f} "

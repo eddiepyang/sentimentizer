@@ -6,6 +6,20 @@ Sentimentizer is a PyTorch-based sentiment analysis pipeline with three model ar
 
 ## Recent Changes
 
+### Transformer Architecture and Training Optimizations (May 2026)
+
+**Change**: Optimized the Transformer Encoder, Decoder, and RNN architectures to prevent GloVe embedding overfitting, stabilize training with Pre-LN/GELU, and correctly decay learning rates to minimum values.
+
+**Key changes**:
+- **Embeddings**: Added `padding_idx=0` to `nn.Embedding`. Frozen the entire GloVe matrix by registering a backward hook that zeroes out gradients for all tokens except the Out-Of-Vocabulary (OOV) token, allowing the model to learn an optimal "average unknown word" vector without overfitting GloVe tokens.
+- **Weight Decay**: Removed `embed` layers, `1-D` parameters, and `bias` from `AdamW` weight decay in `trainer.py` via `no_decay` parameter splitting to prevent frozen weights and layer norms from decaying towards zero.
+- **Transformers**: Upgraded `TransformerEncoderLayer` and `TransformerDecoderLayer` to use `norm_first=True` (Pre-LN) and `activation="gelu"` for smooth gradient flow.
+- **Encoder Pooling**: Replaced CLS token pooling with mean pooling over non-padding tokens.
+- **Scheduler Math**: Fixed `_LinearWarmupCosineScheduler` to return a relative lambda multiplier (`eta_min / base_lr`) so the learning rate bottoms out exactly at `eta_min` (e.g., `1e-6`) instead of decaying to near-zero (`1e-10`).
+- **Embedding Scaling**: Applied `math.sqrt(d_model)` scaling to projected embeddings to balance semantic signal against positional encoding noise.
+
+**Key files changed**: `sentimentizer/models/encoder.py`, `sentimentizer/models/decoder.py`, `sentimentizer/models/rnn.py`, `sentimentizer/trainer.py`
+
 ### 3-Class Classification Migration (current)
 
 **Change**: Migrated from binary classification (negative/positive, BCEWithLogitsLoss) to 3-class classification (negative/neutral/positive, CrossEntropyLoss). All models now output logits of shape `(B, 3)` instead of `(B, 1)`. `predict_text()` returns `dict[str, float]` instead of `float`. Per-class metrics replace single-class metrics throughout the pipeline.

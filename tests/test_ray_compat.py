@@ -216,7 +216,7 @@ class TestEmbeddingsConfigAttributes:
 
         cfg = EmbeddingsConfig()
         assert hasattr(cfg, "model_name")
-        assert cfg.model_name == "glove-wiki-gigaword-100"
+        assert cfg.model_name == "glove-wiki-gigaword-300"
 
     def test_embeddings_config_has_emb_length(self) -> None:
         """EmbeddingsConfig must have emb_length attribute."""
@@ -224,7 +224,7 @@ class TestEmbeddingsConfigAttributes:
 
         cfg = EmbeddingsConfig()
         assert hasattr(cfg, "emb_length")
-        assert cfg.emb_length == 100
+        assert cfg.emb_length == 300
 
     def test_embeddings_config_no_file_path(self) -> None:
         """EmbeddingsConfig must NOT have file_path attribute.

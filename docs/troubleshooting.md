@@ -238,11 +238,9 @@ pip install -e ".[router]"
 uv sync --extra router
 ```
 
-### optimum-onnx conflict with numpy
+### Do I need `optimum-onnx`?
 
-**Symptoms**: `pip install -e ".[onnx]"` fails with numpy version conflict involving `optimum-onnx`.
-
-**Fix**: The `[onnx]` dependency group does not include `optimum-onnx` because it conflicts with `numpy>=2.4.0`. ONNX export and quantization work directly with `onnxruntime.quantization.quantize_dynamic`. If you need `optimum` for SetFit ONNX export (v2), pin `optimum[onnxruntime]<2.0.0`.
+No. This project's ONNX export and quantization use `onnxruntime.quantization.quantize_dynamic` directly (see `sentimentizer/export_onnx.py`); the `[onnx]` extra installs only `onnx`, `onnxruntime`, and `onnxscript`. `optimum-onnx` was previously considered for SetFit ONNX export, but SetFit is no longer a dependency.
 
 ## SetFit Router Issues
 

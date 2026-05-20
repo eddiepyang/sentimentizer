@@ -57,8 +57,8 @@ onnx = [
     "onnx",
     "onnxruntime",
     "onnxscript",
-    # optimum-onnx[onnxruntime] is needed for ONNX export (v2)
-    # but conflicts with numpy>=2.4.0; use optimum[onnxruntime]<2.0.0 if needed
+    # optimum-onnx not included: this project's ONNX needs are met by
+    # onnxruntime.quantization.quantize_dynamic directly.
 ]
 dev = [
     "black>=26.3.0",

@@ -32,7 +32,7 @@ def default_epochs(model_type: str) -> int:
     Transformers need more epochs for attention patterns to develop.
     """
     if model_type in ("encoder", "decoder"):
-        return 8
+        return 12
     return 4
 
 
@@ -71,7 +71,7 @@ class EncoderOptimizationParams(OptimizationParams):
     Inherits betas from OptimizationParams; overrides lr and weight_decay.
     """
 
-    lr: float = 0.0001
+    lr: float = 0.0003
     weight_decay: float = 0.01
 
 
@@ -105,7 +105,7 @@ class SchedulerParams:
 class EncoderSchedulerParams(SchedulerParams):
     """Scheduler params for Encoder model.
 
-    T_max is 2x default_epochs("encoder") (= 8), not equal to it: training
+    T_max is 2x default_epochs("encoder") (= 12), not equal to it: training
     uses only the gentle first half of the cosine curve so the LR stays
     productive through the final epoch instead of decaying to eta_min.
     The invariant is T_max >= epochs_trained — never train more epochs
@@ -115,15 +115,15 @@ class EncoderSchedulerParams(SchedulerParams):
     and adds warmup_epochs.
     """
 
-    T_max: int = 16
-    warmup_epochs: int = 3  # linear warmup for this many epochs
+    T_max: int = 24
+    warmup_epochs: int = 1  # linear warmup for this many epochs
 
 
 @dataclass
 class DecoderSchedulerParams(SchedulerParams):
     """Scheduler params for Decoder model.
 
-    T_max is 2x default_epochs("decoder") (= 8) for the same gentle-decay
+    T_max is 2x default_epochs("decoder") (= 12) for the same gentle-decay
     reason as EncoderSchedulerParams; the T_max >= epochs_trained invariant
     applies here too. Uses a higher minimum LR than the encoder because the
     decoder has more parameters and is more prone to overfitting during
@@ -132,9 +132,9 @@ class DecoderSchedulerParams(SchedulerParams):
     and adds warmup_epochs.
     """
 
-    T_max: int = 16
+    T_max: int = 24
     eta_min: float = 1e-5
-    warmup_epochs: int = 3  # linear warmup for this many epochs
+    warmup_epochs: int = 1  # linear warmup for this many epochs
 
 
 @dataclass(frozen=True)
@@ -206,8 +206,8 @@ class TrainerConfig:
 
 @dataclass
 class EmbeddingsConfig:
-    model_name: str = "glove-wiki-gigaword-100"  # auto-downloaded via gensim.downloader
-    emb_length: int = 100
+    model_name: str = "glove-wiki-gigaword-300"  # auto-downloaded via gensim.downloader
+    emb_length: int = 300
 
 
 # Per-model Hugging Face Hub repository IDs for pre-trained weights.

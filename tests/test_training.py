@@ -303,8 +303,8 @@ class TestNewTrainer:
         cfg = TrainerConfig(batch_size=8, epochs=1, device="cpu", dataloader_workers=0)
 
         trainer = new_trainer(model, cfg, model_type="encoder")
-        # Encoder uses EncoderOptimizationParams (lr=0.0001 by default)
-        assert trainer.optimizer.defaults["lr"] == 0.0001
+        # Encoder uses EncoderOptimizationParams (lr=0.0003 by default)
+        assert trainer.optimizer.defaults["lr"] == 0.0003
 
 
 # ─── Optimization and Scheduler Params ────────────────────────────
@@ -319,7 +319,7 @@ class TestOptAndSchedParams:
 
     def test_encoder_opt_params(self) -> None:
         opt = _get_opt_params("encoder")
-        assert opt.lr == 0.0001
+        assert opt.lr == 0.0003
 
     def test_decoder_opt_params(self) -> None:
         opt = _get_opt_params("decoder")
@@ -332,13 +332,13 @@ class TestOptAndSchedParams:
 
     def test_encoder_sched_params(self) -> None:
         sched = _get_sched_params("encoder")
-        assert sched.warmup_epochs == 3
-        assert sched.T_max == 16
+        assert sched.warmup_epochs == 1
+        assert sched.T_max == 24
 
     def test_decoder_sched_params(self) -> None:
         sched = _get_sched_params("decoder")
-        assert sched.warmup_epochs == 3
-        assert sched.T_max == 16
+        assert sched.warmup_epochs == 1
+        assert sched.T_max == 24
 
 
 # ─── Scheduler Correctness ────────────────────────────────────────
@@ -359,7 +359,7 @@ class TestSchedulerCorrectness:
 
         base_lr = 0.0005
         warmup_steps = 1
-        total_steps = default_epochs("encoder")  # 8
+        total_steps = default_epochs("encoder")  # 12
         model = TinyModel()
         optimizer = torch.optim.AdamW(model.parameters(), lr=base_lr)
         scheduler = _LinearWarmupCosineScheduler(
