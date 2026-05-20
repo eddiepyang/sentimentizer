@@ -487,7 +487,7 @@ def _trainable_wrapper(config: dict, train_dataset: Any = None, val_dataset: Any
                 "val_accuracy": metrics.accuracy,
                 "val_balanced_accuracy": metrics.balanced_accuracy,
                 "val_loss": val_loss,
-                "train_loss": trainer.losses[-1] if trainer.losses else 0.0,
+                "train_loss": trainer.latest_train_loss,
                 "val_precision": metrics.positive_precision,
                 "val_recall": metrics.positive_recall,
                 "val_f1": metrics.positive_f1,

@@ -32,7 +32,7 @@ class ServeConfig:
 
     Attributes:
         default_model: Default sentiment model to load (rnn, encoder, decoder).
-        router_model_path: Path to trained SetFit router model directory.
+        router_model_path: Path to trained router model directory.
         max_batch_size: Maximum texts per /v1/batch request.
         max_text_length: Maximum characters per text input.
         predict_batch_size: Maximum requests collected per /v1/predict batch.

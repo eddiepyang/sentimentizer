@@ -1,7 +1,7 @@
-"""Tests for the SetFit router module.
+"""Tests for the router module.
 
 Tests cover config, labels, seeds, dataset loading, and augmentation.
-SetFit-dependent tests are skipped when the setfit package is not installed.
+Router-dependent tests are skipped when sentence-transformers is not installed.
 """
 
 import json
@@ -11,11 +11,11 @@ import pytest
 
 # Check if optional dependencies are available
 try:
-    import setfit  # noqa: F401
+    import sentence_transformers  # noqa: F401
 
-    SETFIT_AVAILABLE = True
+    SENTENCE_TRANSFORMERS_AVAILABLE = True
 except ImportError:
-    SETFIT_AVAILABLE = False
+    SENTENCE_TRANSFORMERS_AVAILABLE = False
 
 try:
     import datasets  # noqa: F401
@@ -24,9 +24,9 @@ try:
 except ImportError:
     DATASETS_AVAILABLE = False
 
-skip_without_setfit = pytest.mark.skipif(
-    not SETFIT_AVAILABLE,
-    reason="setfit not installed (install with: pip install -e '.[router]')",
+skip_without_router = pytest.mark.skipif(
+    not SENTENCE_TRANSFORMERS_AVAILABLE,
+    reason="sentence-transformers not installed (install with: pip install -e '.[router]')",
 )
 
 skip_without_datasets = pytest.mark.skipif(
@@ -35,13 +35,13 @@ skip_without_datasets = pytest.mark.skipif(
 )
 
 
-class TestSetFitConfig:
-    """Test SetFitConfig defaults and immutability."""
+class TestRouterConfig:
+    """Test RouterConfig defaults and immutability."""
 
     def test_default_config(self) -> None:
-        from sentimentizer.router.config import SetFitConfig
+        from sentimentizer.router.config import RouterConfig
 
-        config = SetFitConfig()
+        config = RouterConfig()
         assert config.base_model == "BAAI/bge-base-en-v1.5"
         assert config.num_iterations == 20
         assert config.num_epochs == 1
@@ -51,16 +51,16 @@ class TestSetFitConfig:
         assert config.output_dir == Path("models/router")
 
     def test_frozen_config(self) -> None:
-        from sentimentizer.router.config import SetFitConfig
+        from sentimentizer.router.config import RouterConfig
 
-        config = SetFitConfig()
+        config = RouterConfig()
         with pytest.raises(AttributeError):
             config.base_model = "different-model"  # type: ignore[misc]
 
     def test_custom_config(self) -> None:
-        from sentimentizer.router.config import SetFitConfig
+        from sentimentizer.router.config import RouterConfig
 
-        config = SetFitConfig(
+        config = RouterConfig(
             base_model="mxbai-embed-large-v1",
             num_iterations=10,
             batch_size=32,
@@ -389,3 +389,250 @@ class TestAugmentSeeds:
         assert len(result) == 2
         assert result[0]["text"] == "Seed A"
         assert result[1]["text"] == "Seed B"
+
+
+class TestContrastivePairs:
+    """Test contrastive pair generation."""
+
+    def test_pair_count_with_multiple_per_class(self) -> None:
+        """Total pairs = 2 * num_iterations * num_texts when each class has 2+ examples."""
+        from sentimentizer.router.train_router import generate_contrastive_pairs
+
+        texts = ["d1", "d2", "s1", "s2", "g1", "g2"]
+        labels = [0, 0, 1, 1, 2, 2]
+        num_iterations = 5
+        pairs = generate_contrastive_pairs(texts, labels, num_iterations=num_iterations)
+        # 6 texts * (5 same-class + 5 different-class) = 60 pairs total
+        assert len(pairs) == 2 * num_iterations * len(texts)
+
+    def test_pair_count_with_single_per_class(self) -> None:
+        """Single example per class creates 1 self-pair + num_iterations diff pairs."""
+        from sentimentizer.router.train_router import generate_contrastive_pairs
+
+        texts = ["dietary text", "service text", "general text"]
+        labels = [0, 1, 2]
+        num_iterations = 5
+        pairs = generate_contrastive_pairs(texts, labels, num_iterations=num_iterations)
+        # 3 texts * (1 self-pair + 5 different-class) = 18 pairs total
+        expected = len(texts) * (1 + num_iterations)
+        assert len(pairs) == expected
+
+    def test_same_class_pairs_have_label_one(self) -> None:
+        """Same-class pairs should have similarity label 1.0."""
+        from sentimentizer.router.train_router import generate_contrastive_pairs
+
+        texts = ["a dietary", "b dietary", "c service", "d service"]
+        labels = [0, 0, 1, 1]
+        pairs = generate_contrastive_pairs(texts, labels, num_iterations=2, seed=42)
+        same_class = [p for p in pairs if p.label == 1.0]
+        assert len(same_class) > 0
+        for p in same_class:
+            # Both texts should be from the same class — no self-pairing
+            # (only possible when class has 2+ examples)
+            assert p.texts[0] != p.texts[1]
+
+    def test_different_class_pairs_have_label_zero(self) -> None:
+        """Different-class pairs should have similarity label 0.0."""
+        from sentimentizer.router.train_router import generate_contrastive_pairs
+
+        texts = ["a dietary", "b service", "c general"]
+        labels = [0, 1, 2]
+        pairs = generate_contrastive_pairs(texts, labels, num_iterations=2, seed=42)
+        diff_class = [p for p in pairs if p.label == 0.0]
+        assert len(diff_class) > 0
+
+    def test_no_self_pairing_with_multiple_per_class(self) -> None:
+        """Same-class pairs should not pair a text with itself (2+ per class)."""
+        from sentimentizer.router.train_router import generate_contrastive_pairs
+
+        texts = ["a1", "a2", "b1", "b2", "c1", "c2"]
+        labels = [0, 0, 1, 1, 2, 2]
+        pairs = generate_contrastive_pairs(texts, labels, num_iterations=3, seed=42)
+        for p in pairs:
+            if p.label == 1.0:
+                assert p.texts[0] != p.texts[1]
+
+    def test_reproducible_with_seed(self) -> None:
+        """Same seed should produce same pairs."""
+        from sentimentizer.router.train_router import generate_contrastive_pairs
+
+        texts = ["a", "b", "c"]
+        labels = [0, 1, 2]
+        pairs1 = generate_contrastive_pairs(texts, labels, num_iterations=2, seed=42)
+        pairs2 = generate_contrastive_pairs(texts, labels, num_iterations=2, seed=42)
+        assert len(pairs1) == len(pairs2)
+        for p1, p2 in zip(pairs1, pairs2, strict=True):
+            assert p1.texts == p2.texts
+            assert p1.label == p2.label
+
+    def test_single_example_per_class_creates_self_pair(self) -> None:
+        """Single example in a class should create a self-pair as fallback."""
+        from sentimentizer.router.train_router import generate_contrastive_pairs
+
+        texts = ["only dietary", "only service"]
+        labels = [0, 1]
+        pairs = generate_contrastive_pairs(texts, labels, num_iterations=2, seed=42)
+        # For the same-class pair of "only dietary", it must pair with itself
+        # since it's the only example in class 0
+        same_class_label0 = [p for p in pairs if p.label == 1.0 and p.texts[0] == "only dietary"]
+        assert len(same_class_label0) == 1  # one self-pair as fallback
+
+
+@skip_without_router
+class TestRouterModel:
+    """Test RouterModel save/load cycle and inference."""
+
+    def test_save_and_load_roundtrip(self, tmp_path) -> None:
+        """RouterModel should survive a save/load roundtrip."""
+        import numpy as np
+        from sklearn.linear_model import LogisticRegression
+
+        from sentimentizer.router.model import RouterModel
+
+        # Create a minimal mock model
+        mock_backbone = type(
+            "MockBackbone",
+            (),
+            {
+                "encode": lambda self, texts, convert_to_numpy=True: np.random.rand(len(texts), 10),
+                "save": lambda self, path: None,
+            },
+        )()
+        mock_head = LogisticRegression()
+        # Fit the head with dummy data so it can predict
+        X_dummy = np.random.rand(10, 10)
+        y_dummy = [0, 1, 2] * 3 + [0]
+        mock_head.fit(X_dummy, y_dummy)
+
+        model = RouterModel(
+            backbone=mock_backbone,
+            head=mock_head,
+            labels=["dietary", "service", "general"],
+        )
+
+        # Save
+        save_dir = tmp_path / "test_model"
+        model.save_pretrained(str(save_dir))
+
+        # Verify files exist
+        assert (save_dir / "router_head.joblib").exists()
+        assert (save_dir / "router_config.json").exists()
+
+        # Verify config content
+        with open(save_dir / "router_config.json") as f:
+            config = json.load(f)
+        assert config["model_type"] == "router"
+        assert config["labels"] == ["dietary", "service", "general"]
+        assert config["head_type"] == "LogisticRegression"
+
+    def test_router_config_json_content(self, tmp_path) -> None:
+        """router_config.json should contain model_type, labels, head_type."""
+        import numpy as np
+        from sklearn.linear_model import LogisticRegression
+
+        from sentimentizer.router.model import RouterModel
+
+        mock_backbone = type(
+            "MockBackbone",
+            (),
+            {
+                "encode": lambda self, texts, convert_to_numpy=True: np.random.rand(len(texts), 10),
+                "save": lambda self, path: None,
+            },
+        )()
+        mock_head = LogisticRegression()
+        X_dummy = np.random.rand(10, 10)
+        y_dummy = [0, 1, 2] * 3 + [0]
+        mock_head.fit(X_dummy, y_dummy)
+
+        model = RouterModel(backbone=mock_backbone, head=mock_head, labels=["a", "b", "c"])
+        save_dir = tmp_path / "cfg_test"
+        model.save_pretrained(str(save_dir))
+
+        with open(save_dir / "router_config.json") as f:
+            config = json.load(f)
+        assert config["labels"] == ["a", "b", "c"]
+        assert config["head_type"] == "LogisticRegression"
+
+    def test_from_pretrained_missing_path_raises(self) -> None:
+        """from_pretrained with nonexistent path should raise FileNotFoundError."""
+        from sentimentizer.router.model import RouterModel
+
+        with pytest.raises(FileNotFoundError):
+            RouterModel.from_pretrained("/nonexistent/path")
+
+    def test_predict_with_mock_backbone(self) -> None:
+        """predict() should return head predictions."""
+        import numpy as np
+        from sklearn.linear_model import LogisticRegression
+
+        from sentimentizer.router.model import RouterModel
+
+        # Create a fitted head
+        X = np.random.rand(30, 10)
+        y = [0, 1, 2] * 10
+        head = LogisticRegression().fit(X, y)
+
+        # Mock backbone that returns consistent embeddings
+        class MockBackbone:
+            def encode(self, texts, convert_to_numpy=True):
+                return np.random.rand(len(texts), 10)
+
+        model = RouterModel(
+            backbone=MockBackbone(),
+            head=head,
+            labels=["dietary", "service", "general"],
+        )
+        preds = model.predict(["test text"])
+        assert len(preds) == 1
+
+    def test_predict_proba_with_mock_backbone(self) -> None:
+        """predict_proba() should return probability matrix."""
+        import numpy as np
+        from sklearn.linear_model import LogisticRegression
+
+        from sentimentizer.router.model import RouterModel
+
+        X = np.random.rand(30, 10)
+        y = [0, 1, 2] * 10
+        head = LogisticRegression().fit(X, y)
+
+        class MockBackbone:
+            def encode(self, texts, convert_to_numpy=True):
+                return np.random.rand(len(texts), 10)
+
+        model = RouterModel(
+            backbone=MockBackbone(),
+            head=head,
+            labels=["dietary", "service", "general"],
+        )
+        probs = model.predict_proba(["test text"])
+        assert probs.shape == (1, 3)
+        assert abs(probs.sum() - 1.0) < 1e-6  # probabilities sum to 1
+
+    def test_model_encode_with_mock_backbone(self) -> None:
+        """model_encode() should return embeddings."""
+        import numpy as np
+
+        from sentimentizer.router.model import RouterModel
+
+        class MockBackbone:
+            def encode(self, texts, convert_to_numpy=True):
+                return np.random.rand(len(texts), 10)
+
+        model = RouterModel(backbone=MockBackbone(), labels=[])
+        embeddings = model.model_encode(["hello", "world"])
+        assert embeddings.shape == (2, 10)
+
+    def test_setfit_config_alias(self) -> None:
+        """SetFitConfig should be an alias for RouterConfig."""
+        from sentimentizer.router.config import RouterConfig, SetFitConfig
+
+        assert SetFitConfig is RouterConfig
+        assert SetFitConfig().base_model == "BAAI/bge-base-en-v1.5"
+
+    def test_router_model_in_init(self) -> None:
+        """RouterModel should be importable from sentimentizer.router."""
+        from sentimentizer.router import RouterModel
+
+        assert RouterModel is not None

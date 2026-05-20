@@ -35,7 +35,7 @@ from __future__ import annotations
 import json
 import shutil
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -89,9 +89,13 @@ class TuningRunConfig:
         config_path: Path to agent config YAML. Uses default if None.
         mode: 'agent' for LLM-guided loop, 'standalone' for single Ray Tune run.
         max_iterations: Maximum agent loop iterations (agent mode only).
+            None means "use the value from the agent config YAML".
         convergence_threshold: Min accuracy improvement to continue (agent mode).
+            None means "use the value from the agent config YAML".
         num_samples: Number of Ray Tune trials per iteration.
+            None means "use the value from the tuner config YAML".
         scheduler: Ray Tune scheduler ('asha', 'hyperband', 'median').
+            None means "use the value from the tuner config YAML".
         device: Compute device ('auto', 'cpu', 'cuda', 'mps').
         save_best_model: Whether to train and save a final model with best config.
         output_dir: Directory to save results and model weights.
@@ -115,10 +119,10 @@ class TuningRunConfig:
     model_type: str = "rnn"
     config_path: str | None = None
     mode: str = "agent"
-    max_iterations: int = 5
-    convergence_threshold: float = 0.005
-    num_samples: int = 20
-    scheduler: str = "asha"
+    max_iterations: int | None = None
+    convergence_threshold: float | None = None
+    num_samples: int | None = None
+    scheduler: str | None = None
     device: str = "auto"
     save_best_model: bool = True
     output_dir: str = "tuning_results"
@@ -252,16 +256,17 @@ class TuningRun:
         """Load agent and tuner configs, applying overrides from TuningRunConfig."""
         agent_config, tuner_config = load_agent_config(self.config.config_path)
 
-        # Apply TuningRunConfig overrides to the agent config
-        if self.config.max_iterations != 5:  # non-default
+        # Apply TuningRunConfig overrides. None means "not specified —
+        # keep the YAML value"; any explicit value is applied, even one
+        # that happens to equal a default.
+        if self.config.max_iterations is not None:
             agent_config.max_iterations = self.config.max_iterations
-        if self.config.convergence_threshold != 0.005:  # non-default
+        if self.config.convergence_threshold is not None:
             agent_config.convergence_threshold = self.config.convergence_threshold
 
-        # Apply TuningRunConfig overrides to the tuner config
-        if self.config.num_samples != 20:  # non-default
+        if self.config.num_samples is not None:
             tuner_config.num_samples = self.config.num_samples
-        if self.config.scheduler != "asha":  # non-default
+        if self.config.scheduler is not None:
             tuner_config.scheduler = self.config.scheduler
 
         self._agent_config = agent_config
@@ -519,7 +524,8 @@ class TuningRun:
             best_loss=result["best_loss"],
             best_config=result["best_config"],
             trial_count=result["trial_count"],
-            improvement_over_last=result["best_accuracy"],
+            # No previous iteration to improve over in a single sweep.
+            improvement_over_last=0.0,
         )
 
         return TuningRunResult(
@@ -541,7 +547,10 @@ class TuningRun:
             best_cohen_kappa=result.get("best_cohen_kappa", 0.0),
             best_mcc=result.get("best_mcc", 0.0),
             iterations_completed=1,
-            converged=True,  # single run is always "converged"
+            # Standalone is a single sweep, not an iterative loop — there
+            # is no convergence notion (unlike agent mode, where converged
+            # means the accuracy delta fell below convergence_threshold).
+            converged=False,
             history=[tuning_result.model_dump()],
         )
 
@@ -583,10 +592,12 @@ class TuningRun:
         model = _create_model(model_type, model_config)
         model.to(device)
 
-        # Determine epochs — use more epochs for final training
-        epochs = default_epochs(model_type)
-        # For final training, use 2x the default epochs for better convergence
-        final_epochs = epochs * 2
+        # Train for the model's default epoch count. The LR schedulers
+        # (EncoderSchedulerParams.T_max etc.) are tuned to this length —
+        # training longer pushes the cosine schedule past T_max and decays
+        # the LR to eta_min before training ends. Early stopping
+        # (patience=3, set below) handles convergence without extra epochs.
+        final_epochs = default_epochs(model_type)
 
         trainer_config = TrainerConfig(
             epochs=final_epochs,
@@ -623,6 +634,15 @@ class TuningRun:
         model_path = self._output_dir / f"best_model_{model_type}.pth"
         torch.save(model.state_dict(), model_path)
         logger.info(f"final_model_saved: {model_path}")
+
+        # Save the architecture config alongside the weights so the model
+        # can be reconstructed exactly. n_heads cannot be recovered from
+        # weight shapes (nn.MultiheadAttention packs QKV regardless of head
+        # count), so weight-shape inference alone is insufficient.
+        config_path = model_path.with_name(f"{model_path.stem}_config.json")
+        with open(config_path, "w") as f:
+            json.dump({"model_type": model_type, **asdict(model_config)}, f, indent=2)
+        logger.info(f"final_model_config_saved: {config_path}")
 
         return model_path
 
@@ -1266,6 +1286,12 @@ def _create_model(model_type: str, model_config: Any) -> Any:
 def _load_trained_model(model_type: str, model_path: str, device: str) -> Any:
     """Load a trained model from saved weights.
 
+    Reconstructs the architecture from the sidecar config JSON saved
+    next to the weights (``<name>_config.json``). If no sidecar exists
+    (e.g. Hugging Face downloads or older checkpoints, which always use
+    the default architecture), falls back to inferring the dimensions
+    that are recoverable from weight shapes.
+
     Args:
         model_type: One of 'rnn', 'encoder', 'decoder'.
         model_path: Path to the saved model weights (.pth).
@@ -1277,34 +1303,70 @@ def _load_trained_model(model_type: str, model_path: str, device: str) -> Any:
     import torch
 
     weights = torch.load(model_path, map_location=device, weights_only=True)
-
-    # Infer model dimensions from weights
     emb_shape = weights["embed_layer.weight"].shape
+    empty_emb = torch.zeros(emb_shape)
+
+    # Prefer the sidecar config — it captures architecture params (notably
+    # n_heads) that cannot be inferred from weight shapes.
+    config_path = Path(model_path).with_name(f"{Path(model_path).stem}_config.json")
+    model_config = None
+    if config_path.exists():
+        with open(config_path) as f:
+            saved = json.load(f)
+        saved.pop("model_type", None)
+        model_config = _build_model_config(model_type, saved)
+    else:
+        logger.warning(
+            "model_config_sidecar_missing",
+            config_path=str(config_path),
+            note="reconstructing with default architecture; non-default "
+            "n_heads/n_layers will fail to load",
+        )
 
     if model_type == "rnn":
         from sentimentizer.models.rnn import RNN
 
-        hidden_size = weights["classifier.0.weight"].shape[1] // 2
-        model = RNN(
-            emb_weights=torch.zeros(emb_shape),
-            hidden_size=hidden_size,
-        )
+        if model_config is not None:
+            model: Any = RNN(
+                emb_weights=empty_emb,
+                hidden_size=model_config.hidden_size,
+                num_layers=model_config.num_layers,
+                dropout=model_config.dropout,
+            )
+        else:
+            hidden_size = weights["classifier.0.weight"].shape[1] // 2
+            model = RNN(emb_weights=empty_emb, hidden_size=hidden_size)
     elif model_type == "encoder":
         from sentimentizer.models.encoder import Encoder
 
-        d_model = weights["proj.weight"].shape[0]
-        model = Encoder(
-            emb_weights=torch.zeros(emb_shape),
-            d_model=d_model,
-        )
+        if model_config is not None:
+            model = Encoder(
+                emb_weights=empty_emb,
+                d_model=model_config.d_model,
+                n_heads=model_config.n_heads,
+                n_layers=model_config.n_layers,
+                dropout=model_config.dropout,
+                ff_multiplier=model_config.ff_multiplier,
+            )
+        else:
+            d_model = weights["proj.weight"].shape[0]
+            model = Encoder(emb_weights=empty_emb, d_model=d_model)
     elif model_type == "decoder":
         from sentimentizer.models.decoder import Decoder
 
-        d_model = weights["proj.weight"].shape[0]
-        model = Decoder(
-            emb_weights=torch.zeros(emb_shape),
-            d_model=d_model,
-        )
+        if model_config is not None:
+            model = Decoder(
+                emb_weights=empty_emb,
+                d_model=model_config.d_model,
+                n_heads=model_config.n_heads,
+                n_encoder_layers=model_config.n_encoder_layers,
+                n_decoder_layers=model_config.n_decoder_layers,
+                dropout=model_config.dropout,
+                ff_multiplier=model_config.ff_multiplier,
+            )
+        else:
+            d_model = weights["proj.weight"].shape[0]
+            model = Decoder(emb_weights=empty_emb, d_model=d_model)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
@@ -1322,8 +1384,8 @@ def create_tuning_run(
     model_type: str = "rnn",
     mode: str = "agent",
     config_path: str | None = None,
-    num_samples: int = 20,
-    max_iterations: int = 5,
+    num_samples: int | None = None,
+    max_iterations: int | None = None,
     device: str = "auto",
     save_best_model: bool = True,
     output_dir: str = "tuning_results",
@@ -1355,7 +1417,9 @@ def create_tuning_run(
         mode: 'agent' for LLM-guided loop, 'standalone' for single search.
         config_path: Path to agent config YAML (uses default if None).
         num_samples: Number of Ray Tune trials per iteration.
+            None means "use the value from the tuner config YAML".
         max_iterations: Max agent loop iterations (agent mode).
+            None means "use the value from the agent config YAML".
         device: Compute device ('auto', 'cpu', 'cuda', 'mps').
         save_best_model: Whether to train and save a final model.
         output_dir: Directory to save results and model weights.

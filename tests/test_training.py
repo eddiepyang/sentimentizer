@@ -303,8 +303,8 @@ class TestNewTrainer:
         cfg = TrainerConfig(batch_size=8, epochs=1, device="cpu", dataloader_workers=0)
 
         trainer = new_trainer(model, cfg, model_type="encoder")
-        # Encoder uses EncoderOptimizationParams (lr=0.0005 by default)
-        assert trainer.optimizer.defaults["lr"] == 0.0005
+        # Encoder uses EncoderOptimizationParams (lr=0.0001 by default)
+        assert trainer.optimizer.defaults["lr"] == 0.0001
 
 
 # ─── Optimization and Scheduler Params ────────────────────────────
@@ -319,7 +319,7 @@ class TestOptAndSchedParams:
 
     def test_encoder_opt_params(self) -> None:
         opt = _get_opt_params("encoder")
-        assert opt.lr == 0.0005
+        assert opt.lr == 0.0001
 
     def test_decoder_opt_params(self) -> None:
         opt = _get_opt_params("decoder")
@@ -332,13 +332,13 @@ class TestOptAndSchedParams:
 
     def test_encoder_sched_params(self) -> None:
         sched = _get_sched_params("encoder")
-        assert sched.warmup_epochs == 1
-        assert sched.T_max == 8
+        assert sched.warmup_epochs == 3
+        assert sched.T_max == 16
 
     def test_decoder_sched_params(self) -> None:
         sched = _get_sched_params("decoder")
-        assert sched.warmup_epochs == 2
-        assert sched.T_max == 8
+        assert sched.warmup_epochs == 3
+        assert sched.T_max == 16
 
 
 # ─── Scheduler Correctness ────────────────────────────────────────
@@ -444,8 +444,8 @@ class TestSchedulerCorrectness:
         for model_type in ("encoder", "decoder"):
             sched = _get_sched_params(model_type)
             epochs = default_epochs(model_type)
-            assert sched.T_max == epochs, (
-                f"{model_type}: T_max={sched.T_max} != default_epochs={epochs}. "
+            assert sched.T_max >= epochs, (
+                f"{model_type}: T_max={sched.T_max} < default_epochs={epochs}. "
                 f"LR would bottom out after {sched.T_max} epochs but training "
                 f"continues for {epochs} epochs."
             )

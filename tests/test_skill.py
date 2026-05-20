@@ -37,10 +37,11 @@ class TestTuningRunConfig:
         config = TuningRunConfig()
         assert config.model_type == "rnn"
         assert config.mode == "agent"
-        assert config.max_iterations == 5
-        assert config.convergence_threshold == 0.005
-        assert config.num_samples == 20
-        assert config.scheduler == "asha"
+        # None means "defer to the agent/tuner config YAML" — see _load_configs
+        assert config.max_iterations is None
+        assert config.convergence_threshold is None
+        assert config.num_samples is None
+        assert config.scheduler is None
         assert config.device == "auto"
         assert config.save_best_model is True
         assert config.output_dir == "tuning_results"

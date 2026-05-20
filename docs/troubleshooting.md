@@ -83,7 +83,7 @@ A healthy match rate should be 50–80%.
 | Cause | Symptoms | Fix |
 |-------|----------|-----|
 | **Dictionary tokens have wrapping quotes** | `extract_embeddings()` raises `ValueError` for match rate < 50%; dictionary contains `"'the'"` instead of `"the"` | Since the fix, `new_dictionary()` and `_count_vocab_batch()` use `list(doc_tokens)` instead of `str(doc_tokens)` for numpy arrays. If you have a stale `.dictionary` file, delete it and re-run the pipeline with `--run-type new`. |
-| **Wrong T_max for scheduler** | Loss decays to minimum halfway through training; model stops learning after ~50% of epochs | `EncoderSchedulerParams.T_max` should equal `default_epochs("encoder")` (= 8). Verify in `config.py`. |
+| **Wrong T_max for scheduler** | Loss decays to minimum partway through training; model stops learning before the final epoch | Transformers set `T_max = 2 * default_epochs` (= 16) for a gentle half-cosine decay. The invariant is `T_max >= epochs_trained` — never train more epochs than `T_max`. See "Learning rate drops to minimum" below. |
 | **Zero LR during warmup** | First epoch shows no learning progress | `_LinearWarmupCosineScheduler` uses `(step + 1) / warmup_steps` instead of `step / warmup_steps`. Verify the warmup formula is correct. |
 | **Class imbalance not addressed** | Model always predicts positive; `balanced_accuracy` near 0.33 (random) | Use `class_weights` (default with `compute_class_weights()`), `label_smoothing=0.1`, or `loss_type="focal"` with `focal_gamma=2.0`. |
 
@@ -114,9 +114,13 @@ make train   # or make train-distributed
 
 **Symptoms**: Training loss plateaus or increases after ~50% of epochs; final metrics are poor.
 
-**Cause**: `T_max` (for `CosineAnnealingLR` or `_LinearWarmupCosineScheduler`) is set lower than the number of training epochs. The LR decays to `eta_min` by epoch `T_max` and stays there for the remaining epochs.
+**Cause**: The number of epochs actually trained meets or exceeds the scheduler's `T_max`. The cosine schedule completes its decay to `eta_min` at epoch `T_max`; any epochs beyond that train at a dead LR (and for plain `CosineAnnealingLR`, the LR then climbs back up — the schedule is periodic).
 
-**Fix**: Ensure `EncoderSchedulerParams.T_max` equals `default_epochs("encoder")` (= 8). A test in `TestSchedulerCorrectness.test_scheduler_t_max_matches_default_epochs` catches regressions.
+For transformers, `EncoderSchedulerParams.T_max` / `DecoderSchedulerParams.T_max` are deliberately set to `16` — **twice** `default_epochs(...)` (= 8). Training only uses the first half of the cosine curve, giving a gentle decay that stays productive through the final epoch instead of crashing to `eta_min`. The invariant is `T_max >= epochs_trained`, not `T_max == default_epochs`.
+
+**Fix**:
+- Verify `T_max >= default_epochs(model_type)` in `config.py` (transformers use `2 * default_epochs`). `TestSchedulerCorrectness.test_scheduler_t_max_matches_default_epochs` asserts `T_max >= default_epochs`.
+- Do **not** train for more epochs than `T_max`. This was a real bug in `TuningRun._train_final_model`, which trained `2 * default_epochs` (= 16) epochs while the scheduler's `T_max` was 16 — the LR hit `eta_min` exactly at the last epoch. Final training now uses `default_epochs(model_type)` and relies on early stopping (`patience=3`) for convergence.
 
 ### Zero learning rate on first epoch (warmup)
 
@@ -125,6 +129,16 @@ make train   # or make train-distributed
 **Cause**: The warmup formula `step / warmup_steps` returns 0.0 at `step=0`, making the LR zero for the entire first epoch.
 
 **Fix**: `_LinearWarmupCosineScheduler` uses `(step + 1) / warmup_steps`, which gives `1/warmup_steps` at `step=0`. A test in `TestSchedulerCorrectness.test_warmup_cosine_no_zero_lr` catches regressions.
+
+## Model Loading Issues
+
+### Tuned model fails to load during validation (`load_state_dict` size mismatch)
+
+**Symptoms**: After a tuning run finds a non-default architecture (e.g. `n_heads=8`, `n_layers=6`), `TuningRun._validate_model` raises a `RuntimeError` from `load_state_dict` about mismatched tensor shapes or unexpected/missing keys.
+
+**Cause**: `n_heads` cannot be inferred from weight shapes — `nn.MultiheadAttention` stores `in_proj_weight` as `(3 * d_model, d_model)` regardless of head count. Reconstructing the model from weight-shape inference alone silently rebuilds it with the **default** architecture, which then fails to load tuned weights.
+
+**Fix**: `_train_final_model` writes a sidecar config JSON next to the weights (`best_model_<type>_config.json` beside `best_model_<type>.pth`). `_load_trained_model` reads it to reconstruct the exact architecture. If the sidecar is missing (Hugging Face downloads, older checkpoints — all of which use the default architecture), it logs `model_config_sidecar_missing` and falls back to weight-shape inference. If you hit this with a custom checkpoint, ensure the sidecar JSON is present alongside the `.pth`.
 
 ## Data Pipeline Issues
 

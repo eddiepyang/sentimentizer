@@ -4,7 +4,6 @@ All tests use MagicMock to avoid real model training, disk I/O,
 and Ray dependencies. This ensures fast, deterministic test execution.
 """
 
-from collections import deque
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -153,11 +152,11 @@ class TestCreateTrainingComponents:
 # ─── Trainer bounded memory ────────────────────────────────────────
 
 
-class TestTrainerBoundedMemory:
-    """Test that Trainer uses bounded memory for loss tracking."""
+class TestTrainerFields:
+    """Test Trainer dataclass fields after loss tracking refactor."""
 
-    def test_trainer_defaults_use_bounded_deques(self) -> None:
-        """Test Trainer dataclass directly without model instantiation."""
+    def test_trainer_has_no_legacy_loss_fields(self) -> None:
+        """Test that dead loss-tracking fields have been removed."""
         from sentimentizer.trainer import Trainer
 
         trainer = Trainer(
@@ -167,13 +166,13 @@ class TestTrainerBoundedMemory:
             cfg=MagicMock(),
             model_type="rnn",
         )
-        assert isinstance(trainer.losses, deque)
-        assert trainer.losses.maxlen == 1000
-        assert isinstance(trainer._recent_losses, deque)
-        assert trainer._recent_losses.maxlen == 120
+        assert not hasattr(trainer, "losses")
+        assert not hasattr(trainer, "_recent_losses")
+        assert not hasattr(trainer, "total_train_loss")
+        assert not hasattr(trainer, "train_step_count")
 
-    def test_running_mean_computation(self) -> None:
-        """Test O(1) running mean fields."""
+    def test_trainer_has_epoch_loss_fields(self) -> None:
+        """Test that Trainer has latest_train_loss field for per-epoch loss."""
         from sentimentizer.trainer import Trainer
 
         trainer = Trainer(
@@ -183,9 +182,8 @@ class TestTrainerBoundedMemory:
             cfg=MagicMock(),
             model_type="rnn",
         )
-        trainer.total_train_loss = 30.0
-        trainer.train_step_count = 10
-        assert trainer.total_train_loss / trainer.train_step_count == 3.0
+        assert hasattr(trainer, "latest_train_loss")
+        assert trainer.latest_train_loss == 0.0
 
 
 # ─── _run_training_loop ──────────────────────────────────────────

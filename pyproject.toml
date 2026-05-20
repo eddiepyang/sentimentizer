@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sentimentizer"
-version = "0.310.1"
+version = "0.311.1"
 description = "smole language models"
 readme = "README.md"
 authors = [{ name = "Edward Yang", email = "edwardpyang@gmail.com" }]
@@ -37,6 +37,7 @@ dependencies = [
     "rich>=15.0.0",
     "huggingface_hub>=1.14.0",
     "click>=8.3.0",
+    "tqdm>=4.67.0",
 ]
 
 [project.optional-dependencies]
@@ -48,14 +49,15 @@ ray = [
     "optuna>=4.8.0",
 ]
 router = [
-    "setfit>=1.1.0",
+    "sentence-transformers>=4.0.0",
     "datasets",
     "requests",
 ]
 onnx = [
     "onnx",
     "onnxruntime",
-    # optimum-onnx[onnxruntime] is needed for SetFit ONNX export (v2)
+    "onnxscript",
+    # optimum-onnx[onnxruntime] is needed for ONNX export (v2)
     # but conflicts with numpy>=2.4.0; use optimum[onnxruntime]<2.0.0 if needed
 ]
 dev = [

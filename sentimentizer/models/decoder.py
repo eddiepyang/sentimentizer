@@ -37,7 +37,7 @@ class PositionalEncoding(nn.Module):
         self.register_buffer("pe", pe.unsqueeze(0))  # (1, max_len, d_model)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.pe[:, : x.size(1), :]
+        x = x + self.pe.narrow(1, 0, x.size(1))
         return self.dropout(x)
 
 
@@ -100,6 +100,7 @@ class Decoder(BaseSentimentModel):
         self.encoder = nn.TransformerEncoder(
             encoder_layer=encoder_layer,
             num_layers=n_encoder_layers,
+            enable_nested_tensor=False,
         )
 
         # Transformer decoder — query token cross-attends to encoded memory

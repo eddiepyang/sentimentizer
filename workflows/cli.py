@@ -194,14 +194,18 @@ def train(ctx: click.Context, resume: bool, **kwargs: Any) -> None:
 )
 @click.option("--agent-config", default=None, type=str, help="Path to agent config YAML")
 @click.option(
-    "--samples", "tune_samples", default=20, type=int, help="Ray Tune trials per iteration"
+    "--samples",
+    "tune_samples",
+    default=None,
+    type=int,
+    help="Ray Tune trials per iteration (default: from agent config YAML)",
 )
 @click.option(
     "--max-iterations",
     "tune_max_iterations",
-    default=5,
+    default=None,
     type=int,
-    help="Maximum agent tuning iterations",
+    help="Maximum agent tuning iterations (default: from agent config YAML)",
 )
 @click.option(
     "--output-dir",
@@ -314,12 +318,16 @@ def export(ctx: click.Context, model: str, quantize: bool, output_dir: str) -> N
 
 @cli.group()
 def router() -> None:
-    """SetFit router operations."""
+    """Router operations (train, evaluate, push)."""
 
 
 @router.command("train")
 @click.option("--data", type=click.Path(exists=True), help="Path to augmented JSONL data")
-@click.option("--base-model", default=None, help="SetFit base model (overrides config default)")
+@click.option(
+    "--base-model",
+    default=None,
+    help="Sentence-transformer base model (overrides config default)",
+)
 @click.option("--output-dir", default=None, help="Output directory for trained model")
 @click.option(
     "--config",
@@ -336,15 +344,15 @@ def router_train(
     output_dir: str | None,
     config_path: str | None,
 ) -> None:
-    """Train the SetFit router model."""
+    """Train the router model."""
     from pathlib import Path
 
-    from sentimentizer.router.config import SetFitConfig, load_router_config
+    from sentimentizer.router.config import RouterConfig, load_router_config
     from sentimentizer.router.dataset import load_router_dataset
     from sentimentizer.router.train_router import train_router
 
     train_cfg, _ = load_router_config(config_path)
-    config = SetFitConfig(
+    config = RouterConfig(
         base_model=base_model or train_cfg.base_model,
         output_dir=Path(output_dir) if output_dir else train_cfg.output_dir,
     )
@@ -437,13 +445,11 @@ def router_augment(
 @click.option("--data", type=click.Path(exists=True), help="Path to evaluation JSONL data")
 @click.pass_context
 def router_evaluate(ctx: click.Context, model_path: str, data: str | None) -> None:
-    """Evaluate the SetFit router model."""
-    from setfit import SetFitModel
-
-    import sentimentizer.compat  # noqa: F401
+    """Evaluate the router model."""
     from sentimentizer.router.evaluate import evaluate_router
+    from sentimentizer.router.model import RouterModel
 
-    model = SetFitModel.from_pretrained(model_path)
+    model = RouterModel.from_pretrained(model_path)
     if data:
         from sentimentizer.router.dataset import load_router_dataset
 
@@ -458,13 +464,11 @@ def router_evaluate(ctx: click.Context, model_path: str, data: str | None) -> No
 @click.option("--repo-id", default="ryeyoo/sentimentizer-router", help="Hugging Face repository ID")
 @click.pass_context
 def router_push(ctx: click.Context, model_path: str, repo_id: str) -> None:
-    """Push the trained SetFit router model to Hugging Face Hub."""
-    from setfit import SetFitModel
-
-    import sentimentizer.compat  # noqa: F401
+    """Push the trained router model to Hugging Face Hub."""
+    from sentimentizer.router.model import RouterModel
 
     try:
-        model = SetFitModel.from_pretrained(model_path)
+        model = RouterModel.from_pretrained(model_path)
         click.echo(f"Pushing router model to {repo_id}...")
         model.push_to_hub(repo_id)
         click.echo(f"Successfully pushed router model to {repo_id}")

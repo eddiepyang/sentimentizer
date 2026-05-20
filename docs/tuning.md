@@ -87,7 +87,7 @@ The agent returns an [`AgentRunResult`](../sentimentizer/agent/models.py) with:
 | `best_accuracy` | Best validation accuracy achieved across all iterations |
 | `best_loss` | Best validation loss achieved |
 | `iterations_completed` | Number of agent loop iterations that ran |
-| `converged` | Whether the agent converged before reaching `max_iterations` |
+| `converged` | Whether the agent converged before reaching `max_iterations`. Always `false` in standalone mode — a single sweep has no convergence notion. |
 | `history` | List of [`TuningResult`](../sentimentizer/agent/models.py) from each iteration |
 
 The result is always written to `best_config.json`:
@@ -160,7 +160,7 @@ Returns a [`TuningRunResult`](../sentimentizer/agent/skill.py) with:
 | `best_weighted_f1` | Best weighted-averaged F1 score |
 | `best_mcc` | Best Matthews correlation coefficient |
 | `iterations_completed` | Number of tuning iterations (1 for standalone, variable for agent) |
-| `converged` | Whether the agent converged before max iterations |
+| `converged` | Whether the agent converged before max iterations. Always `false` for standalone mode (single sweep, no convergence notion). |
 | `model_path` | Path to the saved model weights (`.pth` file) |
 | `results_path` | Path to the saved JSON results file |
 | `validation_passed` | Whether model predictions met the validation threshold |

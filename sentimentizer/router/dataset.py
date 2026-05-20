@@ -1,7 +1,7 @@
 """Dataset loading and train/test split for the router.
 
 Loads JSONL files with {"text": "...", "label": 0|1|2} format
-and splits into train/test datasets for SetFit training.
+and splits into train/test datasets for router training.
 """
 
 import json

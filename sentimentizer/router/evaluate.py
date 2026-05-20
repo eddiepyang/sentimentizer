@@ -1,4 +1,4 @@
-"""Evaluation utilities for the SetFit router model.
+"""Evaluation utilities for the router model.
 
 Provides:
 - Cosine similarity matrix (inter-class < 0.65, intra-class > 0.85)
@@ -18,7 +18,7 @@ from sklearn.metrics import classification_report
 from sentimentizer.router.config import RouteLabels
 
 if TYPE_CHECKING:
-    from setfit import SetFitModel
+    from sentimentizer.router.model import RouterModel
 
 logger = logging.getLogger(__name__)
 
@@ -26,14 +26,14 @@ LABEL_NAMES = RouteLabels.label_names()
 
 
 def compute_similarity_matrix(
-    model: SetFitModel, texts_by_label: dict[int, list[str]]
+    model: RouterModel, texts_by_label: dict[int, list[str]]
 ) -> np.ndarray:
     """Generate inter-class and intra-class cosine similarity heatmap.
 
     Targets: inter-class similarity < 0.65, intra-class similarity > 0.85.
 
     Args:
-        model: Trained SetFitModel.
+        model: Trained RouterModel.
         texts_by_label: Dict mapping label int to list of example texts.
 
     Returns:
@@ -80,7 +80,7 @@ def compute_similarity_matrix(
 
 
 def calibrate_threshold(
-    model: SetFitModel, eval_dataset: dict, label_names: dict[int, str] | None = None
+    model: RouterModel, eval_dataset: dict, label_names: dict[int, str] | None = None
 ) -> float:
     """Find tau threshold where False Positives appear in General category.
 
@@ -88,7 +88,7 @@ def calibrate_threshold(
     should fall back to a default handling strategy.
 
     Args:
-        model: Trained SetFitModel.
+        model: Trained RouterModel.
         eval_dataset: Evaluation dataset with 'text' and 'label' columns.
         label_names: Optional mapping from label int to name.
 
@@ -140,12 +140,12 @@ def calibrate_threshold(
 
 
 def evaluate_router(
-    model: SetFitModel, eval_dataset: dict, label_names: dict[int, str] | None = None
+    model: RouterModel, eval_dataset: dict, label_names: dict[int, str] | None = None
 ) -> dict:
     """Full evaluation: accuracy, F1, similarity matrix, threshold.
 
     Args:
-        model: Trained SetFitModel.
+        model: Trained RouterModel.
         eval_dataset: Evaluation dataset with 'text' and 'label' columns.
         label_names: Optional mapping from label int to name.
 

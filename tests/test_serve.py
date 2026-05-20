@@ -312,7 +312,10 @@ class TestSentimentModelNotLoaded:
 class TestRouterNotLoaded:
     def test_router_predict_returns_503(self):
         dep = _mock_deployment(
-            predictor=_mock_predictor(router_loaded=False, router_error="setfit not installed")
+            predictor=_mock_predictor(
+                router_loaded=False,
+                router_error="sentence-transformers not installed",
+            )
         )
 
         with pytest.raises(HTTPException) as exc_info:
@@ -322,7 +325,10 @@ class TestRouterNotLoaded:
 
     def test_router_batch_returns_503(self):
         dep = _mock_deployment(
-            predictor=_mock_predictor(router_loaded=False, router_error="setfit not installed")
+            predictor=_mock_predictor(
+                router_loaded=False,
+                router_error="sentence-transformers not installed",
+            )
         )
 
         with pytest.raises(HTTPException) as exc_info:
