@@ -391,6 +391,7 @@ class TestAugmentSeeds:
         assert result[1]["text"] == "Seed B"
 
 
+@skip_without_router
 class TestContrastivePairs:
     """Test contrastive pair generation."""
 
