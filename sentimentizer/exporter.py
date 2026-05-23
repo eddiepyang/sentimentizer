@@ -36,7 +36,7 @@ _METRICS_DIR = Path("/tmp/sentimentizer_metrics")
 def get_training_metrics_path(model_type: str) -> Path:
     """Return the per-model-type path for persisted training metrics.
 
-    Each model type (rnn, encoder, decoder) writes to its own JSON file to
+    Each model type (rnn, encoder, decoder, modernbert) writes to its own JSON file to
     eliminate race conditions when multiple training processes run concurrently.
     """
     return _METRICS_DIR / f"{model_type}_metrics.json"
@@ -233,145 +233,175 @@ TUNE_TRIAL_COMPLETED_COUNT = Gauge(
 TRAINING_TRAIN_LOSS = Gauge(
     "sentimentizer_training_train_loss",
     "Training loss from the current training run",
-    ["model_type"],
+    ["model_type", "run_id"],
 )
 
 TRAINING_VAL_LOSS = Gauge(
     "sentimentizer_training_val_loss",
     "Validation loss from the current training run",
-    ["model_type"],
+    ["model_type", "run_id"],
 )
 
 TRAINING_VAL_ACCURACY = Gauge(
     "sentimentizer_training_val_accuracy",
     "Validation accuracy from the current training run",
-    ["model_type"],
+    ["model_type", "run_id"],
 )
 
 TRAINING_VAL_COHEN_KAPPA = Gauge(
     "sentimentizer_training_val_cohen_kappa",
     "Validation Cohen's kappa from the current training run",
-    ["model_type"],
+    ["model_type", "run_id"],
 )
 
 TRAINING_VAL_MCC = Gauge(
     "sentimentizer_training_val_mcc",
     "Validation Matthews correlation coefficient from the current training run",
-    ["model_type"],
+    ["model_type", "run_id"],
 )
 
 TRAINING_VAL_BALANCED_ACCURACY = Gauge(
     "sentimentizer_training_val_balanced_accuracy",
     "Validation balanced accuracy from the current training run",
-    ["model_type"],
+    ["model_type", "run_id"],
 )
 
 TRAINING_VAL_NEGATIVE_PRECISION = Gauge(
     "sentimentizer_training_val_negative_precision",
     "Validation negative-class precision from the current training run",
-    ["model_type"],
+    ["model_type", "run_id"],
 )
 
 TRAINING_VAL_NEGATIVE_RECALL = Gauge(
     "sentimentizer_training_val_negative_recall",
     "Validation negative-class recall from the current training run",
-    ["model_type"],
+    ["model_type", "run_id"],
 )
 
 TRAINING_VAL_NEGATIVE_F1 = Gauge(
     "sentimentizer_training_val_negative_f1",
     "Validation negative-class F1 from the current training run",
-    ["model_type"],
+    ["model_type", "run_id"],
 )
 
 TRAINING_VAL_NEUTRAL_PRECISION = Gauge(
     "sentimentizer_training_val_neutral_precision",
     "Validation neutral-class precision from the current training run",
-    ["model_type"],
+    ["model_type", "run_id"],
 )
 
 TRAINING_VAL_NEUTRAL_RECALL = Gauge(
     "sentimentizer_training_val_neutral_recall",
     "Validation neutral-class recall from the current training run",
-    ["model_type"],
+    ["model_type", "run_id"],
 )
 
 TRAINING_VAL_NEUTRAL_F1 = Gauge(
     "sentimentizer_training_val_neutral_f1",
     "Validation neutral-class F1 from the current training run",
-    ["model_type"],
+    ["model_type", "run_id"],
 )
 
 TRAINING_VAL_POSITIVE_PRECISION = Gauge(
     "sentimentizer_training_val_positive_precision",
     "Validation positive-class precision from the current training run",
-    ["model_type"],
+    ["model_type", "run_id"],
 )
 
 TRAINING_VAL_POSITIVE_RECALL = Gauge(
     "sentimentizer_training_val_positive_recall",
     "Validation positive-class recall from the current training run",
-    ["model_type"],
+    ["model_type", "run_id"],
 )
 
 TRAINING_VAL_POSITIVE_F1 = Gauge(
     "sentimentizer_training_val_positive_f1",
     "Validation positive-class F1 from the current training run",
-    ["model_type"],
+    ["model_type", "run_id"],
 )
 
 TRAINING_VAL_MACRO_F1 = Gauge(
     "sentimentizer_training_val_macro_f1",
     "Validation macro-averaged F1 from the current training run",
-    ["model_type"],
+    ["model_type", "run_id"],
 )
 
 TRAINING_VAL_WEIGHTED_F1 = Gauge(
     "sentimentizer_training_val_weighted_f1",
     "Validation weighted-averaged F1 from the current training run",
-    ["model_type"],
+    ["model_type", "run_id"],
 )
 
 TRAINING_VAL_NEUTRAL_AUC_ROC = Gauge(
     "sentimentizer_training_val_neutral_auc_roc",
     "Validation neutral-class AUC-ROC from the current training run",
-    ["model_type"],
+    ["model_type", "run_id"],
 )
 
 TRAINING_VAL_NEUTRAL_AVG_PRECISION = Gauge(
     "sentimentizer_training_val_neutral_avg_precision",
     "Validation neutral-class average precision from the current training run",
-    ["model_type"],
+    ["model_type", "run_id"],
 )
 
 TRAINING_VAL_NEUTRAL_TO_POSITIVE_RATE = Gauge(
     "sentimentizer_training_val_neutral_to_positive_rate",
     "Fraction of true neutral reviews misclassified as positive",
-    ["model_type"],
+    ["model_type", "run_id"],
 )
 
 TRAINING_VAL_NEUTRAL_TO_NEGATIVE_RATE = Gauge(
     "sentimentizer_training_val_neutral_to_negative_rate",
     "Fraction of true neutral reviews misclassified as negative",
-    ["model_type"],
+    ["model_type", "run_id"],
 )
 
 TRAINING_VAL_PRED_NEUTRAL_FRAC = Gauge(
     "sentimentizer_training_val_pred_neutral_frac",
     "Fraction of predictions that are neutral",
-    ["model_type"],
+    ["model_type", "run_id"],
 )
 
 TRAINING_EPOCH = Gauge(
     "sentimentizer_training_epoch",
     "Current training epoch number",
-    ["model_type"],
+    ["model_type", "run_id"],
 )
 
 TRAINING_LR = Gauge(
     "sentimentizer_training_lr",
     "Current learning rate",
-    ["model_type"],
+    ["model_type", "run_id"],
+)
+
+TRAINING_TRAIN_LOSS_EMA = Gauge(
+    "sentimentizer_training_train_loss_ema",
+    "Fast-moving EMA training loss (updated every N batches during training)",
+    ["model_type", "run_id"],
+)
+
+TRAINING_TRAIN_LOSS_AVG = Gauge(
+    "sentimentizer_training_train_loss_avg",
+    "Slow-moving epoch-average training loss (updated every N batches during training)",
+    ["model_type", "run_id"],
+)
+
+TRAINING_BATCH = Gauge(
+    "sentimentizer_training_batch",
+    "Current batch number within the epoch during training",
+    ["model_type", "run_id"],
+)
+
+TRAINING_GRAD_NORM = Gauge(
+    "sentimentizer_training_grad_norm",
+    "Gradient norm before clipping (updated every N batches)",
+    ["model_type", "run_id"],
+)
+
+TRAINING_THROUGHPUT = Gauge(
+    "sentimentizer_training_throughput",
+    "Samples processed per second (updated every N batches)",
+    ["model_type", "run_id"],
 )
 
 # ──────────────────────────────────────────────
@@ -510,50 +540,61 @@ def _update_ray_metrics(ray_url: str) -> None:
         RAY_CONTROLLER_OPERATION_TIME.set(0)
 
 
+_TRAINING_GAUGES = (
+    TRAINING_TRAIN_LOSS,
+    TRAINING_VAL_LOSS,
+    TRAINING_VAL_ACCURACY,
+    TRAINING_VAL_BALANCED_ACCURACY,
+    TRAINING_VAL_NEGATIVE_PRECISION,
+    TRAINING_VAL_NEGATIVE_RECALL,
+    TRAINING_VAL_NEGATIVE_F1,
+    TRAINING_VAL_NEUTRAL_PRECISION,
+    TRAINING_VAL_NEUTRAL_RECALL,
+    TRAINING_VAL_NEUTRAL_F1,
+    TRAINING_VAL_POSITIVE_PRECISION,
+    TRAINING_VAL_POSITIVE_RECALL,
+    TRAINING_VAL_POSITIVE_F1,
+    TRAINING_VAL_MACRO_F1,
+    TRAINING_VAL_WEIGHTED_F1,
+    TRAINING_VAL_COHEN_KAPPA,
+    TRAINING_VAL_MCC,
+    TRAINING_VAL_NEUTRAL_TO_POSITIVE_RATE,
+    TRAINING_VAL_NEUTRAL_TO_NEGATIVE_RATE,
+    TRAINING_VAL_PRED_NEUTRAL_FRAC,
+    TRAINING_VAL_NEUTRAL_AUC_ROC,
+    TRAINING_VAL_NEUTRAL_AVG_PRECISION,
+    TRAINING_EPOCH,
+    TRAINING_LR,
+    TRAINING_TRAIN_LOSS_EMA,
+    TRAINING_TRAIN_LOSS_AVG,
+    TRAINING_BATCH,
+    TRAINING_GRAD_NORM,
+    TRAINING_THROUGHPUT,
+)
+
+
 def _update_training_metrics() -> None:
     """Read persisted training metrics from per-model JSON files and update gauges.
 
-    Each model type (rnn, encoder, decoder) writes to its own JSON file in
+    Each model type (rnn, encoder, decoder, modernbert) writes to its own JSON file in
     ``/tmp/sentimentizer_metrics/{model_type}_metrics.json`` to eliminate
     race conditions when multiple training processes run concurrently.  The
-    exporter discovers all three files and zeroes out Prometheus gauges for
+    exporter discovers all files and zeroes out Prometheus gauges for
     any model type whose file is missing or stale.
     """
     try:
+        # Clear all previous training metric timeseries to purge old run_ids
+        for g in _TRAINING_GAUGES:
+            g.clear()
+
         _METRICS_DIR.mkdir(parents=True, exist_ok=True)
-        for model_type in ("rnn", "encoder", "decoder"):
+        for model_type in ("rnn", "encoder", "decoder", "modernbert"):
             path = get_training_metrics_path(model_type)
-            lbl = {"model_type": model_type}
 
             if not path.exists():
-                # File absent -> zero out gauges so stale values are cleared
-                _ZERO_GAUGES = [
-                    TRAINING_TRAIN_LOSS,
-                    TRAINING_VAL_LOSS,
-                    TRAINING_VAL_ACCURACY,
-                    TRAINING_VAL_BALANCED_ACCURACY,
-                    TRAINING_VAL_NEGATIVE_PRECISION,
-                    TRAINING_VAL_NEGATIVE_RECALL,
-                    TRAINING_VAL_NEGATIVE_F1,
-                    TRAINING_VAL_NEUTRAL_PRECISION,
-                    TRAINING_VAL_NEUTRAL_RECALL,
-                    TRAINING_VAL_NEUTRAL_F1,
-                    TRAINING_VAL_POSITIVE_PRECISION,
-                    TRAINING_VAL_POSITIVE_RECALL,
-                    TRAINING_VAL_POSITIVE_F1,
-                    TRAINING_VAL_MACRO_F1,
-                    TRAINING_VAL_WEIGHTED_F1,
-                    TRAINING_VAL_COHEN_KAPPA,
-                    TRAINING_VAL_MCC,
-                    TRAINING_VAL_NEUTRAL_TO_POSITIVE_RATE,
-                    TRAINING_VAL_NEUTRAL_TO_NEGATIVE_RATE,
-                    TRAINING_VAL_PRED_NEUTRAL_FRAC,
-                    TRAINING_VAL_NEUTRAL_AUC_ROC,
-                    TRAINING_VAL_NEUTRAL_AVG_PRECISION,
-                    TRAINING_EPOCH,
-                    TRAINING_LR,
-                ]
-                for g in _ZERO_GAUGES:
+                # File absent -> zero out gauges under empty run_id so baseline series exist
+                lbl = {"model_type": model_type, "run_id": ""}
+                for g in _TRAINING_GAUGES:
                     g.labels(**lbl).set(0)
                 continue
 
@@ -561,38 +602,24 @@ def _update_training_metrics() -> None:
             if not isinstance(data, dict):
                 continue
 
+            run_id = data.get("run_id", "")
+            lbl = {"model_type": model_type, "run_id": run_id}
+
             # Skip reset placeholder files — they contain zeros from
             # _reset_stale_metrics() and are not real training data.
+            # But still check the batch snapshot file for intra-epoch data.
             if data.get("_reset"):
-                _ZERO_GAUGES = [
-                    TRAINING_TRAIN_LOSS,
-                    TRAINING_VAL_LOSS,
-                    TRAINING_VAL_ACCURACY,
-                    TRAINING_VAL_BALANCED_ACCURACY,
-                    TRAINING_VAL_NEGATIVE_PRECISION,
-                    TRAINING_VAL_NEGATIVE_RECALL,
-                    TRAINING_VAL_NEGATIVE_F1,
-                    TRAINING_VAL_NEUTRAL_PRECISION,
-                    TRAINING_VAL_NEUTRAL_RECALL,
-                    TRAINING_VAL_NEUTRAL_F1,
-                    TRAINING_VAL_POSITIVE_PRECISION,
-                    TRAINING_VAL_POSITIVE_RECALL,
-                    TRAINING_VAL_POSITIVE_F1,
-                    TRAINING_VAL_MACRO_F1,
-                    TRAINING_VAL_WEIGHTED_F1,
-                    TRAINING_VAL_COHEN_KAPPA,
-                    TRAINING_VAL_MCC,
-                    TRAINING_VAL_NEUTRAL_TO_POSITIVE_RATE,
-                    TRAINING_VAL_NEUTRAL_TO_NEGATIVE_RATE,
-                    TRAINING_VAL_PRED_NEUTRAL_FRAC,
-                    TRAINING_VAL_NEUTRAL_AUC_ROC,
-                    TRAINING_VAL_NEUTRAL_AVG_PRECISION,
-                    TRAINING_EPOCH,
-                    TRAINING_LR,
-                ]
-                for g in _ZERO_GAUGES:
-                    g.labels(**lbl).set(0)
-                continue
+                for g in _TRAINING_GAUGES:
+                    # Clear/zero the epoch gauges, but avoid resetting batch gauges since they
+                    # might be updated by the batch snapshot file.
+                    if g not in (
+                        TRAINING_TRAIN_LOSS_EMA,
+                        TRAINING_TRAIN_LOSS_AVG,
+                        TRAINING_BATCH,
+                        TRAINING_GRAD_NORM,
+                        TRAINING_THROUGHPUT,
+                    ):
+                        g.labels(**lbl).set(0)
 
             # Sanity check -- the file name should match _written_by trace field
             written_by = data.get("_written_by", model_type)
@@ -650,6 +677,53 @@ def _update_training_metrics() -> None:
             TRAINING_EPOCH.labels(**lbl).set(int(data.get("epoch", 0)))
             lr = data.get("lr")
             TRAINING_LR.labels(**lbl).set(0.0 if lr is None else float(lr))
+
+            # Intra-epoch batch metrics: read from the lightweight batch snapshot file
+            # (written every N batches during training for real-time dashboard visibility).
+            # The epoch-end JSON no longer contains batch_metrics — the snapshot file
+            # is the sole source for intra-epoch gauges to avoid duplicate data points
+            # on the Grafana dashboard.
+            # Skip batch gauges for reset/stale model types — they have no live data,
+            # and creating zero-valued label series pollutes the dashboard with
+            # duplicate "emitter" lines under an empty run_id.
+            if data.get("_reset"):
+                continue
+
+            batch_snapshot_path = _METRICS_DIR / f"{model_type}_batch.json"
+            if batch_snapshot_path.exists():
+                try:
+                    batch_data = json.loads(batch_snapshot_path.read_text())
+                    if isinstance(batch_data, dict) and not batch_data.get("_reset"):
+                        batch_run_id = batch_data.get("run_id", run_id)
+                        batch_lbl = {"model_type": model_type, "run_id": batch_run_id}
+                        TRAINING_TRAIN_LOSS_EMA.labels(**batch_lbl).set(
+                            float(batch_data.get("loss_ema", 0))
+                        )
+                        TRAINING_TRAIN_LOSS_AVG.labels(**batch_lbl).set(
+                            float(batch_data.get("avg_loss", 0))
+                        )
+                        TRAINING_BATCH.labels(**batch_lbl).set(int(batch_data.get("batch", 0)))
+                        TRAINING_GRAD_NORM.labels(**batch_lbl).set(
+                            float(batch_data.get("grad_norm", 0))
+                        )
+                        TRAINING_THROUGHPUT.labels(**batch_lbl).set(
+                            float(batch_data.get("throughput", 0))
+                        )
+                        if "epoch" in batch_data:
+                            TRAINING_EPOCH.labels(**batch_lbl).set(int(batch_data["epoch"]))
+                        if "lr" in batch_data:
+                            TRAINING_LR.labels(**batch_lbl).set(float(batch_data["lr"]))
+                    else:
+                        # Batch snapshot has _reset flag or is not a dict — skip
+                        pass
+                except (json.JSONDecodeError, ValueError):
+                    # Corrupt batch snapshot — skip rather than emit zero-valued
+                    # series that would duplicate live metrics on the dashboard.
+                    pass
+            # No batch snapshot file for this model type — the epoch-level
+            # gauges (set above) are sufficient.  Do not create zero-valued
+            # batch gauge series with a stale run_id, as they produce
+            # duplicate "emitter" lines on the Grafana dashboard.
     except Exception as e:
         logger.warning("Error updating training metrics from file: %s", e)
 

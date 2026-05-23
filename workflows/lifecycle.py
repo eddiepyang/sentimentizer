@@ -39,6 +39,13 @@ for _key, _val in {
     "RAY_DEFAULT_OBJECT_STORE_MEMORY_PROPORTION": "0.75",
     "RAY_GRAFANA_HOST": "http://localhost:3000",
     "RAY_PROMETHEUS_HOST": "http://localhost:9090",
+    # Reduce CUDA memory fragmentation — PyTorch's default buddy allocator
+    # can leave many small holes; expandable_segments lets the allocator
+    # merge adjacent free regions into larger ones, reducing OOM from
+    # fragmentation (the "Tried to allocate X MiB but only Y MiB free" case
+    # where total free memory is sufficient but no single region is large
+    # enough).  Safe on all platforms; no-op when CUDA is not available.
+    "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
 }.items():
     os.environ.setdefault(_key, _val)
 
@@ -101,11 +108,12 @@ def _cleanup_stale_ray_sessions() -> None:
                 pass
 
     if removed > 0:
-        logger.info(  # type: ignore[call-arg]
-            "cleaned_stale_ray_sessions",
-            removed=removed,
-            freed_gb=round(freed_gb, 1),
-        )
+        with contextlib.suppress(Exception):
+            logger.info(  # type: ignore[call-arg]
+                "cleaned_stale_ray_sessions",
+                removed=removed,
+                freed_gb=round(freed_gb, 1),
+            )
 
 
 def _ray_cleanup() -> None:

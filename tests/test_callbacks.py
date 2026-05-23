@@ -37,7 +37,13 @@ class TestIterBatches:
         dataset = TensorDataset(torch.zeros(4, 10), torch.ones(4))
         loader = DataLoader(dataset, batch_size=2)
 
-        batches = list(_iter_batches(loader, batch_size=2, device="cpu"))
+        model = MagicMock()
+        model.prepare_batch.side_effect = lambda batch, device: (
+            batch[0].to(device),
+            batch[1].to(device),
+        )
+
+        batches = list(_iter_batches(model, loader, batch_size=2, device="cpu"))
         assert len(batches) == 2
         assert all(isinstance(b, tuple) and len(b) == 2 for b in batches)
 
@@ -46,7 +52,13 @@ class TestIterBatches:
         dataset = TensorDataset(torch.zeros(2, 10), torch.ones(2))
         loader = DataLoader(dataset, batch_size=2)
 
-        batches = list(_iter_batches(loader, batch_size=2, device="cpu"))
+        model = MagicMock()
+        model.prepare_batch.side_effect = lambda batch, device: (
+            batch[0].to(device),
+            batch[1].to(device),
+        )
+
+        batches = list(_iter_batches(model, loader, batch_size=2, device="cpu"))
         data, target = batches[0]
         assert data.device.type == "cpu"
         assert target.device.type == "cpu"
@@ -56,16 +68,24 @@ class TestIterBatches:
         mock_shard.iter_torch_batches.return_value = [
             {"data": torch.zeros(2, 10), "target": torch.ones(2)},
         ]
-        batches = list(_iter_batches(mock_shard, batch_size=2, device="cpu"))
+        model = MagicMock()
+
+        def prep(batch, device):
+            return {"input_ids": batch["data"].long().to(device)}, batch["target"].long().to(device)
+
+        model.prepare_batch.side_effect = prep
+
+        batches = list(_iter_batches(model, mock_shard, batch_size=2, device="cpu"))
         assert len(batches) == 1
-        data, target = batches[0]
-        assert data.dtype == torch.long  # .long() applied
+        inputs, target = batches[0]
+        assert inputs["input_ids"].dtype == torch.long  # .long() applied
         assert target.dtype == torch.long  # .long() applied for CrossEntropyLoss
 
     def test_ray_shard_empty(self) -> None:
         mock_shard = MagicMock()
         mock_shard.iter_torch_batches.return_value = []
-        batches = list(_iter_batches(mock_shard, batch_size=2, device="cpu"))
+        model = MagicMock()
+        batches = list(_iter_batches(model, mock_shard, batch_size=2, device="cpu"))
         assert batches == []
 
 
@@ -138,7 +158,7 @@ class TestCreateTrainingComponents:
         assert isinstance(loss_fn, torch.nn.CrossEntropyLoss)
         assert torch.allclose(loss_fn.weight, class_weights)
 
-    def test_scheduler_is_cosine_annealing_for_rnn(self) -> None:
+    def test_scheduler_is_warmup_cosine_for_rnn(self) -> None:
         model = MagicMock()
         model.parameters.return_value = [torch.nn.Parameter(torch.zeros(2, 2))]
         _, sched, _ = _create_training_components(
@@ -146,7 +166,9 @@ class TestCreateTrainingComponents:
             model_type="rnn",
             device="cpu",
         )
-        assert isinstance(sched, torch.optim.lr_scheduler.CosineAnnealingLR)
+        from sentimentizer.trainer import _LinearWarmupCosineScheduler
+
+        assert isinstance(sched, _LinearWarmupCosineScheduler)
 
 
 # ─── Trainer bounded memory ────────────────────────────────────────
@@ -239,7 +261,7 @@ class TestRunTrainingLoop:
         loss_fn = torch.nn.CrossEntropyLoss()
 
         with (
-            patch("sentimentizer.trainer.train_step", return_value=0.5),
+            patch("sentimentizer.trainer.train_step", return_value=(0.5, 0.0)),
             patch(
                 "sentimentizer.trainer.compute_epoch_metrics",
                 return_value=_make_dummy_metrics(),
@@ -275,7 +297,7 @@ class TestRunTrainingLoop:
         loss_fn = torch.nn.CrossEntropyLoss()
 
         with (
-            patch("sentimentizer.trainer.train_step", return_value=0.5),
+            patch("sentimentizer.trainer.train_step", return_value=(0.5, 0.0)),
             patch(
                 "sentimentizer.trainer.compute_epoch_metrics",
                 return_value=_make_dummy_metrics(),
@@ -316,7 +338,7 @@ class TestRunTrainingLoop:
         loss_fn = torch.nn.CrossEntropyLoss()
 
         with (
-            patch("sentimentizer.trainer.train_step", return_value=0.5),
+            patch("sentimentizer.trainer.train_step", return_value=(0.5, 0.0)),
             patch(
                 "sentimentizer.trainer.compute_epoch_metrics",
                 return_value=_make_dummy_metrics(),

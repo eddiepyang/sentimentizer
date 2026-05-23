@@ -313,9 +313,7 @@ class TestTrainLoopConfigKeys:
             "lr",
             "betas",
             "weight_decay",
-            "use_warmup",
-            "warmup_steps",
-            "total_steps",
+            "warmup_ratio",
             "scheduler_eta_min",
             "model_type",
             "dict_path",
@@ -323,6 +321,7 @@ class TestTrainLoopConfigKeys:
             "embeddings_emb_length",
             "input_len",
             "loss_type",
+            "ray_update_every",
         }
 
         # Keys that _train_func reads (must be a subset of setter_keys)
@@ -332,9 +331,7 @@ class TestTrainLoopConfigKeys:
             "lr",
             "betas",
             "weight_decay",
-            "use_warmup",
-            "warmup_steps",
-            "total_steps",
+            "warmup_ratio",
             "scheduler_eta_min",
             "model_type",
             "dict_path",
@@ -342,6 +339,7 @@ class TestTrainLoopConfigKeys:
             "embeddings_emb_length",
             "input_len",
             "loss_type",
+            "ray_update_every",
         }
 
         assert reader_keys.issubset(

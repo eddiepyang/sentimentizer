@@ -39,7 +39,7 @@ def run_tune(
         raise ImportError("Ray is required for tuning. Install with: pip install '.[ray]'")
     _ensure_ray_initialized()
 
-    from sentimentizer.agent.skill import TuningRun, TuningRunConfig
+    from sentimentizer.agent.diagnose_model import TuningRun, TuningRunConfig
     from sentimentizer.device import resolve_device
 
     device = resolve_device(state.device)
@@ -70,7 +70,7 @@ def run_tune(
     run = TuningRun(config)
 
     logger.info(  # type: ignore[call-arg]
-        "starting_tuning_skill",
+        "starting_tuning_run",
         model_type=config.model_type,
         mode=config.mode,
         device=config.device,
@@ -84,7 +84,7 @@ def run_tune(
         _cuda_cleanup()
 
     logger.info(  # type: ignore[call-arg]
-        "tuning_skill_complete",
+        "tuning_run_complete",
         best_accuracy=result.best_accuracy,
         best_loss=result.best_loss,
         best_f1=result.best_positive_f1,
@@ -106,9 +106,9 @@ def run_tune(
     )
 
     if result.validation_passed:
-        logger.info("tuning_skill_passed: model predictions validated successfully")
+        logger.info("tuning_run_passed: model predictions validated successfully")
     else:
         logger.warning(
-            "tuning_skill_failed: model predictions did not meet validation threshold "
+            "tuning_run_failed: model predictions did not meet validation threshold "
             f"({result.validation_threshold}) after {result.retry_count} retries"
         )

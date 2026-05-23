@@ -6,7 +6,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from sentimentizer.config import HF_WEIGHTS_REPOS
-from sentimentizer.hf import download_weights, pull_model_from_hub, push_model_to_hub
+from sentimentizer.hf import (
+    _HF_MODEL_TYPES,
+    download_weights,
+    pull_model_from_hub,
+    push_model_to_hub,
+)
 
 
 class TestHFWeightsRepos:
@@ -26,6 +31,10 @@ class TestHFWeightsRepos:
 
     def test_unknown_model_type_not_in_repos(self) -> None:
         assert "unknown" not in HF_WEIGHTS_REPOS
+
+    def test_modernbert_repo_exists(self) -> None:
+        assert "modernbert" in HF_WEIGHTS_REPOS
+        assert HF_WEIGHTS_REPOS["modernbert"] == "ryeyoo/sentimentizer-modernbert"
 
 
 class TestDownloadWeights:
@@ -437,3 +446,163 @@ class TestGetTrainedModelHFDownload:
             mock_download.assert_called_once_with(
                 "decoder", mock_download.call_args[0][1], dict_path=ANY
             )
+
+
+class TestHFModelTypes:
+    """Test the _HF_MODEL_TYPES set."""
+
+    def test_modernbert_is_hf_model(self) -> None:
+        assert "modernbert" in _HF_MODEL_TYPES
+
+    def test_gloves_are_not_hf_models(self) -> None:
+        assert "rnn" not in _HF_MODEL_TYPES
+        assert "encoder" not in _HF_MODEL_TYPES
+        assert "decoder" not in _HF_MODEL_TYPES
+
+
+class TestModernBERTModelCard:
+    """Test model card generation for ModernBERT."""
+
+    def test_modernbert_model_card(self) -> None:
+        from sentimentizer.hf import create_model_card
+
+        card = create_model_card("modernbert")
+        assert "---\n" in card
+        assert "MODERNBERT" in card
+        assert "ModernBERT" in card
+        assert "modernbert_weights.pth" in card
+        assert "backbone/" in card
+        assert "sentiment-analysis" in card
+
+    def test_modernbert_model_card_no_dictionary(self) -> None:
+        from sentimentizer.hf import create_model_card
+
+        card = create_model_card("modernbert")
+        assert "yelp.dictionary" not in card
+        assert "GloVe" not in card
+
+    def test_modernbert_model_card_has_backbone_files(self) -> None:
+        from sentimentizer.hf import create_model_card
+
+        card = create_model_card("modernbert")
+        assert "safetensors" in card
+        assert "tokenizer.json" in card
+
+    def test_modernbert_model_card_usage_section(self) -> None:
+        from sentimentizer.hf import create_model_card
+
+        card = create_model_card("modernbert")
+        assert "new_modernbert_model" in card
+        assert "download_weights" in card
+        assert "SentimentPredictor" in card
+
+
+class TestPushModelToHubBackbone:
+    """Test that push_model_to_hub uploads backbone for HF models."""
+
+    @patch("sentimentizer.hf._upload_backbone_dir")
+    @patch("sentimentizer.hf.HfApi")
+    def test_push_modernbert_uploads_backbone(
+        self, mock_api_cls: MagicMock, mock_upload_backbone: MagicMock
+    ) -> None:
+        import tempfile
+
+        mock_api_instance = MagicMock()
+        mock_api_cls.return_value = mock_api_instance
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            weights_path = Path(tmpdir) / "modernbert_weights.pth"
+            weights_path.write_bytes(b"fake weights")
+            backbone_dir = Path(tmpdir) / "backbone"
+            backbone_dir.mkdir()
+            (backbone_dir / "model.safetensors").write_bytes(b"fake backbone")
+            (backbone_dir / "config.json").write_text("{}")
+
+            push_model_to_hub(
+                local_path=str(weights_path),
+                model_type="modernbert",
+                backbone_path=str(backbone_dir),
+            )
+
+            mock_upload_backbone.assert_called_once()
+            call_args = mock_upload_backbone.call_args
+            assert call_args[0][0] == mock_api_instance
+            assert call_args[0][1] == backbone_dir
+            assert call_args[0][2] == "ryeyoo/sentimentizer-modernbert"
+
+    @patch("sentimentizer.hf._upload_backbone_dir")
+    @patch("sentimentizer.hf.HfApi")
+    def test_push_rnn_does_not_upload_backbone(
+        self, mock_api_cls: MagicMock, mock_upload_backbone: MagicMock
+    ) -> None:
+        import tempfile
+
+        mock_api_instance = MagicMock()
+        mock_api_cls.return_value = mock_api_instance
+
+        with tempfile.NamedTemporaryFile(suffix=".pth", delete=False) as tmp:
+            tmp.write(b"fake weights data")
+            tmp_path = tmp.name
+
+        try:
+            push_model_to_hub(tmp_path, "ryeyoo/sentimentizer-rnn", "rnn")
+            mock_upload_backbone.assert_not_called()
+        finally:
+            import os
+
+            os.unlink(tmp_path)
+
+
+class TestDownloadBackboneDir:
+    """Test _download_backbone_dir functionality."""
+
+    @patch("sentimentizer.hf.hf_hub_download")
+    def test_download_weights_modernbert_downloads_backbone(self, mock_download: MagicMock) -> None:
+        import os
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(suffix=".pth", delete=False) as tmp:
+            tmp.write(b"fake weights data")
+            tmp_path = tmp.name
+
+        try:
+            mock_download.return_value = tmp_path
+
+            with tempfile.TemporaryDirectory() as dest_dir:
+                dest_path = os.path.join(dest_dir, "hf_weights", "head.pth")
+                result = download_weights("modernbert", dest_path)
+
+                assert result is not None
+                assert mock_download.call_count >= 2
+                first_call_filename = mock_download.call_args_list[0][1].get(
+                    "filename",
+                    (
+                        mock_download.call_args_list[0][0][0]
+                        if mock_download.call_args_list[0][0]
+                        else ""
+                    ),
+                )
+                assert first_call_filename == "modernbert_weights.pth"
+        finally:
+            os.unlink(tmp_path)
+
+    @patch("sentimentizer.hf.hf_hub_download")
+    def test_download_weights_rnn_no_backbone(self, mock_download: MagicMock) -> None:
+        import os
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(suffix=".pth", delete=False) as tmp:
+            tmp.write(b"fake weights data")
+            tmp_path = tmp.name
+
+        try:
+            mock_download.return_value = tmp_path
+
+            with tempfile.TemporaryDirectory() as dest_dir:
+                dest_path = os.path.join(dest_dir, "rnn_weights.pth")
+                result = download_weights("rnn", dest_path)
+
+                assert result is not None
+                mock_download.assert_called_once()
+        finally:
+            os.unlink(tmp_path)

@@ -34,7 +34,9 @@ def test_load_train_val_corpus_datasets():
         assert len(train_ds) == 3
 
         # Verify content type (tensors)
-        x, y = train_ds[0]
+        batch = train_ds[0]
+        x = batch["input_ids"]
+        y = batch["target"]
         assert isinstance(x, torch.Tensor)
         assert isinstance(y, torch.Tensor)
         assert x.dtype == torch.long
@@ -56,7 +58,7 @@ def test_load_train_val_corpus_datasets_balancing():
         )
 
         # Verify classes are balanced in train_ds
-        targets = [train_ds[i][1].item() for i in range(len(train_ds))]
+        targets = [train_ds[i]["target"].item() for i in range(len(train_ds))]
         assert targets.count(1.0) == targets.count(0.0)
         assert len(train_ds) > 0
 

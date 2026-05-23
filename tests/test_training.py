@@ -71,7 +71,7 @@ class TestTrainStep:
     """Test the train_step function."""
 
     def test_train_step_returns_float(self) -> None:
-        """train_step should return a scalar loss value."""
+        """train_step should return a loss value and grad_norm."""
         model = TinyModel()
         optimizer = torch.optim.AdamW(model.parameters(), lr=0.01)
         loss_fn = nn.CrossEntropyLoss()
@@ -79,9 +79,10 @@ class TestTrainStep:
         data = torch.randn(4, 10)
         target = torch.randint(0, 3, (4,)).long()
 
-        loss = train_step(model, data, target, optimizer, loss_fn)
+        loss, grad_norm = train_step(model, data, target, optimizer, loss_fn)
         assert isinstance(loss, float)
         assert loss > 0
+        assert isinstance(grad_norm, float)
 
     def test_train_step_updates_weights(self) -> None:
         """train_step should modify model weights."""
@@ -109,7 +110,9 @@ class TestTrainStep:
         target = torch.randint(0, 3, (4,)).long()
 
         # After train_step, all grad norms should be <= max_grad_norm
-        train_step(model, data, target, optimizer, loss_fn, max_grad_norm=1.0)
+        loss, grad_norm = train_step(model, data, target, optimizer, loss_fn, max_grad_norm=1.0)
+        assert isinstance(grad_norm, float)
+        assert grad_norm > 0
 
         for p in model.parameters():
             if p.grad is not None:
@@ -262,6 +265,51 @@ class TestSingleNodeTraining:
             ckpt_files = glob.glob(os.path.join(tmpdir, "*.pth"))
             assert len(ckpt_files) > 0, "No checkpoint files were created"
 
+    def test_trainer_writes_batch_snapshots(self) -> None:
+        """Trainer.fit() should write batch snapshot JSON files."""
+        from sentimentizer.metrics_publisher import get_metrics_dir
+        from sentimentizer.trainer import Trainer
+
+        model = TinyModel(input_dim=10, hidden_dim=16)
+        train_data = FloatDataset(n=16, input_dim=10)
+        val_data = FloatDataset(n=8, input_dim=10)
+
+        cfg = TrainerConfig(
+            batch_size=4,
+            epochs=1,
+            device="cpu",
+            dataloader_workers=0,
+            early_stopping_patience=0,
+            ray_update_every=1,  # write snapshot every batch
+        )
+
+        optimizer = torch.optim.AdamW(model.parameters(), lr=0.01)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=1)
+        loss_fn = nn.CrossEntropyLoss()
+
+        trainer = Trainer(
+            loss_function=loss_fn,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            cfg=cfg,
+            model_type="rnn",
+        )
+
+        # Clear batch snapshot if exists
+        snapshot_path = get_metrics_dir() / "rnn_batch.json"
+        snapshot_path.unlink(missing_ok=True)
+
+        trainer.fit(model, train_data, val_data)  # type: ignore[arg-type]
+
+        assert snapshot_path.exists(), "Batch snapshot file should be written"
+        data = json.loads(snapshot_path.read_text())
+        assert "loss_ema" in data
+        assert "avg_loss" in data
+        assert "lr" in data
+        assert "epoch" in data
+        assert "batch" in data
+        snapshot_path.unlink(missing_ok=True)
+
 
 # ─── new_trainer Factory ─────────────────────────────────────────
 
@@ -327,18 +375,27 @@ class TestOptAndSchedParams:
         assert opt.weight_decay == 0.02
 
     def test_rnn_sched_params(self) -> None:
+        from sentimentizer.config import RNNSchedulerParams
+
         sched = _get_sched_params("rnn")
-        assert sched.T_max == 4
+        assert isinstance(sched, RNNSchedulerParams)
+        assert sched.warmup_ratio == 0.06
+        assert sched.eta_min == 1e-6
 
     def test_encoder_sched_params(self) -> None:
         sched = _get_sched_params("encoder")
-        assert sched.warmup_epochs == 1
+        assert sched.warmup_ratio == 0.06
+        # T_max and warmup_epochs are legacy fields (per-epoch stepping era)
         assert sched.T_max == 24
+        assert sched.warmup_epochs == 1
 
     def test_decoder_sched_params(self) -> None:
         sched = _get_sched_params("decoder")
-        assert sched.warmup_epochs == 1
+        assert sched.warmup_ratio == 0.06
+        assert sched.eta_min == 1e-5
+        # T_max and warmup_epochs are legacy fields
         assert sched.T_max == 24
+        assert sched.warmup_epochs == 1
 
 
 # ─── Scheduler Correctness ────────────────────────────────────────
@@ -433,22 +490,34 @@ class TestSchedulerCorrectness:
         # Final LR should be close to eta_min
         assert lrs[-1] < lrs[0], f"LR should decrease: {lrs}"
 
-    def test_scheduler_t_max_matches_default_epochs(self) -> None:
-        """Encoder/decoder T_max should match their default epoch counts.
+    def test_all_models_use_per_batch_stepping(self) -> None:
+        """All model types should have STEP_SCHEDULER_PER_BATCH = True.
 
-        If T_max < default_epochs, the LR decays to minimum before training
-        finishes, leaving the model to train at eta_min for remaining epochs.
+        Per-batch scheduler stepping is the standard for all major training
+        frameworks. The scheduler is rebuilt with real optimizer-step counts
+        in Trainer.fit() / _train_func() once the DataLoader length is known.
         """
-        from sentimentizer.config import default_epochs
+        from sentimentizer.models.base import BaseSentimentModel
+        from sentimentizer.models.decoder import Decoder
+        from sentimentizer.models.encoder import Encoder
+        from sentimentizer.models.rnn import RNN
 
-        for model_type in ("encoder", "decoder"):
+        for model_cls in (RNN, Encoder, Decoder):
+            assert (
+                model_cls.STEP_SCHEDULER_PER_BATCH is True
+            ), f"{model_cls.__name__}.STEP_SCHEDULER_PER_BATCH should be True"
+        assert BaseSentimentModel.STEP_SCHEDULER_PER_BATCH is True
+
+    def test_all_sched_params_have_warmup_ratio(self) -> None:
+        """All scheduler params should have warmup_ratio for per-batch stepping."""
+        for model_type in ("rnn", "encoder", "decoder", "modernbert"):
             sched = _get_sched_params(model_type)
-            epochs = default_epochs(model_type)
-            assert sched.T_max >= epochs, (
-                f"{model_type}: T_max={sched.T_max} < default_epochs={epochs}. "
-                f"LR would bottom out after {sched.T_max} epochs but training "
-                f"continues for {epochs} epochs."
-            )
+            assert hasattr(
+                sched, "warmup_ratio"
+            ), f"{model_type} scheduler params missing warmup_ratio"
+            assert (
+                sched.warmup_ratio > 0
+            ), f"{model_type} warmup_ratio should be positive, got {sched.warmup_ratio}"
 
 
 # ─── Checkpoint with DDP Model ───────────────────────────────────
@@ -568,15 +637,14 @@ class TestDistributedConfig:
             "lr",
             "betas",
             "weight_decay",
-            "use_warmup",
-            "warmup_steps",
-            "total_steps",
+            "warmup_ratio",
             "scheduler_eta_min",
             "model_type",
             "dict_path",
             "embeddings_model_name",
             "embeddings_emb_length",
             "input_len",
+            "ray_update_every",
         }
 
         config = {
@@ -585,15 +653,14 @@ class TestDistributedConfig:
             "lr": 0.005,
             "betas": [0.7, 0.99],
             "weight_decay": 1e-4,
-            "use_warmup": False,
-            "warmup_steps": 0,
-            "total_steps": 0,
+            "warmup_ratio": 0.06,
             "scheduler_eta_min": 1e-6,
             "model_type": "rnn",
             "dict_path": "/tmp/test.dict",
             "embeddings_model_name": "glove-wiki-gigaword-100",
             "embeddings_emb_length": 100,
             "input_len": 200,
+            "ray_update_every": -1,
         }
         assert required_keys.issubset(set(config.keys()))
 
@@ -605,15 +672,14 @@ class TestDistributedConfig:
             "lr": 0.005,
             "betas": [0.7, 0.99],
             "weight_decay": 1e-4,
-            "use_warmup": False,
-            "warmup_steps": 0,
-            "total_steps": 0,
+            "warmup_ratio": 0.06,
             "scheduler_eta_min": 1e-6,
             "model_type": "rnn",
             "dict_path": "/tmp/test.dict",
             "embeddings_model_name": "glove-wiki-gigaword-100",
             "embeddings_emb_length": 100,
             "input_len": 200,
+            "ray_update_every": -1,
         }
         serialized = json.dumps(config)
         assert len(serialized) > 0
@@ -672,15 +738,19 @@ class TestResetStaleMetrics:
 
         monkeypatch.setattr("workflows.stages.train._METRICS_DIR", tmp_path)
 
-        _reset_stale_metrics("encoder")
+        _reset_stale_metrics("encoder", run_id="test_run_123")
 
-        for mt in ("rnn", "encoder", "decoder"):
+        for mt in ("rnn", "encoder", "decoder", "modernbert"):
             metrics_file = tmp_path / f"{mt}_metrics.json"
             assert metrics_file.exists(), f"{mt}_metrics.json should exist"
             result = json.loads(metrics_file.read_text())
             assert result["train_loss"] == 0.0
             assert result["epoch"] == 0
             assert result.get("_reset") is True
+            if mt == "encoder":
+                assert result.get("run_id") == "test_run_123"
+            else:
+                assert result.get("run_id") == ""
             assert "_trace" in result
             assert result["_trace"]["reset_by"] == "encoder"
 
@@ -694,7 +764,7 @@ class TestResetStaleMetrics:
 
         _reset_stale_metrics("decoder")
 
-        for mt in ("rnn", "encoder", "decoder"):
+        for mt in ("rnn", "encoder", "decoder", "modernbert"):
             metrics_file = tmp_path / f"{mt}_metrics.json"
             assert metrics_file.exists()
             result = json.loads(metrics_file.read_text())
@@ -765,22 +835,22 @@ class TestResetStaleMetrics:
         from sentimentizer.exporter import TRAINING_VAL_ACCURACY
 
         # Set gauges for both encoder and rnn
-        TRAINING_VAL_ACCURACY.labels(model_type="encoder").set(0.99)
-        TRAINING_VAL_ACCURACY.labels(model_type="rnn").set(0.88)
+        TRAINING_VAL_ACCURACY.labels(model_type="encoder", run_id="my_run").set(0.99)
+        TRAINING_VAL_ACCURACY.labels(model_type="rnn", run_id="").set(0.88)
 
-        _reset_stale_metrics("encoder")
+        _reset_stale_metrics("encoder", run_id="my_run")
 
         # Only the current model type (encoder) should be zeroed
         encoder_val = REGISTRY.get_sample_value(
             "sentimentizer_training_val_accuracy",
-            {"model_type": "encoder"},
+            {"model_type": "encoder", "run_id": "my_run"},
         )
         assert encoder_val == 0.0, "encoder accuracy gauge should be 0"
 
         # Other model types should retain their previous values
         rnn_val = REGISTRY.get_sample_value(
             "sentimentizer_training_val_accuracy",
-            {"model_type": "rnn"},
+            {"model_type": "rnn", "run_id": ""},
         )
         assert rnn_val == 0.88, "rnn accuracy gauge should retain its value"
 
@@ -1158,3 +1228,21 @@ class TestMetricsPersistence:
         assert "train_loss" in data, "train_loss key must be present in metrics JSON"
         assert isinstance(data["train_loss"], float)
         path.unlink(missing_ok=True)
+
+
+class TestTrainerRayUpdateEvery:
+    """Test TrainerConfig ray_update_every configuration and propagation."""
+
+    def test_ray_update_every_config_default(self) -> None:
+        """TrainerConfig should default to ray_update_every = -1."""
+        cfg = TrainerConfig(device="cpu")
+        assert cfg.ray_update_every == -1
+
+    def test_ray_update_every_propagation_to_trainer(self) -> None:
+        """ray_update_every should propagate from TrainerConfig to Trainer."""
+        cfg = TrainerConfig(device="cpu", ray_update_every=42)
+        model = TinyModel()
+        from sentimentizer.trainer import new_trainer
+
+        trainer = new_trainer(model, cfg, model_type="rnn")
+        assert trainer.cfg.ray_update_every == 42

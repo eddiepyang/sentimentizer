@@ -1,4 +1,4 @@
-"""TuningRun skill: create a tuning run and work with the agent until convergence.
+"""TuningRun workflow: create a tuning run and work with the agent until convergence.
 
 This module provides a high-level API for orchestrating hyperparameter
 tuning runs. It supports two modes:
@@ -13,14 +13,14 @@ tuning runs. It supports two modes:
 Both modes produce a ``TuningRunResult`` with the best configuration,
 metrics, and an optional trained model saved to disk.
 
-The skill also includes model validation: after tuning, it trains a final
+The workflow also includes model validation: after tuning, it trains a final
 model with the best config and validates predictions against known
 sentiment examples (negative, neutral, positive). If the model doesn't
 meet quality criteria, it can re-tune with adjusted parameters.
 
 Usage::
 
-    from sentimentizer.agent.skill import TuningRun, TuningRunConfig
+    from sentimentizer.agent.diagnose_model import TuningRun, TuningRunConfig
 
     config = TuningRunConfig(model_type="rnn")
     run = TuningRun(config)
@@ -134,7 +134,7 @@ class TuningRunConfig:
     balance_classes: bool = False
     balance_seed: int = 42
     weight_smoothing: float = 0.5
-    loss_type: str = "cross_entropy"
+    loss_type: str = "focal"
     focal_gamma: float = 2.0
     label_smoothing: float = 0.1
     neutral_oversample_ratio: float = 0.0
@@ -592,11 +592,10 @@ class TuningRun:
         model = _create_model(model_type, model_config)
         model.to(device)
 
-        # Train for the model's default epoch count. The LR schedulers
-        # (EncoderSchedulerParams.T_max etc.) are tuned to this length —
-        # training longer pushes the cosine schedule past T_max and decays
-        # the LR to eta_min before training ends. Early stopping
-        # (patience=3, set below) handles convergence without extra epochs.
+        # Train for the model's default epoch count. The per-batch scheduler
+        # computes total_steps dynamically from epochs * steps_per_epoch, so
+        # the cosine decay scale always matches the actual training length.
+        # Early stopping (patience=3, set below) handles convergence.
         final_epochs = default_epochs(model_type)
 
         trainer_config = TrainerConfig(
@@ -1396,7 +1395,7 @@ def create_tuning_run(
     balance_classes: bool = False,
     balance_seed: int = 42,
     weight_smoothing: float = 0.5,
-    loss_type: str = "cross_entropy",
+    loss_type: str = "focal",
     focal_gamma: float = 2.0,
     label_smoothing: float = 0.1,
     neutral_oversample_ratio: float = 0.0,
@@ -1408,7 +1407,7 @@ def create_tuning_run(
     This is the simplest way to start a tuning run. It creates a
     ``TuningRunConfig``, builds a ``TuningRun``, and executes it.
 
-    The skill works with the agent until a good model is found:
+    The workflow works with the agent until a good model is found:
     it tunes hyperparameters, trains a final model, validates
     predictions, and re-tunes if validation fails.
 
@@ -1430,7 +1429,7 @@ def create_tuning_run(
         balance_classes: Whether to balance classes by undersampling (default: False).
         balance_seed: Random seed for class balancing (default: 42).
         weight_smoothing: Inverse-frequency exponent for class weights (default: 0.5).
-        loss_type: Loss function type ('cross_entropy' or 'focal', default: 'cross_entropy').
+        loss_type: Loss function type ('cross_entropy' or 'focal', default: 'focal').
         balance_strategy: Strategy for class imbalance (default: 'class_weights_only').
         push_to_hub: Whether to push model to Hugging Face Hub after validation (default: False).
 

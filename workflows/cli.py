@@ -99,6 +99,18 @@ def shared_train_options(func: click.Command) -> click.Command:
             "--pull-from-hub", is_flag=True, help="Pull model weights from Hugging Face Hub"
         ),
         click.option("--hf-repo", default=None, type=str, help="Hugging Face repository ID"),
+        click.option(
+            "--run-id",
+            default="",
+            type=str,
+            help="Unique training run ID for metrics tracking",
+        ),
+        click.option(
+            "--ray-update-every",
+            default=-1,
+            type=int,
+            help="Batch update/logging frequency for distributed training (-1 = auto)",
+        ),
     ]
     for option in reversed(options):
         func = option(func)  # type: ignore[misc]
@@ -114,9 +126,9 @@ def shared_train_options(func: click.Command) -> click.Command:
 @click.option(
     "--model",
     default="rnn",
-    type=click.Choice(["rnn", "encoder", "decoder"]),
+    type=click.Choice(["rnn", "encoder", "decoder", "modernbert"]),
     envvar="SENTIMENTIZER_MODEL",
-    help="Model architecture: rnn, encoder, or decoder",
+    help="Model architecture: rnn, encoder, decoder, or modernbert",
 )
 @click.option(
     "--device",
@@ -304,7 +316,7 @@ def hf_pull(ctx: click.Context, repo_id: str | None) -> None:
 @cli.command()
 @click.option(
     "--model",
-    type=click.Choice(["rnn", "encoder", "decoder"]),
+    type=click.Choice(["rnn", "encoder", "decoder", "modernbert"]),
     required=True,
     help="Model to export to ONNX",
 )

@@ -33,7 +33,13 @@ import numpy as np
 import torch
 
 from sentimentizer import logger
-from sentimentizer.config import auto_detect_device
+from sentimentizer.config import (
+    DecoderConfig,
+    EncoderConfig,
+    ModernBERTConfig,
+    RNNConfig,
+    auto_detect_device,
+)
 from sentimentizer.models.base import BaseSentimentModel, get_trained_model
 from sentimentizer.tokenizer import Tokenizer, get_trained_tokenizer, regex_tokenize, text_sequencer
 
@@ -100,7 +106,9 @@ class SentimentPredictor:
         """
         try:
             model = get_trained_model(model_name, device=self.device)
-            model.tokenizer = self.tokenizer
+            # Only assign default tokenizer if model doesn't already have a custom one
+            if getattr(model, "tokenizer", None) is None:
+                model.tokenizer = self.tokenizer
             model.to(self.device)
             model.eval()
             logger.info(f"Loaded sentiment model: {model_name}")
@@ -186,7 +194,7 @@ class SentimentPredictor:
     def predict_batch(self, texts: list[str]) -> list[dict[str, Any]]:
         """Run sentiment analysis on multiple texts — single forward pass.
 
-        Tokenizes all texts, stacks into a single ``(B, seq_len)`` array,
+        Tokenizes all texts, stacks into a single sequence batch,
         and runs one forward pass.
 
         Returns:
@@ -201,10 +209,21 @@ class SentimentPredictor:
         if not self.model_loaded:
             raise RuntimeError(f"Sentiment model not loaded: {self._model_error}")
 
-        token_arrays = [self.model.tokenizer.tokenize_text(t) for t in texts]
+        if getattr(type(self.model), "NEEDS_TOKENIZE_STAGE", True) is False:
+            encoded = self.model.tokenizer(
+                texts,
+                padding="longest",
+                truncation=True,
+                max_length=512,
+                return_tensors="pt",
+            )
+            probs = self.model.predict(encoded)
+        else:
+            token_arrays = [self.model.tokenizer.tokenize_text(t) for t in texts]
+            batch = np.concatenate(token_arrays, axis=0)
+            probs = self.model.predict(batch)
+
         token_counts = [len(regex_tokenize(t)) for t in texts]
-        batch = np.concatenate(token_arrays, axis=0)
-        probs = self.model.predict(batch)
 
         label_names = BaseSentimentModel.LABEL_NAMES
         label_idx = probs.argmax(dim=1)
@@ -282,6 +301,16 @@ class SentimentPredictor:
         Returns:
             Dict with keys ``text``, ``tokens``, ``token_ids``, ``token_count``.
         """
+        if self.model_loaded and getattr(type(self.model), "NEEDS_TOKENIZE_STAGE", True) is False:
+            encoded = self.model.tokenizer(text, truncation=True, max_length=512)
+            tokens = self.model.tokenizer.convert_ids_to_tokens(encoded["input_ids"])
+            return {
+                "text": text,
+                "tokens": tokens,
+                "token_ids": encoded["input_ids"],
+                "token_count": len(encoded["input_ids"]),
+            }
+
         tokens = regex_tokenize(text)
         token_ids = text_sequencer(self.tokenizer.dictionary, tokens, self.tokenizer.cfg.max_len)
         return {
@@ -309,12 +338,26 @@ class SentimentPredictor:
         cfg_dict = dataclasses.asdict(cfg)
         param_count = sum(p.numel() for p in self.model.parameters()) if self.model_loaded else 0
 
+        max_seq_len = self.tokenizer.cfg.max_len
+        if hasattr(cfg, "max_seq_length"):
+            max_seq_len = cfg.max_seq_length
+
+        embedding_dim = EmbeddingsConfig.emb_length
+        if self.model_loaded:
+            inner = self.model.module if hasattr(self.model, "module") else self.model
+            if (
+                hasattr(inner, "backbone")
+                and hasattr(inner.backbone, "config")
+                and hasattr(inner.backbone.config, "hidden_size")
+            ):
+                embedding_dim = inner.backbone.config.hidden_size
+
         return {
             self.model_name: {
                 "architecture": config_entry["architecture"],
                 "device": self.device,
-                "max_sequence_length": self.tokenizer.cfg.max_len,
-                "embedding_dim": EmbeddingsConfig.emb_length,
+                "max_sequence_length": max_seq_len,
+                "embedding_dim": embedding_dim,
                 "parameters": param_count,
                 "status": "loaded" if self.model_loaded else "error",
                 **cfg_dict,
@@ -339,8 +382,6 @@ class SentimentPredictor:
 # Model config registry — metadata derived from config dataclasses
 # ---------------------------------------------------------------------------
 
-from sentimentizer.config import DecoderConfig, EncoderConfig, RNNConfig  # noqa: E402
-
 _MODEL_CONFIGS: dict[str, dict[str, Any]] = {
     "rnn": {
         "architecture": "Bidirectional LSTM",
@@ -353,5 +394,9 @@ _MODEL_CONFIGS: dict[str, dict[str, Any]] = {
     "decoder": {
         "architecture": "Encoder-Decoder Transformer (cross-attention)",
         "config_class": DecoderConfig,
+    },
+    "modernbert": {
+        "architecture": "ModernBERT Transformer",
+        "config_class": ModernBERTConfig,
     },
 }

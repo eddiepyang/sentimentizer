@@ -7,6 +7,7 @@ of torch, ray, gensim, or sentimentizer.config here.
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 from typing import Any
@@ -24,14 +25,14 @@ def _metrics_path(model_type: str) -> Path:
     return _METRICS_DIR / f"{model_type}_metrics.json"
 
 
-_ALL_MODEL_TYPES = ("rnn", "encoder", "decoder")
+_ALL_MODEL_TYPES = ("rnn", "encoder", "decoder", "modernbert")
 
 
-def _reset_stale_metrics(model_type: str) -> None:
+def _reset_stale_metrics(model_type: str, run_id: str = "") -> None:
     """Clear stale persisted metrics and reset Prometheus gauges.
 
     When a new training run starts for *model_type*, metrics from previous runs
-    are stale.  We zero out all three per-model JSON files (so the exporter can
+    are stale.  We zero out all per-model JSON files (so the exporter can
     clear stale gauge values) but only reset Prometheus gauges for the *current*
     model type.  Other model types' gauges are left untouched — the exporter
     will handle them when it reads their ``_reset: true`` JSON files and skips
@@ -68,6 +69,7 @@ def _reset_stale_metrics(model_type: str) -> None:
                 "neutral_avg_precision": None,
                 "epoch": 0,
                 "lr": 0.0,
+                "run_id": run_id if mt == model_type else "",
                 "_reset": True,
                 "_trace": {
                     "reset_by": model_type,
@@ -76,6 +78,12 @@ def _reset_stale_metrics(model_type: str) -> None:
             }
             path = _metrics_path(mt)
             path.write_text(json.dumps(zeroed_metrics, indent=2))
+
+            # Also remove stale batch snapshot files so the exporter
+            # doesn't serve intra-epoch data from a previous run.
+            batch_path = _METRICS_DIR / f"{mt}_batch.json"
+            with contextlib.suppress(OSError):
+                batch_path.unlink(missing_ok=True)
 
         logger.info(
             "stale_metrics_cleared",
@@ -88,9 +96,14 @@ def _reset_stale_metrics(model_type: str) -> None:
     # --- 2. prometheus_client gauges (zero current model type only) ---
     try:
         from sentimentizer.exporter import (
+            TRAINING_BATCH,
             TRAINING_EPOCH,
+            TRAINING_GRAD_NORM,
             TRAINING_LR,
+            TRAINING_THROUGHPUT,
             TRAINING_TRAIN_LOSS,
+            TRAINING_TRAIN_LOSS_AVG,
+            TRAINING_TRAIN_LOSS_EMA,
             TRAINING_VAL_ACCURACY,
             TRAINING_VAL_BALANCED_ACCURACY,
             TRAINING_VAL_COHEN_KAPPA,
@@ -114,7 +127,7 @@ def _reset_stale_metrics(model_type: str) -> None:
             TRAINING_VAL_WEIGHTED_F1,
         )
 
-        lbl = {"model_type": model_type}
+        lbl = {"model_type": model_type, "run_id": run_id}
         for gauge in (
             TRAINING_TRAIN_LOSS,
             TRAINING_VAL_LOSS,
@@ -138,6 +151,11 @@ def _reset_stale_metrics(model_type: str) -> None:
             TRAINING_VAL_PRED_NEUTRAL_FRAC,
             TRAINING_EPOCH,
             TRAINING_LR,
+            TRAINING_TRAIN_LOSS_EMA,
+            TRAINING_TRAIN_LOSS_AVG,
+            TRAINING_BATCH,
+            TRAINING_GRAD_NORM,
+            TRAINING_THROUGHPUT,
         ):
             gauge.labels(**lbl).set(0)
         TRAINING_VAL_NEUTRAL_AUC_ROC.labels(**lbl).set(0)
@@ -178,6 +196,8 @@ def run_train(
     push_to_hub: bool = False,
     pull_from_hub: bool = False,
     hf_repo: str | None = None,
+    run_id: str = "",
+    ray_update_every: int = -1,
 ) -> None:
     """Fit the model (single-node or distributed)."""
     from sentimentizer.device import resolve_device
@@ -189,10 +209,6 @@ def run_train(
         raise ValueError(f"include_neutral=False requires num_classes=2, got {num_classes}")
 
     device = resolve_device(state.device)
-
-    # Clear stale metrics from previous training runs for this model type
-    # so the dashboard doesn't show residual data from other model types.
-    _reset_stale_metrics(state.model)
 
     from sentimentizer.config import DriverConfig, default_epochs, weights_path_for
 
@@ -249,6 +265,8 @@ def run_train(
             save=save,
             push_to_hub=push_to_hub,
             hf_repo=hf_repo,
+            run_id=run_id,
+            ray_update_every=ray_update_every,
         )
     else:
         model = _load_model(state, device, freeze_embeddings=freeze_embeddings)
@@ -273,6 +291,8 @@ def run_train(
             save=save,
             push_to_hub=push_to_hub,
             hf_repo=hf_repo,
+            run_id=run_id,
+            ray_update_every=ray_update_every,
         )
 
 
@@ -297,6 +317,8 @@ def _run_fit_single(
     save: bool,
     push_to_hub: bool,
     hf_repo: str | None,
+    run_id: str = "",
+    ray_update_every: int = -1,
 ) -> None:
     """Single-node training using the existing Trainer class."""
     import torch
@@ -305,17 +327,31 @@ def _run_fit_single(
     from sentimentizer.loader import compute_class_weights, load_train_val_corpus_datasets
     from sentimentizer.trainer import new_trainer
 
-    train_dataset, val_dataset = load_train_val_corpus_datasets(
-        data_path=DriverConfig.files.processed_reviews_file_path,
-        balance_classes=balance_classes,
-        random_state=balance_seed,
-    )
+    if state.model == "modernbert":
+        from sentimentizer.hf_dataset import load_train_val_hf_datasets
+
+        train_dataset, val_dataset = load_train_val_hf_datasets(
+            data_path=DriverConfig.files.hf_processed_reviews_file_path,
+            balance_classes=balance_classes,
+            random_state=balance_seed,
+        )
+    else:
+        train_dataset, val_dataset = load_train_val_corpus_datasets(
+            data_path=DriverConfig.files.processed_reviews_file_path,
+            balance_classes=balance_classes,
+            random_state=balance_seed,
+        )
 
     # Auto-compute class_weights from training data if not explicitly set
     if class_weights is None:
         import pandas as pd
 
-        train_df = pd.read_parquet(DriverConfig.files.processed_reviews_file_path)
+        cw_path = (
+            DriverConfig.files.hf_processed_reviews_file_path
+            if state.model == "modernbert"
+            else DriverConfig.files.processed_reviews_file_path
+        )
+        train_df = pd.read_parquet(cw_path)
         class_weights_tensor = compute_class_weights(
             train_df, num_classes=num_classes, smoothing=weight_smoothing
         )
@@ -324,6 +360,7 @@ def _run_fit_single(
         class_weights_tensor = torch.tensor(class_weights, dtype=torch.float32)
 
     cfg = DriverConfig.trainer(
+        run_id=run_id,
         epochs=epochs,
         device=device,
         dataloader_workers=default_dataloader_workers(device),
@@ -333,7 +370,13 @@ def _run_fit_single(
         loss_type=loss_type,
         focal_gamma=focal_gamma,
         label_smoothing=label_smoothing,
+        ray_update_every=ray_update_every,
     )
+
+    # Clear stale metrics using the auto-generated run_id from TrainerConfig
+    # (if run_id was empty, __post_init__ generated one). This ensures the
+    # current run_id appears in the Grafana dashboard dropdown.
+    _reset_stale_metrics(state.model, cfg.run_id)
 
     trainer = new_trainer(
         model=model,
@@ -342,6 +385,9 @@ def _run_fit_single(
     )
 
     # Resume from checkpoint if requested
+    start_epoch = 1
+    best_val_loss = float("inf")
+    patience_counter = 0
     if resume:
         from sentimentizer.trainer import latest_checkpoint, load_checkpoint
 
@@ -352,18 +398,38 @@ def _run_fit_single(
             checkpoint = load_checkpoint(
                 ckpt_path, model, trainer.optimizer, trainer.scheduler, device=device
             )
+            ckpt_epoch = checkpoint.get("epoch", 0)
+            start_epoch = ckpt_epoch + 1
+            best_val_loss = checkpoint.get("best_val_loss", float("inf"))
+            if best_val_loss == float("inf") and "val_loss" in checkpoint:
+                best_val_loss = checkpoint["val_loss"]
+            patience_counter = checkpoint.get("patience_counter", 0)
             logger.info(
-                f"resumed from checkpoint: {ckpt_path}, epoch={checkpoint.get('epoch', '?')}"
+                f"resumed from checkpoint: {ckpt_path}, "
+                f"epoch={ckpt_epoch}, start_epoch={start_epoch}, "
+                f"best_val_loss={best_val_loss:.4f}, patience={patience_counter}"
             )
 
     try:
-        trainer.fit(model, train_data=train_dataset, val_data=val_dataset)
+        trainer.fit(
+            model,
+            train_data=train_dataset,
+            val_data=val_dataset,
+            start_epoch=start_epoch,
+            best_val_loss=best_val_loss,
+            patience_counter=patience_counter,
+        )
     finally:
         _cuda_cleanup()
 
     if save:
         weights_path = weights_path_for(state.model)
-        torch.save(model.state_dict(), weights_path)
+        inner = model.module if hasattr(model, "module") else model
+        if hasattr(inner, "save_to_checkpoint_dir"):
+            metadata = inner.save_to_checkpoint_dir(Path(weights_path).parent)
+            torch.save(metadata, weights_path)
+        else:
+            torch.save(model.state_dict(), weights_path)
         logger.info(f"model weights saved to: {weights_path}")
 
         if push_to_hub:
@@ -377,7 +443,14 @@ def _run_fit_single(
                 local_path=weights_path,
                 model_type=state.model,
                 repo_id=repo_id,
-                dict_path=DriverConfig.files.dictionary_file_path,
+                dict_path=(
+                    DriverConfig.files.dictionary_file_path if state.model != "modernbert" else None
+                ),
+                backbone_path=(
+                    str(Path(weights_path).parent / "backbone")
+                    if hasattr(inner, "save_to_checkpoint_dir")
+                    else None
+                ),
             )
 
 
@@ -402,6 +475,8 @@ def _run_fit_distributed(
     save: bool,
     push_to_hub: bool,
     hf_repo: str | None,
+    run_id: str = "",
+    ray_update_every: int = -1,
 ) -> None:
     """Distributed training using Ray Train TorchTrainer.
 
@@ -422,7 +497,12 @@ def _run_fit_distributed(
     if class_weights is None:
         import pandas as pd
 
-        full_df = pd.read_parquet(DriverConfig.files.processed_reviews_file_path)
+        cw_path = (
+            DriverConfig.files.hf_processed_reviews_file_path
+            if state.model == "modernbert"
+            else DriverConfig.files.processed_reviews_file_path
+        )
+        full_df = pd.read_parquet(cw_path)
         class_weights_tensor = compute_class_weights(
             full_df, num_classes=num_classes, smoothing=weight_smoothing
         )
@@ -430,13 +510,21 @@ def _run_fit_distributed(
     else:
         class_weights_tensor = torch.tensor(class_weights, dtype=torch.float32)
 
-    train_ds, val_ds = load_train_val_ray_datasets(
-        DriverConfig.files.processed_reviews_file_path,
-        balance_classes=balance_classes,
-        random_state=balance_seed,
-    )
+    if state.model == "modernbert":
+        train_ds, val_ds = load_train_val_ray_datasets(
+            DriverConfig.files.hf_processed_reviews_file_path,
+            balance_classes=balance_classes,
+            random_state=balance_seed,
+        )
+    else:
+        train_ds, val_ds = load_train_val_ray_datasets(
+            DriverConfig.files.processed_reviews_file_path,
+            balance_classes=balance_classes,
+            random_state=balance_seed,
+        )
 
     cfg = DriverConfig.trainer(
+        run_id=run_id,
         epochs=epochs,
         device=device,
         ray_workers=num_workers,
@@ -446,7 +534,13 @@ def _run_fit_distributed(
         loss_type=loss_type,
         focal_gamma=focal_gamma,
         label_smoothing=label_smoothing,
+        ray_update_every=ray_update_every,
     )
+
+    # Clear stale metrics using the auto-generated run_id from TrainerConfig
+    # (if run_id was empty, __post_init__ generated one). This ensures the
+    # current run_id appears in the Grafana dashboard dropdown.
+    _reset_stale_metrics(state.model, cfg.run_id)
 
     ray_trainer = new_ray_trainer(
         train_ds=train_ds,
@@ -473,6 +567,7 @@ def _run_fit_distributed(
 
     if save:
         import os
+        import shutil
 
         import ray.cloudpickle as pickle
 
@@ -480,8 +575,27 @@ def _run_fit_distributed(
         with result.checkpoint.as_directory() as checkpoint_dir_path:
             with open(os.path.join(checkpoint_dir_path, "data.pkl"), "rb") as fp:
                 checkpoint_data = pickle.load(fp)
+
+            # Check if there is a backbone subdirectory (HF model format)
+            backbone_src = Path(checkpoint_dir_path) / "backbone"
+            if backbone_src.exists():
+                backbone_dst = Path(weights_path).parent / "backbone"
+                if backbone_dst.exists():
+                    shutil.rmtree(backbone_dst)
+                shutil.copytree(backbone_src, backbone_dst)
+            elif state.model == "modernbert":
+                # HF models require a backbone directory — its absence means
+                # the Ray checkpoint is corrupt or incomplete. Raise immediately
+                # rather than saving a weights file that can't be loaded.
+                raise FileNotFoundError(
+                    f"Expected backbone/ directory inside Ray checkpoint at "
+                    f"{checkpoint_dir_path!r} for model_type={state.model!r}, "
+                    f"but it was not found. The checkpoint is likely corrupt. "
+                    f"Re-run training to produce a valid checkpoint."
+                )
+
             torch.save(
-                checkpoint_data["model_state_dict"],
+                checkpoint_data,
                 weights_path,
             )
         logger.info(f"model weights saved to: {weights_path}")
@@ -532,7 +646,7 @@ def _persist_metrics_to_file(metrics: dict, model_type: str) -> None:
     Each model type writes to its own file
     (``/tmp/sentimentizer_metrics/{model_type}_metrics.json``) so concurrent
     training processes never race on a shared JSON file.  The standalone
-    exporter discovers all three files and zeroes out Prometheus gauges for
+    exporter discovers all files and zeroes out Prometheus gauges for
     any model type whose file is missing or stale.
     """
     _METRICS_DIR.mkdir(parents=True, exist_ok=True)

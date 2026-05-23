@@ -1,5 +1,6 @@
 import math
 from pathlib import Path
+from typing import Any
 
 import torch
 from gensim import corpora
@@ -59,6 +60,8 @@ class Decoder(BaseSentimentModel):
         dropout: Dropout probability
         ff_multiplier: Feed-forward dim = d_model * ff_multiplier
     """
+
+    MODEL_TYPE: str = "decoder"
 
     def __init__(
         self,
@@ -147,16 +150,18 @@ class Decoder(BaseSentimentModel):
 
             self.embed_layer.weight.register_hook(freeze_glove_grads)
 
-    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+    def forward(self, input_ids: torch.Tensor, **kwargs: Any) -> torch.Tensor:
         """Forward pass producing raw logits.
 
         Args:
-            inputs: Token IDs of shape (batch, seq_len)
+            input_ids: Token IDs of shape (batch, seq_len)
                     Zero-padding is used to build the padding mask.
+            **kwargs: Ignored.
 
         Returns:
-            Logits of shape (batch,)
+            Logits of shape ``(batch, num_classes)``
         """
+        inputs = input_ids
         # Embed and project
         embeds = self.embed_layer(inputs)  # (B, seq_len, emb_dim)
         if self.verbose:

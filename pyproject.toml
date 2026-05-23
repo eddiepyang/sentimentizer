@@ -48,6 +48,10 @@ ray = [
     "ray[tune]>=2.55.1,<2.56.0",
     "optuna>=4.8.0",
 ]
+transformers = [
+    "transformers>=4.48.0",
+    "bitsandbytes>=0.45.0",
+]
 router = [
     "sentence-transformers>=4.0.0",
     "datasets",

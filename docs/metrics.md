@@ -133,66 +133,77 @@ Currently, AUC-ROC and average precision are tracked for the neutral class only 
 - **PR-AUC vs ROC-AUC for imbalance**: Saito & Rehmsmeier (2015), "The Precision-Recall Plot Is More Informative than the ROC Plot When Evaluating Binary Classifiers on Imbalanced Datasets," *PLOS One*. ([PMC](https://ncbi.nlm.nih.gov/pmc/articles/PMC4349800/))
 
 ## Metric Naming Convention
-
+ 
 ### `sentimentizer_training_*` (training metrics)
 Gauges are pre-initialized at module-import time in the standalone exporter (`exporter.py`) and appear in Prometheus with value `0` as soon as the exporter starts. Values are updated at each validation epoch and persisted to the JSON file when training completes.
+ 
+- `sentimentizer_training_train_loss{model_type, run_id}`
+- `sentimentizer_training_val_loss{model_type, run_id}`
+- `sentimentizer_training_val_accuracy{model_type, run_id}`
+- `sentimentizer_training_val_balanced_accuracy{model_type, run_id}`
+- `sentimentizer_training_val_negative_precision{model_type, run_id}`
+- `sentimentizer_training_val_negative_recall{model_type, run_id}`
+- `sentimentizer_training_val_negative_f1{model_type, run_id}`
+- `sentimentizer_training_val_neutral_precision{model_type, run_id}`
+- `sentimentizer_training_val_neutral_recall{model_type, run_id}`
+- `sentimentizer_training_val_neutral_f1{model_type, run_id}`
+- `sentimentizer_training_val_positive_precision{model_type, run_id}`
+- `sentimentizer_training_val_positive_recall{model_type, run_id}`
+- `sentimentizer_training_val_positive_f1{model_type, run_id}`
+- `sentimentizer_training_val_macro_f1{model_type, run_id}`
+- `sentimentizer_training_val_weighted_f1{model_type, run_id}`
+- `sentimentizer_training_val_cohen_kappa{model_type, run_id}`
+- `sentimentizer_training_val_mcc{model_type, run_id}`
+- `sentimentizer_training_val_neutral_auc_roc{model_type, run_id}`
+- `sentimentizer_training_val_neutral_avg_precision{model_type, run_id}`
+- `sentimentizer_training_val_neutral_to_positive_rate{model_type, run_id}`
+- `sentimentizer_training_val_neutral_to_negative_rate{model_type, run_id}`
+- `sentimentizer_training_val_pred_neutral_frac{model_type, run_id}`
+- `sentimentizer_training_epoch{model_type, run_id}`
+- `sentimentizer_training_lr{model_type, run_id}`
 
-- `sentimentizer_training_train_loss{model_type}`
-- `sentimentizer_training_val_loss{model_type}`
-- `sentimentizer_training_val_accuracy{model_type}`
-- `sentimentizer_training_val_balanced_accuracy{model_type}`
-- `sentimentizer_training_val_negative_precision{model_type}`
-- `sentimentizer_training_val_negative_recall{model_type}`
-- `sentimentizer_training_val_negative_f1{model_type}`
-- `sentimentizer_training_val_neutral_precision{model_type}`
-- `sentimentizer_training_val_neutral_recall{model_type}`
-- `sentimentizer_training_val_neutral_f1{model_type}`
-- `sentimentizer_training_val_positive_precision{model_type}`
-- `sentimentizer_training_val_positive_recall{model_type}`
-- `sentimentizer_training_val_positive_f1{model_type}`
-- `sentimentizer_training_val_macro_f1{model_type}`
-- `sentimentizer_training_val_weighted_f1{model_type}`
-- `sentimentizer_training_val_cohen_kappa{model_type}`
-- `sentimentizer_training_val_mcc{model_type}`
-- `sentimentizer_training_val_neutral_auc_roc{model_type}`
-- `sentimentizer_training_val_neutral_avg_precision{model_type}`
-- `sentimentizer_training_val_neutral_to_positive_rate{model_type}`
-- `sentimentizer_training_val_neutral_to_negative_rate{model_type}`
-- `sentimentizer_training_val_pred_neutral_frac{model_type}`
-- `sentimentizer_training_epoch{model_type}`
-- `sentimentizer_training_lr{model_type}`
+### Intra-Epoch Batch Metrics (Real-Time Dashboard)
 
-The `model_type` label is one of: `rnn`, `encoder`, `decoder`.
+During training, the dashboard displays near-real-time loss curves and throughput stats updated every N batches (10 for ModernBERT, 50 for RNN/Encoder/Decoder). These metrics are written to a lightweight snapshot file (`/tmp/sentimentizer_metrics/{model_type}_batch.json`) and parsed by the exporter:
 
+- `sentimentizer_training_train_loss_ema{model_type, run_id}` — Fast-moving exponential moving average (EMA) training loss
+- `sentimentizer_training_train_loss_avg{model_type, run_id}` — Slow-moving average training loss for the current epoch
+- `sentimentizer_training_batch{model_type, run_id}` — Current batch number within the epoch
+- `sentimentizer_training_grad_norm{model_type, run_id}` — Gradient norm before clipping
+- `sentimentizer_training_throughput{model_type, run_id}` — Samples processed per second
+
+The `model_type` label is one of: `rnn`, `encoder`, `decoder`, `modernbert`.
+The `run_id` label is a unique string identifying the specific training run (e.g., `run_20260523_003550_3626`).
+ 
 ### `ray_sentimentizer_live_*` (real-time distributed metrics)
 Set by Ray workers during distributed training. These are prefixed with `ray_` by Ray's metrics system and only exist while Ray is running. They mirror the `sentimentizer_training_*` names with the `ray_` prefix.
-
+ 
 Per-class Ray gauges (set from `_get_ray_gauges()` in `trainer.py`):
-
-- `ray_sentimentizer_live_train_loss{model_type}`
-- `ray_sentimentizer_live_val_loss{model_type}`
-- `ray_sentimentizer_live_val_accuracy{model_type}`
-- `ray_sentimentizer_live_val_balanced_accuracy{model_type}`
-- `ray_sentimentizer_live_val_negative_precision{model_type}`
-- `ray_sentimentizer_live_val_negative_recall{model_type}`
-- `ray_sentimentizer_live_val_negative_f1{model_type}`
-- `ray_sentimentizer_live_val_neutral_precision{model_type}`
-- `ray_sentimentizer_live_val_neutral_recall{model_type}`
-- `ray_sentimentizer_live_val_neutral_f1{model_type}`
-- `ray_sentimentizer_live_val_positive_precision{model_type}`
-- `ray_sentimentizer_live_val_positive_recall{model_type}`
-- `ray_sentimentizer_live_val_positive_f1{model_type}`
-- `ray_sentimentizer_live_val_macro_f1{model_type}`
-- `ray_sentimentizer_live_val_weighted_f1{model_type}`
-- `ray_sentimentizer_live_val_cohen_kappa{model_type}`
-- `ray_sentimentizer_live_val_mcc{model_type}`
-- `ray_sentimentizer_live_val_neutral_auc_roc{model_type}`
-- `ray_sentimentizer_live_val_neutral_avg_precision{model_type}`
-- `ray_sentimentizer_live_val_neutral_to_positive_rate{model_type}`
-- `ray_sentimentizer_live_val_neutral_to_negative_rate{model_type}`
-- `ray_sentimentizer_live_val_pred_neutral_frac{model_type}`
-- `ray_sentimentizer_live_epoch{model_type}`
-- `ray_sentimentizer_live_lr{model_type}`
+ 
+- `ray_sentimentizer_live_train_loss{model_type, run_id}`
+- `ray_sentimentizer_live_val_loss{model_type, run_id}`
+- `ray_sentimentizer_live_val_accuracy{model_type, run_id}`
+- `ray_sentimentizer_live_val_balanced_accuracy{model_type, run_id}`
+- `ray_sentimentizer_live_val_negative_precision{model_type, run_id}`
+- `ray_sentimentizer_live_val_negative_recall{model_type, run_id}`
+- `ray_sentimentizer_live_val_negative_f1{model_type, run_id}`
+- `ray_sentimentizer_live_val_neutral_precision{model_type, run_id}`
+- `ray_sentimentizer_live_val_neutral_recall{model_type, run_id}`
+- `ray_sentimentizer_live_val_neutral_f1{model_type, run_id}`
+- `ray_sentimentizer_live_val_positive_precision{model_type, run_id}`
+- `ray_sentimentizer_live_val_positive_recall{model_type, run_id}`
+- `ray_sentimentizer_live_val_positive_f1{model_type, run_id}`
+- `ray_sentimentizer_live_val_macro_f1{model_type, run_id}`
+- `ray_sentimentizer_live_val_weighted_f1{model_type, run_id}`
+- `ray_sentimentizer_live_val_cohen_kappa{model_type, run_id}`
+- `ray_sentimentizer_live_val_mcc{model_type, run_id}`
+- `ray_sentimentizer_live_val_neutral_auc_roc{model_type, run_id}`
+- `ray_sentimentizer_live_val_neutral_avg_precision{model_type, run_id}`
+- `ray_sentimentizer_live_val_neutral_to_positive_rate{model_type, run_id}`
+- `ray_sentimentizer_live_val_neutral_to_negative_rate{model_type, run_id}`
+- `ray_sentimentizer_live_val_pred_neutral_frac{model_type, run_id}`
+- `ray_sentimentizer_live_epoch{model_type, run_id}`
+- `ray_sentimentizer_live_lr{model_type, run_id}`
 
 ### `sentimentizer_tune_*` (tuning metrics)
 Emitted on port 8082 during Ray Tune hyperparameter tuning runs. These metrics are only available while `tune_model()` is actively running.
@@ -255,6 +266,27 @@ When training starts for a model type (e.g., `encoder`), any residual metrics fr
 3. Invalidates the `_RAY_GAUGES` cache entry for that `model_type`, forcing lazy re-creation in the current worker context.
 
 Other model types' entries in the JSON file are left untouched — they'll naturally be updated when those model types are trained next.
+
+## Run Isolation & Run ID Tracking
+
+To prevent metrics from successive or concurrent training runs from colliding and causing overlapping lines on the Grafana dashboard, the metrics pipeline uses **run isolation** via a unique `run_id`.
+
+### Generation and Propagation
+
+1. **Auto-Generation**: Each training run automatically generates a unique `run_id` at start with the format `run_YYYYMMDD_HHMMSS_xxxx` (where `xxxx` is a random 4-character suffix).
+2. **Explicit Specification**: Users can manually specify a custom run ID using the `--run-id` option on the CLI:
+   ```bash
+   uv run sentimentizer --model rnn train --run-id my_custom_experiment
+   ```
+3. **JSON Storage**: The generated or user-specified `run_id` is written into the per-model metrics files `/tmp/sentimentizer_metrics/{model_type}_metrics.json` and `{model_type}_batch.json`.
+4. **Prometheus Labels**: Both the standalone exporter gauges (`sentimentizer_training_*`) and the Ray distributed live gauges (`ray_sentimentizer_live_*`) include `run_id` as a label along with `model_type`.
+
+### Grafana Deduplication
+
+On the Grafana dashboard:
+1. A new template variable `$run_id` is automatically populated using `label_values(sentimentizer_training_train_loss, run_id)`.
+2. All panel queries are filtered by `run_id=~"$run_id"`. This isolates the dashboard view to only show the metrics of the selected training run, eliminating lines from past or concurrent runs.
+3. Legends for multi-model views are formatted as `{{model_type}} - {{run_id}}` to clearly distinguish different runs.
 
 ## How Training Metrics Flow
 

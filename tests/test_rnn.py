@@ -311,9 +311,7 @@ class TestNewRayTrainer:
             "lr": 0.005,
             "betas": [0.7, 0.99],
             "weight_decay": 1e-4,
-            "use_warmup": False,
-            "warmup_steps": 0,
-            "total_steps": 0,
+            "warmup_ratio": 0.06,
             "scheduler_eta_min": 1e-6,
             "model_type": "rnn",
             "dict_path": "/tmp/test.dict",
@@ -335,9 +333,7 @@ class TestNewRayTrainer:
             "lr",
             "betas",
             "weight_decay",
-            "use_warmup",
-            "warmup_steps",
-            "total_steps",
+            "warmup_ratio",
             "scheduler_eta_min",
             "model_type",
             "dict_path",
@@ -351,9 +347,7 @@ class TestNewRayTrainer:
             "lr": 0.005,
             "betas": [0.7, 0.99],
             "weight_decay": 1e-4,
-            "use_warmup": False,
-            "warmup_steps": 0,
-            "total_steps": 0,
+            "warmup_ratio": 0.06,
             "scheduler_eta_min": 1e-6,
             "model_type": "rnn",
             "dict_path": "/tmp/test.dict",
@@ -458,7 +452,11 @@ class TestSingleTrainer:
         model = RNN(emb_weights=emb_weights)
         cfg = TrainerConfig(device="cpu")
         trainer = new_trainer(model=model, cfg=cfg, model_type="rnn")
-        assert isinstance(trainer.loss_function, torch.nn.CrossEntropyLoss)
+        # Default loss_type is "focal", so the loss function is FocalCrossEntropyLoss
+        # (which wraps CrossEntropyLoss internally).
+        from sentimentizer.losses import FocalCrossEntropyLoss
+
+        assert isinstance(trainer.loss_function, FocalCrossEntropyLoss)
 
 
 # ──────────────────────────────────────────────
@@ -526,27 +524,32 @@ class TestMetricsGauges:
             "val_neutral_avg_precision": MagicMock(),
             "epoch": MagicMock(),
             "lr": MagicMock(),
+            "train_loss_ema": MagicMock(),
+            "train_loss_avg": MagicMock(),
+            "train_batch": MagicMock(),
+            "train_grad_norm": MagicMock(),
+            "train_throughput": MagicMock(),
         }
+
+        # Setup mock model — parameters() must return a fresh iterator each call
+        mock_model = MagicMock()
+        p = torch.nn.Parameter(torch.randn(1, 1))
+        mock_model.parameters.side_effect = lambda: iter([p])
+        mock_model.return_value = torch.randn(2, 3)
+        mock_model.state_dict.return_value = {}
+        mock_model.prepare_batch.return_value = (torch.randn(2, 2), torch.tensor([1, 1]))
 
         # 4. Mock dependencies to isolate _train_func
         with (
             patch("ray.train.get_dataset_shard", return_value=mock_shard),
             patch("ray.train.get_context") as mock_get_context,
             patch("ray.train.report"),
-            patch("sentimentizer.trainer.train_step", return_value=0.5),
+            patch("sentimentizer.trainer.train_step", return_value=(0.5, 0.0)),
             patch("sentimentizer.trainer._get_ray_gauges", return_value=mock_gauges),
-            patch("sentimentizer.models.rnn.new_model") as mock_new_model,
+            patch("sentimentizer.trainer.create_model_from_registry", return_value=mock_model),
             patch("sentimentizer.trainer.prepare_model", side_effect=lambda m: m),
             patch("sentimentizer.exporter.TRAINING_LR", create=True),
         ):
-            # Setup mock model — parameters() must return a fresh iterator each call
-            mock_model = MagicMock()
-            p = torch.nn.Parameter(torch.randn(1, 1))
-            mock_model.parameters.side_effect = lambda: iter([p])
-            mock_model.return_value = torch.randn(2, 3)
-            mock_model.state_dict.return_value = {}
-            mock_new_model.return_value = mock_model
-
             # Simulate worker rank 0 so metrics are recorded
             mock_get_context.return_value.get_world_rank.return_value = 0
 
@@ -603,6 +606,9 @@ class TestMetricsGauges:
             "val_neutral_avg_precision": MagicMock(),
             "epoch": MagicMock(),
             "lr": MagicMock(),
+            "train_loss_ema": MagicMock(),
+            "train_loss_avg": MagicMock(),
+            "train_batch": MagicMock(),
         }
 
         with (

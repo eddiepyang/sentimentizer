@@ -198,8 +198,8 @@ class CorpusDataset(Dataset):
     def __len__(self) -> int:
         return len(self._x_data)
 
-    def __getitem__(self, i: int) -> tuple[torch.Tensor, torch.Tensor]:
-        return self._x_data[i], self._y_data[i]
+    def __getitem__(self, i: int) -> dict[str, torch.Tensor]:
+        return {"input_ids": self._x_data[i], "target": self._y_data[i]}
 
 
 def _balance_dataframe(

@@ -4,7 +4,7 @@
 
 Sentimentizer offers three ways to tune hyperparameters, each at a different level of automation:
 
-| | **Standalone** | **Iterative Agent** | **Tuning Skill (Fixed Workflow)** |
+| | **Standalone** | **Iterative Agent** | **Tuning Workflow (Fixed Loop)** |
 |---|---|---|---|
 | **What it does** | Single Ray Tune + Optuna search | LangGraph-guided iterative search loop | High-level pipeline: tune → train → validate → retry |
 | **LLM involved** | ❌ No | ✅ GLM 5.1 via Ollama | ✅ (in agent mode) or ❌ (in standalone mode) |
@@ -49,7 +49,7 @@ Returns a dict with the best configuration and metrics from the single search:
 | `best_mcc` | Best Matthews correlation coefficient |
 | `trial_count` | Number of Ray Tune trials completed |
 
-When run via the Tuning Skill (`--tune --tune-mode standalone`), this is wrapped with model training, validation, and retry logic (see below).
+When run via the Tuning Workflow (`--tune --tune-mode standalone`), this is wrapped with model training, validation, and retry logic (see below).
 
 ## Iterative Agent Tuning
 
@@ -102,7 +102,7 @@ The result is always written to `best_config.json`:
 }
 ```
 
-> **Note:** Agent tuning (`--agent-tune`) only runs the LLM-guided search loop — it finds the best hyperparameters but does **not** train a final model or validate predictions. To get a trained, validated model, use the Tuning Skill below.
+> **Note:** Agent tuning (`--agent-tune`) only runs the LLM-guided search loop — it finds the best hyperparameters but does **not** train a final model or validate predictions. To get a trained, validated model, use the Tuning Workflow below.
 
 ### Usage
 
@@ -117,9 +117,9 @@ python workflows/driver.py --model encoder --agent-tune --save
 python workflows/driver.py --model encoder --agent-tune --agent-config path/to/custom.yaml --save
 ```
 
-## Tuning Skill Pipeline
+## Tuning Workflow Pipeline
 
-The **Tuning Skill** (`TuningRun` in [`sentimentizer/agent/skill.py`](../sentimentizer/agent/skill.py)) is the highest-level tuning interface. It wraps either agent-guided or standalone tuning with additional post-tuning steps:
+The **Tuning Workflow** (`TuningRun` in [`sentimentizer/agent/diagnose_model.py`](../sentimentizer/agent/diagnose_model.py)) is the highest-level tuning interface. It wraps either agent-guided or standalone tuning with additional post-tuning steps:
 
 1. **Tune** — Runs agent-guided (`mode="agent"`) or standalone (`mode="standalone"`) hyperparameter search
 2. **Train** — Trains a final model using the best configuration found (2× default epochs for better convergence)
@@ -128,7 +128,7 @@ The **Tuning Skill** (`TuningRun` in [`sentimentizer/agent/skill.py`](../sentime
 
 ```
 ┌──────────────────────────────────────────────────┐
-│                Tuning Skill                       │
+│              Tuning Workflow                     │
 │                                                   │
 │  ┌─────────┐    ┌─────────┐    ┌──────────────┐  │
 │  │  Tune    │───▶│  Train  │───▶│  Validate    │  │
@@ -144,7 +144,7 @@ The **Tuning Skill** (`TuningRun` in [`sentimentizer/agent/skill.py`](../sentime
 
 ### Output
 
-Returns a [`TuningRunResult`](../sentimentizer/agent/skill.py) with:
+Returns a [`TuningRunResult`](../sentimentizer/agent/diagnose_model.py) with:
 
 | Field | Description |
 |-------|-------------|
@@ -195,10 +195,10 @@ make tune-no-validate
 Via CLI:
 
 ```bash
-# Agent-guided skill (default)
+# Agent-guided tuning (default)
 python workflows/driver.py --model rnn --tune --save
 
-# Standalone skill (no LLM)
+# Standalone tuning (no LLM)
 python workflows/driver.py --model rnn --tune --tune-mode standalone --save
 
 # Customize trials, iterations, and validation
@@ -215,7 +215,7 @@ python workflows/driver.py --model rnn --tune --no-validate --save
 Programmatic API:
 
 ```python
-from sentimentizer.agent.skill import TuningRun, TuningRunConfig
+from sentimentizer.agent.diagnose_model import TuningRun, TuningRunConfig
 
 # Agent-guided tuning with validation (recommended)
 config = TuningRunConfig(model_type="rnn", mode="agent")
@@ -228,7 +228,7 @@ config = TuningRunConfig(model_type="encoder", mode="standalone")
 result = TuningRun(config).execute()
 
 # Quick convenience function
-from sentimentizer.agent.skill import create_tuning_run
+from sentimentizer.agent.diagnose_model import create_tuning_run
 result = create_tuning_run(model_type="rnn", mode="agent")
 ```
 

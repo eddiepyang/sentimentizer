@@ -30,7 +30,7 @@ Stage-specific flags attach to their command (full inventory in the appendix).
 
 `torch`, `ray`, and `gensim` move out of the module top and into the command bodies that use them. `--help` and per-subcommand `--help` render without importing the ML stack.
 
-**`diagnose` is a group, not a single command.** `diagnose_training_issues` from `sentimentizer.agent.skill` transitively imports torch, so we split:
+**`diagnose` is a group, not a single command.** `diagnose_training_issues` from `sentimentizer.agent.diagnose_model` transitively imports torch, so we split:
 
 - `diagnose env` — fast: prints CUDA / Ray / Python versions, validates env vars and paths. No torch / ray imports.
 - `diagnose pipeline` — heavy: runs the existing `diagnose_training_issues` checks (dictionary alignment, embedding shape, class balance, token-id range).
@@ -317,7 +317,7 @@ def train(ctx, resume, **kwargs):
 def tune(ctx, mode, **kwargs):
     """Hyperparameter tuning (LLM-guided agent or standalone Ray Tune run).
 
-    Replaces both `--tune` (TuningRun skill) and `--agent-tune`. The legacy
+    Replaces both `--tune` (TuningRun workflow) and `--agent-tune`. The legacy
     `--agent-tune` path that called run_agent_tuning directly is removed;
     `tune --mode agent` covers it via TuningRun.
     """
