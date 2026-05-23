@@ -257,10 +257,13 @@ def get_trained_model(model_type: str, device: str) -> nn.Module:
 
     # Try local file first; if missing, download from Hugging Face Hub
     if not Path(weights_path).exists():
-        from sentimentizer.hf import download_weights
+        from sentimentizer.hf import _HF_MODEL_TYPES, download_weights
 
+        is_hf_model = model_type in _HF_MODEL_TYPES
         downloaded = download_weights(
-            model_type, weights_path, dict_path=DriverConfig.files.dictionary_file_path
+            model_type,
+            weights_path,
+            dict_path=None if is_hf_model else DriverConfig.files.dictionary_file_path,
         )
         if downloaded is None:
             raise FileNotFoundError(

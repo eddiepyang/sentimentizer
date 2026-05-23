@@ -35,7 +35,59 @@ _MODEL_DESCRIPTIONS: dict[str, str] = {
         "and the decoder attends to the encoder outputs to produce a sentiment "
         "prediction."
     ),
+    "modernbert": (
+        "A ModernBERT-base model fine-tuned for 3-class sentiment classification "
+        "(negative, neutral, positive). The backbone uses mean pooling over "
+        "non-padding tokens followed by a two-layer classifier head with GELU "
+        "activation. Supports 8-bit AdamW optimization and layer-wise unfreezing."
+    ),
 }
+
+_HF_MODEL_TYPES = {"modernbert"}
+
+_BACKBONE_FILENAMES = [
+    "config.json",
+    "model.safetensors",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "special_tokens_map.json",
+    "vocab.txt",
+    "tokenizer.model",
+]
+
+
+def _download_backbone_dir(repo_id: str, local_backbone_dir: Path, model_type: str) -> None:
+    """Download the backbone directory from the Hugging Face Hub.
+
+    Downloads all known HuggingFace backbone files (``backbone/*``) to
+    *local_backbone_dir*.  Missing files are skipped silently since not
+    every model ships every file.
+
+    Args:
+        repo_id: Hugging Face repository ID.
+        local_backbone_dir: Local directory to write backbone files into.
+        model_type: Model type string (for log messages).
+    """
+    local_backbone_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Downloading backbone directory from {repo_id}/backbone/ ...")
+
+    for filename in _BACKBONE_FILENAMES:
+        remote_path = f"backbone/{filename}"
+        try:
+            downloaded = hf_hub_download(
+                repo_id=repo_id,
+                filename=remote_path,
+            )
+            import shutil
+
+            shutil.copy2(downloaded, local_backbone_dir / filename)
+            logger.info(f"  Downloaded {filename} -> {local_backbone_dir / filename}")
+        except EntryNotFoundError:
+            logger.debug(f"  Skipped {filename} (not found in repo)")
+        except Exception as e:
+            logger.warning(f"  Failed to download {filename}: {e}")
+
+    logger.info(f"Backbone directory downloaded to {local_backbone_dir}")
 
 
 def create_model_card(
@@ -64,6 +116,7 @@ def create_model_card(
         valid_types = ", ".join(_MODEL_DESCRIPTIONS.keys())
         raise ValueError(f"Unknown model type: {model_type!r}. Must be one of: {valid_types}")
 
+    is_hf_model = model_type in _HF_MODEL_TYPES
     description = _MODEL_DESCRIPTIONS[model_type]
     repo_id = HF_WEIGHTS_REPOS.get(model_type, f"ryeyoo/sentimentizer-{model_type}")
 
@@ -86,13 +139,21 @@ def create_model_card(
     desc_section = f"\n## Description\n\n{description}\n"
 
     # ── Training data ──
-    training_section = (
-        "\n## Training Data\n\n"
-        "Trained on the [Yelp Open Dataset](https://www.yelp.com/dataset) reviews, "
-        "with GloVe Wiki-Gigaword-100 pre-trained embeddings. Reviews are tokenized "
-        "with a custom dictionary (20k vocab, min frequency 3) and padded/truncated "
-        "to 200 tokens.\n"
-    )
+    if is_hf_model:
+        training_section = (
+            "\n## Training Data\n\n"
+            "Trained on the [Yelp Open Dataset](https://www.yelp.com/dataset) reviews "
+            "with 3-class labels (negative/neutral/positive). The ModernBERT tokenizer "
+            "handles subword tokenization natively—no custom dictionary is needed.\n"
+        )
+    else:
+        training_section = (
+            "\n## Training Data\n\n"
+            "Trained on the [Yelp Open Dataset](https://www.yelp.com/dataset) reviews, "
+            "with GloVe Wiki-Gigaword-100 pre-trained embeddings. Reviews are tokenized "
+            "with a custom dictionary (20k vocab, min frequency 3) and padded/truncated "
+            "to 200 tokens.\n"
+        )
 
     # ── Metrics section (from tuning result) ──
     metrics_section = ""
@@ -103,11 +164,20 @@ def create_model_card(
     usage_section = _format_usage_section(model_type, repo_id)
 
     # ── Files section ──
-    files_section = (
-        "\n## Files\n\n"
-        f"- `{model_type}_weights.pth` — Model state dictionary\n"
-        "- `yelp.dictionary` — Gensim dictionary for tokenization\n"
-    )
+    if is_hf_model:
+        files_section = (
+            "\n## Files\n\n"
+            f"- `{model_type}_weights.pth` — Classifier head weights and config metadata\n"
+            "- `backbone/` — Hugging Face transformer backbone (safetensors + config)\n"
+            "- `backbone/tokenizer.json` — Full tokenizer data\n"
+            "- `backbone/tokenizer_config.json` — Tokenizer configuration\n"
+        )
+    else:
+        files_section = (
+            "\n## Files\n\n"
+            f"- `{model_type}_weights.pth` — Model state dictionary\n"
+            "- `yelp.dictionary` — Gensim dictionary for tokenization\n"
+        )
 
     # ── Combine ──
     return (
@@ -238,6 +308,32 @@ def _upload_model_card(
 
 def _format_usage_section(model_type: str, repo_id: str) -> str:
     """Format usage instructions for the model card."""
+    is_hf_model = model_type in _HF_MODEL_TYPES
+
+    if is_hf_model:
+        return (
+            "\n## Usage\n\n"
+            "```python\n"
+            "from sentimentizer.hf import download_weights\n"
+            "from sentimentizer.config import weights_path_for\n\n"
+            f"# Download classifier head + backbone from Hugging Face Hub\n"
+            f'weights_path = weights_path_for("{model_type}")\n'
+            f"download_weights(\n"
+            f'    "{model_type}",\n'
+            f"    weights_path,\n"
+            f'    repo_id="{repo_id}",\n'
+            f")\n\n"
+            f"# Load and run inference\n"
+            f"from sentimentizer.models.{model_type} import new_modernbert_model\n"
+            f"from sentimentizer.predictor import SentimentPredictor\n\n"
+            f"model = new_modernbert_model()\n"
+            f"predictor = SentimentPredictor(model)\n\n"
+            f"result = predictor.predict('amazing food great service')\n"
+            f"print(result)\n"
+            f"# e.g. {{'label': 'positive', 'score': 0.83, ...}}\n"
+            "```\n"
+        )
+
     return (
         "\n## Usage\n\n"
         "```python\n"
@@ -264,27 +360,65 @@ def _format_usage_section(model_type: str, repo_id: str) -> str:
     )
 
 
+def _upload_backbone_dir(api: HfApi, backbone_dir: Path, repo_id: str, model_type: str) -> None:
+    """Upload the HuggingFace backbone directory to the Hub.
+
+    Uploads all files in *backbone_dir* under the ``backbone/`` prefix in the
+    repository.  This includes ``model.safetensors``, ``config.json``, and
+    tokenizer files.
+
+    Args:
+        api: HfApi instance for uploading.
+        backbone_dir: Local path to the backbone directory (must exist).
+        repo_id: Hugging Face repository ID.
+        model_type: Model type string (for commit messages).
+    """
+    if not backbone_dir.is_dir():
+        logger.error(f"Backbone directory not found: {backbone_dir}")
+        return
+
+    logger.info(f"Pushing backbone directory to Hugging Face Hub: {repo_id}/backbone/...")
+    for file_path in sorted(backbone_dir.iterdir()):
+        if file_path.is_file():
+            path_in_repo = f"backbone/{file_path.name}"
+            logger.info(f"  Uploading {file_path.name} -> {repo_id}/{path_in_repo}")
+            api.upload_file(
+                path_or_fileobj=str(file_path),
+                path_in_repo=path_in_repo,
+                repo_id=repo_id,
+                commit_message=f"Update {model_type} backbone: {file_path.name}",
+            )
+    logger.info(f"Successfully pushed backbone directory to {repo_id}/backbone/")
+
+
 def push_model_to_hub(
     local_path: str | Path,
     model_type: str,
     repo_id: str | None = None,
     dict_path: str | Path | None = None,
     tuning_result: dict[str, Any] | None = None,
+    backbone_path: str | Path | None = None,
 ) -> None:
     """Upload model weights, dictionary, and model card to the Hugging Face Hub.
 
     If *repo_id* is provided, it uploads to that repository.
     Otherwise, it looks up the per-model repository from ``HF_WEIGHTS_REPOS``.
 
+    For Hugging Face transformer models (e.g. ModernBERT), also uploads the
+    ``backbone/`` directory containing the pre-trained weights and tokenizer.
+
     When *tuning_result* is provided, a model card (README.md) is generated
     with the tuning metrics and uploaded alongside the weights.
 
     Args:
         local_path: Path to the local .pth weight file.
-        model_type: Model type ('rnn', 'encoder', or 'decoder') used for the filename.
+        model_type: Model type ('rnn', 'encoder', 'decoder', or 'modernbert').
         repo_id: Optional Hugging Face repository ID.
         dict_path: Optional path to the dictionary file to also upload.
         tuning_result: Optional dict with tuning metrics to include in the model card.
+        backbone_path: Optional path to the backbone directory (for HF models).
+            If not provided and the model type is an HF model, defaults to
+            ``<local_path_parent>/backbone/``.
     """
     if repo_id is None:
         repo_id = HF_WEIGHTS_REPOS.get(model_type)
@@ -298,6 +432,7 @@ def push_model_to_hub(
         logger.error(f"Local weight file not found: {path}")
         return
 
+    is_hf_model = model_type in _HF_MODEL_TYPES
     filename = f"{model_type}_weights.pth"
     api = HfApi()
 
@@ -310,6 +445,10 @@ def push_model_to_hub(
             commit_message=f"Update {model_type} weights",
         )
         logger.info(f"Successfully pushed weights to {repo_id}/{filename}")
+
+        if is_hf_model:
+            bdir = Path(backbone_path) if backbone_path is not None else path.parent / "backbone"
+            _upload_backbone_dir(api, bdir, repo_id, model_type)
 
         if dict_path is not None:
             dict_file = Path(dict_path)
@@ -343,6 +482,14 @@ def push_model_to_hub(
                 )
                 logger.info(f"Successfully created repo and pushed weights to {repo_id}/{filename}")
 
+                if is_hf_model:
+                    bdir = (
+                        Path(backbone_path)
+                        if backbone_path is not None
+                        else path.parent / "backbone"
+                    )
+                    _upload_backbone_dir(api, bdir, repo_id, model_type)
+
                 if dict_path is not None:
                     dict_file = Path(dict_path)
                     if dict_file.exists():
@@ -373,9 +520,12 @@ def pull_model_from_hub(
 ) -> bool:
     """Download model weights and optionally the dictionary from the Hugging Face Hub.
 
+    For Hugging Face transformer models (e.g. ModernBERT), also downloads the
+    ``backbone/`` directory containing pre-trained weights and tokenizer files.
+
     Args:
         repo_id: Hugging Face repository ID (e.g., 'username/repo').
-        model_type: Model type ('rnn', 'encoder', or 'decoder') used for the filename.
+        model_type: Model type ('rnn', 'encoder', 'decoder', or 'modernbert').
         local_path: Local path where the weights should be saved.
         dict_path: Optional local path where the dictionary should be saved.
 
@@ -384,6 +534,7 @@ def pull_model_from_hub(
     """
     filename = f"{model_type}_weights.pth"
     local_path = Path(local_path)
+    is_hf_model = model_type in _HF_MODEL_TYPES
 
     logger.info(f"Pulling {filename} from Hugging Face Hub: {repo_id}...")
     try:
@@ -401,6 +552,10 @@ def pull_model_from_hub(
         shutil.copy(downloaded_path, local_path)
 
         logger.info(f"Successfully pulled weights to {local_path}")
+
+        if is_hf_model:
+            backbone_dir = local_path.parent / "backbone"
+            _download_backbone_dir(repo_id, backbone_dir, model_type)
 
         if dict_path is not None:
             dict_file = Path(dict_path)
@@ -440,8 +595,11 @@ def download_weights(
     If *repo_id* is provided, it downloads from that repository.
     Otherwise, it looks up the per-model repository from ``HF_WEIGHTS_REPOS``.
 
+    For Hugging Face transformer models (e.g. ModernBERT), also downloads the
+    ``backbone/`` directory containing pre-trained weights and tokenizer files.
+
     Args:
-        model_type: One of 'rnn', 'encoder', or 'decoder'.
+        model_type: One of 'rnn', 'encoder', 'decoder', or 'modernbert'.
         local_path: Destination path on the local filesystem.
         repo_id: Optional Hugging Face repository ID.
         dict_path: Optional destination path for the dictionary on the local filesystem.
@@ -459,6 +617,7 @@ def download_weights(
 
     local_path = Path(local_path)
     filename = f"{model_type}_weights.pth"
+    is_hf_model = model_type in _HF_MODEL_TYPES
 
     logger.info(f"Downloading {filename} from {repo_id} ...")
     try:
@@ -475,6 +634,10 @@ def download_weights(
 
         shutil.copy2(downloaded_path, local_path)
         logger.info(f"Weights downloaded to {local_path}")
+
+        if is_hf_model:
+            backbone_dir = local_path.parent / "backbone"
+            _download_backbone_dir(repo_id, backbone_dir, model_type)
 
         if dict_path is not None:
             dict_file = Path(dict_path)

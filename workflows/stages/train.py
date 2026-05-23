@@ -443,7 +443,14 @@ def _run_fit_single(
                 local_path=weights_path,
                 model_type=state.model,
                 repo_id=repo_id,
-                dict_path=DriverConfig.files.dictionary_file_path,
+                dict_path=(
+                    DriverConfig.files.dictionary_file_path if state.model != "modernbert" else None
+                ),
+                backbone_path=(
+                    str(Path(weights_path).parent / "backbone")
+                    if hasattr(inner, "save_to_checkpoint_dir")
+                    else None
+                ),
             )
 
 
