@@ -127,6 +127,43 @@ class TestSaveLoadCheckpoint:
 
         assert checkpoint["val_loss"] == pytest.approx(0.456)
 
+    def test_save_with_best_val_loss_and_patience(
+        self, model: SimpleModel, optimizer: torch.optim.Adam, checkpoint_dir: str
+    ) -> None:
+        """Saving with best_val_loss and patience_counter should round-trip."""
+        path = os.path.join(checkpoint_dir, "test_ckpt_resume.pth")
+        save_checkpoint(
+            model,
+            optimizer,
+            epoch=5,
+            path=path,
+            scheduler=None,
+            val_loss=0.321,
+            best_val_loss=0.290,
+            patience_counter=2,
+        )
+
+        new_model = SimpleModel()
+        checkpoint = load_checkpoint(path, new_model, device="cpu")
+
+        assert checkpoint["epoch"] == 5
+        assert checkpoint["val_loss"] == pytest.approx(0.321)
+        assert checkpoint["best_val_loss"] == pytest.approx(0.290)
+        assert checkpoint["patience_counter"] == 2
+
+    def test_missing_best_val_loss_defaults_to_inf(
+        self, model: SimpleModel, optimizer: torch.optim.Adam, checkpoint_dir: str
+    ) -> None:
+        """Old checkpoints without best_val_loss should not have the key."""
+        path = os.path.join(checkpoint_dir, "test_ckpt_old.pth")
+        save_checkpoint(model, optimizer, epoch=3, path=path)
+
+        new_model = SimpleModel()
+        checkpoint = load_checkpoint(path, new_model, device="cpu")
+
+        assert "best_val_loss" not in checkpoint
+        assert "patience_counter" not in checkpoint
+
     def test_save_creates_directory(
         self, model: SimpleModel, optimizer: torch.optim.Adam, checkpoint_dir: str
     ) -> None:

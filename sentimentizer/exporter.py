@@ -683,6 +683,12 @@ def _update_training_metrics() -> None:
             # The epoch-end JSON no longer contains batch_metrics — the snapshot file
             # is the sole source for intra-epoch gauges to avoid duplicate data points
             # on the Grafana dashboard.
+            # Skip batch gauges for reset/stale model types — they have no live data,
+            # and creating zero-valued label series pollutes the dashboard with
+            # duplicate "emitter" lines under an empty run_id.
+            if data.get("_reset"):
+                continue
+
             batch_snapshot_path = _METRICS_DIR / f"{model_type}_batch.json"
             if batch_snapshot_path.exists():
                 try:
@@ -708,23 +714,16 @@ def _update_training_metrics() -> None:
                         if "lr" in batch_data:
                             TRAINING_LR.labels(**batch_lbl).set(float(batch_data["lr"]))
                     else:
-                        TRAINING_TRAIN_LOSS_EMA.labels(**lbl).set(0)
-                        TRAINING_TRAIN_LOSS_AVG.labels(**lbl).set(0)
-                        TRAINING_BATCH.labels(**lbl).set(0)
-                        TRAINING_GRAD_NORM.labels(**lbl).set(0)
-                        TRAINING_THROUGHPUT.labels(**lbl).set(0)
+                        # Batch snapshot has _reset flag or is not a dict — skip
+                        pass
                 except (json.JSONDecodeError, ValueError):
-                    TRAINING_TRAIN_LOSS_EMA.labels(**lbl).set(0)
-                    TRAINING_TRAIN_LOSS_AVG.labels(**lbl).set(0)
-                    TRAINING_BATCH.labels(**lbl).set(0)
-                    TRAINING_GRAD_NORM.labels(**lbl).set(0)
-                    TRAINING_THROUGHPUT.labels(**lbl).set(0)
-            else:
-                TRAINING_TRAIN_LOSS_EMA.labels(**lbl).set(0)
-                TRAINING_TRAIN_LOSS_AVG.labels(**lbl).set(0)
-                TRAINING_BATCH.labels(**lbl).set(0)
-                TRAINING_GRAD_NORM.labels(**lbl).set(0)
-                TRAINING_THROUGHPUT.labels(**lbl).set(0)
+                    # Corrupt batch snapshot — skip rather than emit zero-valued
+                    # series that would duplicate live metrics on the dashboard.
+                    pass
+            # No batch snapshot file for this model type — the epoch-level
+            # gauges (set above) are sufficient.  Do not create zero-valued
+            # batch gauge series with a stale run_id, as they produce
+            # duplicate "emitter" lines on the Grafana dashboard.
     except Exception as e:
         logger.warning("Error updating training metrics from file: %s", e)
 

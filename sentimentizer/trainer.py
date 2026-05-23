@@ -394,11 +394,14 @@ class CheckpointCallback(TrainingCallback):
         checkpoint_dir: str | Path | None,
         checkpoint_every: int,
         checkpoint_best: bool,
+        best_val_loss: float = float("inf"),
+        patience_counter: int = 0,
     ) -> None:
         self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
         self.checkpoint_every = checkpoint_every
         self.checkpoint_best = checkpoint_best
-        self._best_val_loss = float("inf")
+        self._best_val_loss = best_val_loss
+        self.patience_counter = patience_counter
 
     def on_epoch_end(self, result: EpochResult, state: TrainingState) -> bool:
         if self.checkpoint_dir is None:
@@ -1047,6 +1050,9 @@ class Trainer:
         model: torch.nn.Module,
         train_data: torch.utils.data.Dataset,
         val_data: torch.utils.data.Dataset,
+        start_epoch: int = 1,
+        best_val_loss: float = float("inf"),
+        patience_counter: int = 0,
     ) -> None:
         train_loader, val_loader = _new_loaders(train_data, val_data, self.cfg)
         model.to(self.cfg.device)
@@ -1057,11 +1063,41 @@ class Trainer:
         if epochs == -1:
             epochs = default_epochs(self.model_type)
 
+        is_resuming = start_epoch > 1
+
         # For per-batch-stepping models (e.g. HF transformers), rebuild the
         # scheduler now that we know the DataLoader length. The placeholder
         # built in _create_training_components used epoch-based counts; here
         # we compute real optimizer-step counts and re-initialize the schedule.
-        if self.scheduler is not None and getattr(type(model), "STEP_SCHEDULER_PER_BATCH", False):
+        # On resume, the scheduler was restored from checkpoint with the correct
+        # step count, so we skip the rebuild — unless the checkpoint had no
+        # scheduler state (old-format checkpoint), in which case we must rebuild
+        # and fast-forward past the already-completed epochs.
+        step_per_batch = getattr(type(model), "STEP_SCHEDULER_PER_BATCH", False)
+        scheduler_needs_rebuild = step_per_batch and self.scheduler is not None
+        completed_steps = 0
+        if is_resuming:
+            # If the checkpoint had scheduler state, load_checkpoint already
+            # restored it — no rebuild needed.  Otherwise, rebuild and
+            # fast-forward to approximate where training left off.
+            has_scheduler_state = (
+                hasattr(self.scheduler, "last_epoch") and self.scheduler.last_epoch > 0
+            )
+            if not has_scheduler_state:
+                scheduler_needs_rebuild = True
+                # Approximate the number of optimizer steps already completed
+                # so we can fast-forward the rebuilt scheduler.
+                steps_per_epoch_est = len(train_loader)
+                grad_accum = max(1, self.cfg.gradient_accumulation_steps)
+                completed_steps = (start_epoch - 1) * max(1, steps_per_epoch_est // grad_accum)
+                logger.warning(
+                    f"[{self.model_type}] checkpoint had no scheduler state, "
+                    f"rebuilding scheduler and fast-forwarding {completed_steps} steps "
+                    f"(LR may not match original schedule exactly)"
+                )
+            else:
+                scheduler_needs_rebuild = False
+        if scheduler_needs_rebuild:
             sched_params = _get_sched_params(self.model_type)
             steps_per_epoch = len(train_loader)
             grad_accum = max(1, self.cfg.gradient_accumulation_steps)
@@ -1074,10 +1110,37 @@ class Trainer:
                 total_steps=total_steps,
                 eta_min=sched_params.eta_min,
             )
+            # Fast-forward past already-completed epochs so the LR is
+            # approximately where it would have been at this point.
+            if completed_steps > 0:
+                for _ in range(completed_steps):
+                    self.scheduler.step()
             logger.info(
                 f"[{self.model_type}] per-step scheduler: "
                 f"total_steps={total_steps}, warmup_steps={warmup_steps}"
             )
+
+        if is_resuming:
+            # For per-epoch schedulers (RNN/Encoder/Decoder), fast-forward
+            # past already-completed epochs so the LR is correct.
+            if (
+                self.scheduler is not None
+                and not step_per_batch
+                and hasattr(self.scheduler, "last_epoch")
+                and self.scheduler.last_epoch < (start_epoch - 1)
+            ):
+                logger.info(
+                    f"[{self.model_type}] fast-forwarding per-epoch scheduler "
+                    f"from step {self.scheduler.last_epoch} to step {start_epoch - 1}"
+                )
+                for _ in range(start_epoch - 1 - self.scheduler.last_epoch):
+                    self.scheduler.step()
+            logger.info(f"[{self.model_type}] resuming from epoch {start_epoch}")
+
+            # Emit validation metrics from the checkpoint so the dashboard
+            # shows something immediately instead of waiting for the first
+            # resumed epoch to complete.
+            self.evaluate(model, val_loader, start_epoch - 1)
 
         logger.info(
             f"[{self.model_type}] fitting model...",
@@ -1087,8 +1150,6 @@ class Trainer:
             f"epochs={epochs}, device={self.cfg.device}"
         )
 
-        best_val_loss = float("inf")
-        patience_counter = 0
         checkpoint_dir = self.cfg.checkpoint_dir
         checkpoint_every = self.cfg.checkpoint_every
         checkpoint_best = self.cfg.checkpoint_best
@@ -1098,7 +1159,7 @@ class Trainer:
             Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
 
         try:
-            for epoch in range(1, epochs + 1):
+            for epoch in range(start_epoch, epochs + 1):
                 self._train_epoch(model, train_loader, epoch)
                 self.evaluate(model, val_loader, epoch)
 
@@ -1119,34 +1180,57 @@ class Trainer:
                         model, self.optimizer, self.scheduler
                     )
 
+                # Update best_val_loss and patience before checkpointing
+                improved = self.val_loss < best_val_loss
+                if improved:
+                    best_val_loss = self.val_loss
+                    patience_counter = 0
+                else:
+                    patience_counter += 1
+
                 # Save periodic checkpoint
                 if checkpoint_dir and checkpoint_every > 0 and epoch % checkpoint_every == 0:
                     ckpt_path = Path(checkpoint_dir) / f"checkpoint_epoch_{epoch}.pth"
-                    save_checkpoint(model, self.optimizer, epoch, ckpt_path)
+                    save_checkpoint(
+                        model,
+                        self.optimizer,
+                        epoch,
+                        ckpt_path,
+                        scheduler=self.scheduler,
+                        val_loss=self.val_loss,
+                        best_val_loss=best_val_loss,
+                        patience_counter=patience_counter,
+                    )
                     logger.info(f"[{self.model_type}] saved checkpoint: {ckpt_path}")
 
                 # Save best model checkpoint
-                if checkpoint_dir and checkpoint_best and self.val_loss < best_val_loss:
+                if checkpoint_dir and checkpoint_best and improved:
                     best_path = Path(checkpoint_dir) / "best_model.pth"
-                    save_checkpoint(model, self.optimizer, epoch, best_path)
+                    save_checkpoint(
+                        model,
+                        self.optimizer,
+                        epoch,
+                        best_path,
+                        scheduler=self.scheduler,
+                        val_loss=self.val_loss,
+                        best_val_loss=best_val_loss,
+                        patience_counter=patience_counter,
+                    )
                     logger.info(
                         f"[{self.model_type}] saved best model checkpoint "
                         f"(val_loss={self.val_loss:.4f}): {best_path}"
                     )
 
                 # Early stopping based on validation loss
-                if self.cfg.early_stopping_patience > 0:
-                    if self.val_loss < best_val_loss:
-                        best_val_loss = self.val_loss
-                        patience_counter = 0
-                    else:
-                        patience_counter += 1
-                        if patience_counter >= self.cfg.early_stopping_patience:
-                            logger.info(
-                                f"[{self.model_type}] early stopping at epoch {epoch}, "
-                                f"val_loss hasn't improved for {patience_counter} epochs"
-                            )
-                            break
+                if (
+                    self.cfg.early_stopping_patience > 0
+                    and patience_counter >= self.cfg.early_stopping_patience
+                ):
+                    logger.info(
+                        f"[{self.model_type}] early stopping at epoch {epoch}, "
+                        f"val_loss hasn't improved for {patience_counter} epochs"
+                    )
+                    break
 
                 logger.info(
                     f"[{self.model_type}] [epoch {epoch}] completed, val_loss={self.val_loss:.4f}"
@@ -1376,6 +1460,13 @@ def _run_training_loop(
         state.latest_epoch = epoch
         state.latest_metrics = metrics
 
+        # Track best val loss and patience for checkpoint resume
+        if val_loss < state.best_val_loss:
+            state.best_val_loss = val_loss
+            state.patience_counter = 0
+        else:
+            state.patience_counter += 1
+
         if scheduler is not None and not getattr(type(model), "STEP_SCHEDULER_PER_BATCH", False):
             scheduler.step()
 
@@ -1395,11 +1486,29 @@ def _run_training_loop(
 
         # Handle checkpointing signaled by CheckpointCallback
         if hasattr(state, "_pending_checkpoint_path"):
-            save_checkpoint(model, optimizer, epoch, state._pending_checkpoint_path)
+            save_checkpoint(
+                model,
+                optimizer,
+                epoch,
+                state._pending_checkpoint_path,
+                scheduler=scheduler,
+                val_loss=val_loss,
+                best_val_loss=state.best_val_loss,
+                patience_counter=state.patience_counter,
+            )
             delattr(state, "_pending_checkpoint_path")
 
         if hasattr(state, "_pending_best_checkpoint_path"):
-            save_checkpoint(model, optimizer, epoch, state._pending_best_checkpoint_path)
+            save_checkpoint(
+                model,
+                optimizer,
+                epoch,
+                state._pending_best_checkpoint_path,
+                scheduler=scheduler,
+                val_loss=val_loss,
+                best_val_loss=state.best_val_loss,
+                patience_counter=state.patience_counter,
+            )
             delattr(state, "_pending_best_checkpoint_path")
 
         if should_stop:
@@ -1723,6 +1832,9 @@ def _train_func(config: dict) -> None:
             f"total_steps={_total_steps}, warmup_steps={_warmup_steps}"
         )
 
+    ray_best_val_loss = float("inf")
+    ray_patience_counter = 0
+
     for epoch in range(1, epochs + 1):
         model.train()
         epoch_loss_sum = 0.0
@@ -1933,6 +2045,12 @@ def _train_func(config: dict) -> None:
 
         metrics = compute_epoch_metrics(probabilities, targets, model_type)
 
+        if val_loss < ray_best_val_loss:
+            ray_best_val_loss = val_loss
+            ray_patience_counter = 0
+        else:
+            ray_patience_counter += 1
+
         if scheduler and not getattr(type(inner_model), "STEP_SCHEDULER_PER_BATCH", False):
             scheduler.step()
 
@@ -1972,8 +2090,13 @@ def _train_func(config: dict) -> None:
                 {
                     "optimizer_state_dict": optimizer.state_dict(),
                     "epoch": epoch,
+                    "val_loss": float(val_loss),
+                    "best_val_loss": float(ray_best_val_loss),
+                    "patience_counter": ray_patience_counter,
                 }
             )
+            if scheduler is not None:
+                checkpoint_data["scheduler_state_dict"] = scheduler.state_dict()
             with open(os.path.join(checkpoint_dir, "data.pkl"), "wb") as fp:
                 pickle.dump(checkpoint_data, fp)
             checkpoint = Checkpoint.from_directory(checkpoint_dir)
@@ -2018,6 +2141,8 @@ def save_checkpoint(
     path: str | Path,
     scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
     val_loss: float | None = None,
+    best_val_loss: float | None = None,
+    patience_counter: int | None = None,
     tokenizer: Any = None,
 ) -> None:
     """Save a training checkpoint. Model decides its own on-disk layout.
@@ -2029,6 +2154,8 @@ def save_checkpoint(
         path: File path to save the checkpoint (.pth).
         scheduler: Optional LR scheduler to include in the checkpoint.
         val_loss: Optional validation loss to include in the checkpoint.
+        best_val_loss: Optional best validation loss seen so far.
+        patience_counter: Optional early-stopping patience counter.
         tokenizer: Optional tokenizer to include for transformer models.
     """
     inner = model.module if hasattr(model, "module") else model
@@ -2047,17 +2174,34 @@ def save_checkpoint(
         metadata["scheduler_state_dict"] = scheduler.state_dict()
     if val_loss is not None:
         metadata["val_loss"] = val_loss
+    if best_val_loss is not None:
+        metadata["best_val_loss"] = best_val_loss
+    if patience_counter is not None:
+        metadata["patience_counter"] = patience_counter
 
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     torch.save(metadata, path)
     logger.info(f"checkpoint saved: {path} (epoch={epoch})")
 
-    # Defensive check for transformer models requiring tokenizers
     if getattr(type(inner), "NEEDS_TOKENIZE_STAGE", True) is False and tokenizer is None:
         logger.warning(
             f"{type(inner).__name__} checkpoint saved without tokenizer — "
             f"air-gapped K8s deployments will fail at predict time"
         )
+
+
+def _move_optimizer_to_device(optimizer: torch.optim.Optimizer, device: str | torch.device) -> None:
+    """Move all optimizer state tensors to the target device.
+
+    ``optimizer.load_state_dict`` does not respect ``map_location`` —
+    momentum buffers and other per-parameter state tensors can end up on
+    CPU even when the model parameters are on GPU.  This helper moves
+    every tensor inside the optimizer state to the correct device.
+    """
+    for state in optimizer.state.values():
+        for key, value in state.items():
+            if isinstance(value, torch.Tensor):
+                state[key] = value.to(device)
 
 
 def load_checkpoint(
@@ -2078,7 +2222,10 @@ def load_checkpoint(
         device: Device to map tensors to when loading.
 
     Returns:
-        Dict with checkpoint metadata (epoch, val_loss, etc.).
+        Dict with checkpoint metadata. Always includes 'epoch' and
+        'optimizer_state_dict'. May also include 'scheduler_state_dict',
+        'val_loss', 'best_val_loss', and 'patience_counter' if they
+        were saved in the checkpoint.
     """
     # weights_only=True is safe: checkpoints now serialize configs as plain
     # dicts (not dataclass objects), so no arbitrary pickle deserialization.
@@ -2094,10 +2241,25 @@ def load_checkpoint(
         inner.load_state_dict(metadata["model_state_dict"])
 
     if optimizer is not None and "optimizer_state_dict" in metadata:
-        optimizer.load_state_dict(metadata["optimizer_state_dict"])
+        try:
+            optimizer.load_state_dict(metadata["optimizer_state_dict"])
+            _move_optimizer_to_device(optimizer, device)
+        except (ValueError, RuntimeError) as exc:
+            logger.warning(
+                f"optimizer state dict could not be loaded (likely param count "
+                f"mismatch due to frozen/unfrozen backbone change): {exc}. "
+                f"Starting optimizer from scratch — momentum will rebuild over "
+                f"a few epochs."
+            )
 
     if scheduler is not None and "scheduler_state_dict" in metadata:
-        scheduler.load_state_dict(metadata["scheduler_state_dict"])
+        try:
+            scheduler.load_state_dict(metadata["scheduler_state_dict"])
+        except (ValueError, RuntimeError) as exc:
+            logger.warning(
+                f"scheduler state dict could not be loaded: {exc}. "
+                f"Scheduler will be rebuilt from scratch."
+            )
 
     logger.info(f"checkpoint loaded: {path} (epoch={metadata.get('epoch', '?')})")
 

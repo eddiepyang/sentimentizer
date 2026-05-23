@@ -385,6 +385,9 @@ def _run_fit_single(
     )
 
     # Resume from checkpoint if requested
+    start_epoch = 1
+    best_val_loss = float("inf")
+    patience_counter = 0
     if resume:
         from sentimentizer.trainer import latest_checkpoint, load_checkpoint
 
@@ -395,12 +398,27 @@ def _run_fit_single(
             checkpoint = load_checkpoint(
                 ckpt_path, model, trainer.optimizer, trainer.scheduler, device=device
             )
+            ckpt_epoch = checkpoint.get("epoch", 0)
+            start_epoch = ckpt_epoch + 1
+            best_val_loss = checkpoint.get("best_val_loss", float("inf"))
+            if best_val_loss == float("inf") and "val_loss" in checkpoint:
+                best_val_loss = checkpoint["val_loss"]
+            patience_counter = checkpoint.get("patience_counter", 0)
             logger.info(
-                f"resumed from checkpoint: {ckpt_path}, epoch={checkpoint.get('epoch', '?')}"
+                f"resumed from checkpoint: {ckpt_path}, "
+                f"epoch={ckpt_epoch}, start_epoch={start_epoch}, "
+                f"best_val_loss={best_val_loss:.4f}, patience={patience_counter}"
             )
 
     try:
-        trainer.fit(model, train_data=train_dataset, val_data=val_dataset)
+        trainer.fit(
+            model,
+            train_data=train_dataset,
+            val_data=val_dataset,
+            start_epoch=start_epoch,
+            best_val_loss=best_val_loss,
+            patience_counter=patience_counter,
+        )
     finally:
         _cuda_cleanup()
 

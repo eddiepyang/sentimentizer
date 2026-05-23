@@ -31,7 +31,10 @@ def new_modernbert_model(
     Args:
         dict_path: Ignored. Included for signature compatibility.
         embeddings_config: Ignored. Included for signature compatibility.
-        freeze_embeddings: If True, initial training steps freeze the transformer backbone.
+        freeze_embeddings: If True and freeze_backbone_epochs > 0, the backbone
+            is frozen initially and unfrozen at the configured epoch. If
+            freeze_backbone_epochs == 0 (default), the backbone is trainable
+            from the start regardless of this flag.
 
     Returns:
         A ModernBERT model instance.
@@ -51,7 +54,12 @@ def new_modernbert_model(
 
     model = ModernBERT(config=config, tokenizer=tokenizer)
 
-    if freeze_embeddings:
+    # Only freeze the backbone if freeze_backbone_epochs > 0, meaning the
+    # user wants a warmup phase with only the classifier head trainable.
+    # When freeze_backbone_epochs == 0 (default), the entire model is
+    # trainable from the start — freezing and never unfreezing would
+    # prevent the backbone from ever learning.
+    if freeze_embeddings and config.freeze_backbone_epochs > 0:
         for param in model.backbone.parameters():
             param.requires_grad = False
 
