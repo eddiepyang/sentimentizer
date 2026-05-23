@@ -14,10 +14,22 @@ from workflows.lifecycle import State, _ensure_ray_initialized, logger
 def run_tokenize(state: State, *, resume: bool = False) -> None:
     """Build/update dictionary and write processed parquet.
 
-    Unified single-path implementation using DataSource abstraction.
-    Collapses the previous 4-branch logic (new/update × Ray/no-Ray) into
-    one code path that works with both pandas and Ray backends.
+    For GloVe models (rnn, encoder, decoder), builds the gensim dictionary
+    and writes GloVe-tokenized data to ``processed_reviews_file_path``.
+    For HF models (modernbert), skips GloVe tokenization and instead
+    tokenizes with the Hugging Face tokenizer, writing to
+    ``hf_processed_reviews_file_path``.
     """
+    from sentimentizer.models.base import _MODEL_REGISTRY, _ensure_registry
+
+    _ensure_registry()
+    model_cls = _MODEL_REGISTRY[state.model]["model_class"]
+
+    if not getattr(model_cls, "NEEDS_TOKENIZE_STAGE", True):
+        # HF models don't need GloVe tokenization — they need HF tokenization
+        _run_hf_tokenize(state)
+        return
+
     from gensim import corpora
 
     from sentimentizer.config import DriverConfig, TokenizerConfig
@@ -68,3 +80,49 @@ def run_tokenize(state: State, *, resume: bool = False) -> None:
         processed = tokenizer.transform(data_source)
         _remove_path(DriverConfig.files.processed_reviews_file_path)
         processed.write_parquet(DriverConfig.files.processed_reviews_file_path)
+
+
+def _run_hf_tokenize(state: State) -> None:
+    """Tokenize raw reviews with Hugging Face tokenizer and write HF parquet.
+
+    Used by models that don't need GloVe tokenization (e.g., modernbert).
+    Reads raw reviews, applies HF tokenization, and writes to
+    ``hf_processed_reviews_file_path`` with ``input_ids``, ``attention_mask``,
+    and ``target`` columns.
+    """
+    from sentimentizer.config import DriverConfig, TokenizerConfig
+    from sentimentizer.data_source import read_parquet
+    from sentimentizer.hf_tokenizer import HFTokenizer
+    from sentimentizer.models.base import _MODEL_REGISTRY, _ensure_registry
+    from workflows.lifecycle import is_ray_available
+
+    _ensure_registry()
+    model_cls = _MODEL_REGISTRY[state.model]["model_class"]
+    hf_model_name = getattr(model_cls, "HF_MODEL_NAME", None)
+    if hf_model_name is None:
+        raise ValueError(f"Model {state.model!r} has no HF_MODEL_NAME — cannot HF-tokenize")
+
+    hf_path = DriverConfig.files.hf_processed_reviews_file_path
+
+    # Check if HF-tokenized data already exists
+    existing_rows = _parquet_row_count(hf_path)
+    stop = TokenizerConfig.stop
+    skip_data = existing_rows >= stop
+
+    # A "new" run always re-tokenizes from scratch
+    if state.run_type == "new":
+        skip_data = False
+
+    if skip_data and state.run_type == "update":
+        logger.info(f"skipping HF tokenize: {existing_rows} rows already exist (need {stop})")
+        return
+
+    use_ray = is_ray_available()
+    data_source = read_parquet(DriverConfig.files.raw_reviews_file_path, use_ray=use_ray)
+
+    hf_tokenizer = HFTokenizer.from_pretrained(hf_model_name)
+    processed = hf_tokenizer.transform(data_source)
+
+    _remove_path(hf_path)
+    processed.write_parquet(hf_path)
+    logger.info(f"HF tokenization complete: wrote {hf_path}")

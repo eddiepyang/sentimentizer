@@ -475,16 +475,23 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
     _DS = {"type": "prometheus", "uid": "prometheus"}
 
     def _target(metric: str, live_metric: str, legend: str, ref: str, **extra: Any) -> dict:
-        lbl = '{model_type=~"$model_type"}'
-        expr = f"{metric}{lbl}\n  or\n{live_metric}{lbl}"
+        lbl = '{model_type=~"$model_type",run_id=~"$run_id"}'
+        expr = f"{metric}{lbl}\n  or ignoring(job, instance)\n{live_metric}{lbl}"
+        if "{{model_type}}" in legend and "{{run_id}}" not in legend:
+            legend = legend.replace("{{model_type}}", "{{model_type}} - {{run_id}}")
         return {"datasource": _DS, "expr": expr, "legendFormat": legend, "refId": ref, **extra}
+
+    def _target_gpu(metric: str, legend: str, ref: str) -> dict:
+        lbl = '{gpu_index=~"$gpu_index"}'
+        expr = f"{metric}{lbl}"
+        return {"datasource": _DS, "expr": expr, "legendFormat": legend, "refId": ref}
 
     def _table_target(metric: str, legend: str, ref: str) -> dict:
         # Table snapshots only use exporter metrics (not live Ray metrics).
         # An "or" fallback would produce duplicate rows from both sources,
         # which Grafana's merge join renders diagonally (each series appears
         # under a different model_type label set).
-        lbl = '{model_type=~"$model_type"}'
+        lbl = '{model_type=~"$model_type",run_id=~"$run_id"}'
         expr = f"{metric}{lbl}"
         return {
             "datasource": _DS,
@@ -562,20 +569,66 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
                     "sort": 1,
                     "type": "query",
                 },
+                {
+                    "allValue": ".*",
+                    "current": {"selected": True, "text": "All", "value": "$__all"},
+                    "datasource": _DS,
+                    "definition": "label_values(sentimentizer_training_train_loss, run_id)",
+                    "hide": 0,
+                    "includeAll": True,
+                    "label": "Run ID",
+                    "multi": True,
+                    "name": "run_id",
+                    "options": [],
+                    "query": {
+                        "qryType": 1,
+                        "query": "label_values(sentimentizer_training_train_loss, run_id)",
+                        "refId": "VariableQuery",
+                    },
+                    "refresh": 2,
+                    "regex": "",
+                    "skipUrlSync": False,
+                    "sort": 2,
+                    "type": "query",
+                },
+                {
+                    "current": {"selected": False, "text": "All", "value": "$__all"},
+                    "datasource": _DS,
+                    "definition": "label_values(sentimentizer_gpu_utilization_percent, gpu_index)",
+                    "hide": 0,
+                    "includeAll": True,
+                    "label": "GPU Index",
+                    "multi": True,
+                    "name": "gpu_index",
+                    "options": [],
+                    "query": {
+                        "query": "label_values(sentimentizer_gpu_utilization_percent, gpu_index)",
+                        "refId": "StandardVariableQuery",
+                    },
+                    "refresh": 1,
+                    "type": "query",
+                },
             ]
         },
         "panels": [
             {
+                "title": "Live Batch Metrics",
+                "type": "row",
+                "collapsed": False,
+                "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
+                "panels": [],
+            },
+            {
                 "title": "Current Epoch",
                 "type": "stat",
                 "datasource": _DS,
-                "gridPos": {"h": 8, "w": 4, "x": 0, "y": 8},
+                "gridPos": {"h": 8, "w": 6, "x": 0, "y": 1},
                 "targets": [
                     {
                         "datasource": _DS,
                         "expr": (
-                            'max(sentimentizer_training_epoch{model_type=~"$model_type"})'
-                            ' or max(ray_sentimentizer_live_epoch{model_type=~"$model_type"})'
+                            'max(sentimentizer_training_epoch{model_type=~"$model_type",run_id=~"$run_id"})'
+                            ' or max(ray_sentimentizer_live_epoch{model_type=~"$model_type",run_id=~"$run_id"})'
                         ),
                         "legendFormat": "Epoch",
                         "refId": "A",
@@ -603,10 +656,107 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
                 },
             },
             {
-                "title": "Loss (Train vs Val) + LR",
+                "title": "Intra-Epoch Loss",
                 "type": "timeseries",
                 "datasource": _DS,
-                "gridPos": {"h": 8, "w": 10, "x": 4, "y": 8},
+                "gridPos": {"h": 8, "w": 9, "x": 6, "y": 1},
+                "targets": [
+                    _target(
+                        "sentimentizer_training_train_loss_ema",
+                        "ray_sentimentizer_live_train_loss_ema",
+                        "Loss EMA ({{model_type}})",
+                        "A",
+                    ),
+                    _target(
+                        "sentimentizer_training_train_loss_avg",
+                        "ray_sentimentizer_live_train_loss_avg",
+                        "Avg Loss ({{model_type}})",
+                        "B",
+                    ),
+                ],
+                "fieldConfig": {
+                    "defaults": {
+                        "custom": {"drawStyle": "line", "lineWidth": 2},
+                        "unit": "none",
+                    },
+                    "overrides": [],
+                },
+            },
+            {
+                "title": "Live Learning Rate",
+                "type": "timeseries",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 9, "x": 15, "y": 1},
+                "targets": [
+                    _target(
+                        "sentimentizer_training_lr",
+                        "ray_sentimentizer_live_lr",
+                        "LR ({{model_type}})",
+                        "A",
+                    ),
+                ],
+                "fieldConfig": {
+                    "defaults": {
+                        "custom": {"drawStyle": "line", "lineWidth": 2},
+                        "unit": "none",
+                    },
+                    "overrides": [],
+                },
+            },
+            {
+                "title": "Gradient Norm",
+                "type": "timeseries",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 12, "x": 0, "y": 9},
+                "targets": [
+                    _target(
+                        "sentimentizer_training_grad_norm",
+                        "ray_sentimentizer_live_train_grad_norm",
+                        "Grad Norm ({{model_type}})",
+                        "A",
+                    ),
+                ],
+                "fieldConfig": {
+                    "defaults": {
+                        "custom": {"drawStyle": "line", "lineWidth": 2},
+                        "unit": "none",
+                    },
+                    "overrides": [],
+                },
+            },
+            {
+                "title": "Throughput",
+                "type": "timeseries",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 12, "x": 12, "y": 9},
+                "targets": [
+                    _target(
+                        "sentimentizer_training_throughput",
+                        "ray_sentimentizer_live_train_throughput",
+                        "Samples/sec ({{model_type}})",
+                        "A",
+                    ),
+                ],
+                "fieldConfig": {
+                    "defaults": {
+                        "custom": {"drawStyle": "line", "lineWidth": 2},
+                        "unit": "none",
+                    },
+                    "overrides": [],
+                },
+            },
+            {
+                "title": "Epoch Validation Metrics",
+                "type": "row",
+                "collapsed": False,
+                "gridPos": {"h": 1, "w": 24, "x": 0, "y": 17},
+                "panels": [],
+            },
+            {
+                "title": "Loss (Train vs Val)",
+                "type": "timeseries",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 12, "x": 0, "y": 18},
                 "targets": [
                     _target(
                         "sentimentizer_training_train_loss",
@@ -620,33 +770,20 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
                         "Val Loss ({{model_type}})",
                         "B",
                     ),
-                    _target(
-                        "sentimentizer_training_lr",
-                        "ray_sentimentizer_live_lr",
-                        "LR ({{model_type}})",
-                        "C",
-                    ),
                 ],
                 "fieldConfig": {
                     "defaults": {
                         "custom": {"drawStyle": "line", "lineWidth": 2},
                         "unit": "none",
                     },
-                    "overrides": [
-                        {
-                            "matcher": {"id": "byRegexp", "options": "^LR \\("},
-                            "properties": [
-                                {"id": "custom.axisPlacement", "value": "right"},
-                            ],
-                        },
-                    ],
+                    "overrides": [],
                 },
             },
             {
                 "title": "Aggregate Metrics",
                 "type": "timeseries",
                 "datasource": _DS,
-                "gridPos": {"h": 8, "w": 10, "x": 14, "y": 8},
+                "gridPos": {"h": 8, "w": 12, "x": 12, "y": 18},
                 "targets": [
                     _target(
                         "sentimentizer_training_val_accuracy",
@@ -693,7 +830,7 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
                 "title": "Per-Class Metrics",
                 "type": "timeseries",
                 "datasource": _DS,
-                "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+                "gridPos": {"h": 8, "w": 12, "x": 0, "y": 26},
                 "targets": [
                     _target(
                         "sentimentizer_training_val_negative_precision",
@@ -764,7 +901,7 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
                 "title": "Cohen's Kappa & Balanced Accuracy",
                 "type": "timeseries",
                 "datasource": _DS,
-                "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+                "gridPos": {"h": 8, "w": 12, "x": 12, "y": 26},
                 "targets": [
                     _target(
                         "sentimentizer_training_val_cohen_kappa",
@@ -793,7 +930,7 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
                 "title": "MCC & Avg Precision",
                 "type": "timeseries",
                 "datasource": _DS,
-                "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
+                "gridPos": {"h": 8, "w": 12, "x": 0, "y": 34},
                 "targets": [
                     _target(
                         "sentimentizer_training_val_mcc",
@@ -822,7 +959,7 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
                 "title": "Macro F1 & Weighted F1",
                 "type": "timeseries",
                 "datasource": _DS,
-                "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
+                "gridPos": {"h": 8, "w": 12, "x": 12, "y": 34},
                 "targets": [
                     _target(
                         "sentimentizer_training_val_macro_f1",
@@ -848,10 +985,45 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
                 },
             },
             {
+                "title": "Neutral Diagnostics",
+                "type": "timeseries",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 12, "x": 0, "y": 42},
+                "targets": [
+                    _target(
+                        "sentimentizer_training_val_neutral_to_positive_rate",
+                        "ray_sentimentizer_live_val_neutral_to_positive_rate",
+                        "Neutral→Positive ({{model_type}})",
+                        "A",
+                    ),
+                    _target(
+                        "sentimentizer_training_val_neutral_to_negative_rate",
+                        "ray_sentimentizer_live_val_neutral_to_negative_rate",
+                        "Neutral→Negative ({{model_type}})",
+                        "B",
+                    ),
+                    _target(
+                        "sentimentizer_training_val_pred_neutral_frac",
+                        "ray_sentimentizer_live_val_pred_neutral_frac",
+                        "Pred Neutral % ({{model_type}})",
+                        "C",
+                    ),
+                ],
+                "fieldConfig": {
+                    "defaults": {
+                        "custom": {"drawStyle": "line", "lineWidth": 2},
+                        "unit": "percentunit",
+                        "min": 0,
+                        "max": 1,
+                    },
+                    "overrides": [],
+                },
+            },
+            {
                 "title": "Current Epoch & Metrics Snapshot",
                 "type": "table",
                 "datasource": _DS,
-                "gridPos": {"h": 8, "w": 24, "x": 0, "y": 0},
+                "gridPos": {"h": 8, "w": 12, "x": 12, "y": 42},
                 "targets": [
                     _table_target("sentimentizer_training_epoch", "Epoch", "A"),
                     _table_target("sentimentizer_training_train_loss", "Train Loss", "B"),
@@ -952,6 +1124,65 @@ def generate_ml_metrics_dashboard() -> tuple[str, None]:
                         "custom": {"align": "auto", "displayMode": "auto"},
                         "decimals": 4,
                     }
+                },
+            },
+            {
+                "title": "System & GPU Metrics",
+                "type": "row",
+                "collapsed": False,
+                "gridPos": {"h": 1, "w": 24, "x": 0, "y": 50},
+                "panels": [],
+            },
+            {
+                "title": "GPU Utilization",
+                "type": "timeseries",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 8, "x": 0, "y": 51},
+                "targets": [
+                    _target_gpu("sentimentizer_gpu_utilization_percent", "GPU {{gpu_index}}", "A")
+                ],
+                "fieldConfig": {
+                    "defaults": {
+                        "custom": {"drawStyle": "line", "lineWidth": 2},
+                        "unit": "percent",
+                        "min": 0,
+                        "max": 100,
+                    },
+                    "overrides": [],
+                },
+            },
+            {
+                "title": "GPU Memory",
+                "type": "timeseries",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 8, "x": 8, "y": 51},
+                "targets": [
+                    _target_gpu("sentimentizer_gpu_memory_used_bytes", "Used {{gpu_index}}", "A"),
+                    _target_gpu("sentimentizer_gpu_memory_total_bytes", "Total {{gpu_index}}", "B"),
+                ],
+                "fieldConfig": {
+                    "defaults": {
+                        "custom": {"drawStyle": "line", "lineWidth": 2},
+                        "unit": "bytes",
+                    },
+                    "overrides": [],
+                },
+            },
+            {
+                "title": "GPU Temperature",
+                "type": "timeseries",
+                "datasource": _DS,
+                "gridPos": {"h": 8, "w": 8, "x": 16, "y": 51},
+                "targets": [
+                    _target_gpu("sentimentizer_gpu_temperature_celsius", "GPU {{gpu_index}}", "A")
+                ],
+                "fieldConfig": {
+                    "defaults": {
+                        "custom": {"drawStyle": "line", "lineWidth": 2},
+                        "unit": "celsius",
+                        "min": 0,
+                    },
+                    "overrides": [],
                 },
             },
         ],

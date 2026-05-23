@@ -63,6 +63,8 @@ def _get_model_config(model_type: str) -> Any:
         return DriverConfig.encoder()
     elif model_type == "decoder":
         return DriverConfig.decoder()
+    elif model_type == "modernbert":
+        return DriverConfig.modernbert()
     else:
         raise ValueError(f"no matching model config for {model_type}")
 
@@ -80,27 +82,41 @@ def _load_model(state: State, device: str, freeze_embeddings: bool = True) -> An
         from sentimentizer.models.encoder import get_trained_model, new_model
     elif state.model == "decoder":
         from sentimentizer.models.decoder import get_trained_model, new_model
+    elif state.model == "modernbert":
+        from sentimentizer.models.base import get_trained_model
+        from sentimentizer.models.modernbert import new_modernbert_model as new_model
     else:
         raise ValueError(f"no matching model for {state.model}")
 
-    if not Path(DriverConfig.files.dictionary_file_path).exists():
+    if state.model != "modernbert" and not Path(DriverConfig.files.dictionary_file_path).exists():
         raise FileNotFoundError(
             f"Dictionary file not found at {DriverConfig.files.dictionary_file_path}. "
             "Ensure the tokenization step completed successfully before loading the model."
         )
 
     if state.run_type == "new":
-        model = new_model(
-            dict_path=DriverConfig.files.dictionary_file_path,
-            embeddings_config=DriverConfig.embeddings(),
-            model_config=model_config,
-            freeze_embeddings=freeze_embeddings,
-        )
+        if state.model == "modernbert":
+            model = new_model(
+                freeze_embeddings=freeze_embeddings,
+            )
+        else:
+            model = new_model(
+                dict_path=DriverConfig.files.dictionary_file_path,
+                embeddings_config=DriverConfig.embeddings(),
+                model_config=model_config,
+                freeze_embeddings=freeze_embeddings,
+            )
     elif state.run_type == "update":
-        model = get_trained_model(
-            device=device,
-            model_config=model_config,
-        )
+        if state.model == "modernbert":
+            model = get_trained_model(
+                model_type="modernbert",
+                device=device,
+            )
+        else:
+            model = get_trained_model(
+                device=device,
+                model_config=model_config,
+            )
     else:
         raise ValueError(f"invalid run_type: {state.run_type}")
 

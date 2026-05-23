@@ -233,7 +233,7 @@ These files all consume `EmbeddingsConfig` but don't need modification — they 
 - `sentimentizer/models/decoder.py` — calls `new_embedding_weights(dict, cfg)`
 - `sentimentizer/trainer.py` — passes `EmbeddingsConfig` to model constructors
 - `sentimentizer/tuner.py` — constructs `EmbeddingsConfig` from tuning config
-- `sentimentizer/agent/skill.py` — constructs `EmbeddingsConfig` for diagnostics
+- `sentimentizer/agent/diagnose_model.py` — constructs `EmbeddingsConfig` for diagnostics
 
 ---
 

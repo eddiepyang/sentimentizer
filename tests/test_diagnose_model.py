@@ -1,4 +1,4 @@
-"""Tests for the sentimentizer tuning skill.
+"""Tests for the sentimentizer model diagnosis module.
 
 Tests cover:
 - TuningRunConfig defaults and custom values
@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from sentimentizer.agent.skill import (
+from sentimentizer.agent.diagnose_model import (
     KNOWN_SENTIMENT_EXAMPLES,
     TuningRun,
     TuningRunConfig,
@@ -52,7 +52,7 @@ class TestTuningRunConfig:
         assert config.search_space_overrides is None
         assert config.push_to_hub is False
         assert config.weight_smoothing == 0.5
-        assert config.loss_type == "cross_entropy"
+        assert config.loss_type == "focal"
         assert config.focal_gamma == 2.0
         assert config.label_smoothing == 0.1
         assert config.neutral_oversample_ratio == 0.0
@@ -288,7 +288,7 @@ class TestResultsPersistence:
 
     def test_save_and_load_results(self) -> None:
         """Should save results to JSON and load them back."""
-        config = TuningRunConfig(output_dir="/tmp/test_tuning_skill")
+        config = TuningRunConfig(output_dir="/tmp/test_tuning_run")
         run = TuningRun(config)
 
         result = TuningRunResult(
@@ -317,7 +317,7 @@ class TestResultsPersistence:
         # Cleanup
         import shutil
 
-        shutil.rmtree("/tmp/test_tuning_skill", ignore_errors=True)
+        shutil.rmtree("/tmp/test_tuning_run", ignore_errors=True)
 
     def test_load_nonexistent_results(self) -> None:
         """Loading from nonexistent path should raise FileNotFoundError."""
@@ -424,9 +424,9 @@ class TestCreateTuningRun:
 
     def test_creates_config_with_defaults(self) -> None:
         """create_tuning_run should create a TuningRunConfig with defaults."""
-        from sentimentizer.agent.skill import create_tuning_run
+        from sentimentizer.agent.diagnose_model import create_tuning_run
 
-        with patch("sentimentizer.agent.skill.TuningRun") as mock_run:
+        with patch("sentimentizer.agent.diagnose_model.TuningRun") as mock_run:
             create_tuning_run()
 
             config = mock_run.call_args.args[0]
@@ -436,9 +436,9 @@ class TestCreateTuningRun:
 
     def test_creates_config_with_custom_values(self) -> None:
         """create_tuning_run should accept custom parameters."""
-        from sentimentizer.agent.skill import create_tuning_run
+        from sentimentizer.agent.diagnose_model import create_tuning_run
 
-        with patch("sentimentizer.agent.skill.TuningRun") as mock_run:
+        with patch("sentimentizer.agent.diagnose_model.TuningRun") as mock_run:
             create_tuning_run(
                 model_type="encoder",
                 mode="standalone",

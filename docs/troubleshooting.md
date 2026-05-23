@@ -83,7 +83,7 @@ A healthy match rate should be 50–80%.
 | Cause | Symptoms | Fix |
 |-------|----------|-----|
 | **Dictionary tokens have wrapping quotes** | `extract_embeddings()` raises `ValueError` for match rate < 50%; dictionary contains `"'the'"` instead of `"the"` | Since the fix, `new_dictionary()` and `_count_vocab_batch()` use `list(doc_tokens)` instead of `str(doc_tokens)` for numpy arrays. If you have a stale `.dictionary` file, delete it and re-run the pipeline with `--run-type new`. |
-| **Wrong T_max for scheduler** | Loss decays to minimum partway through training; model stops learning before the final epoch | Transformers set `T_max = 2 * default_epochs` (= 16) for a gentle half-cosine decay. The invariant is `T_max >= epochs_trained` — never train more epochs than `T_max`. See "Learning rate drops to minimum" below. |
+| **Wrong scheduler configuration** | Loss decays to minimum partway through training; model stops learning before the final epoch | All models use per-batch scheduler stepping with `_LinearWarmupCosineScheduler` and `warmup_ratio=0.06`. The scheduler is rebuilt with real optimizer-step counts at training time. `T_max` and `warmup_epochs` on `SchedulerParams` are legacy fields — they don't control the schedule. See "Learning rate drops to minimum" below. |
 | **Zero LR during warmup** | First epoch shows no learning progress | `_LinearWarmupCosineScheduler` uses `(step + 1) / warmup_steps` instead of `step / warmup_steps`. Verify the warmup formula is correct. |
 | **Class imbalance not addressed** | Model always predicts positive; `balanced_accuracy` near 0.33 (random) | Use `class_weights` (default with `compute_class_weights()`), `label_smoothing=0.1`, or `loss_type="focal"` with `focal_gamma=2.0`. |
 
@@ -114,13 +114,14 @@ make train   # or make train-distributed
 
 **Symptoms**: Training loss plateaus or increases after ~50% of epochs; final metrics are poor.
 
-**Cause**: The number of epochs actually trained meets or exceeds the scheduler's `T_max`. The cosine schedule completes its decay to `eta_min` at epoch `T_max`; any epochs beyond that train at a dead LR (and for plain `CosineAnnealingLR`, the LR then climbs back up — the schedule is periodic).
+**Cause**: The scheduler's `total_steps` (computed dynamically as `epochs * steps_per_epoch`) is too low, causing the cosine decay to complete before training finishes. This can happen if the dataset is smaller than expected or if `gradient_accumulation_steps` reduces the effective step count.
 
-For transformers, `EncoderSchedulerParams.T_max` / `DecoderSchedulerParams.T_max` are deliberately set to `16` — **twice** `default_epochs(...)` (= 8). Training only uses the first half of the cosine curve, giving a gentle decay that stays productive through the final epoch instead of crashing to `eta_min`. The invariant is `T_max >= epochs_trained`, not `T_max == default_epochs`.
+With per-batch scheduler stepping, `total_steps` is computed as `epochs * steps_per_epoch` where `steps_per_epoch = len(train_loader) // grad_accum_steps`. The invariant is that `total_steps >= epochs * steps_per_epoch` — this is trivially true since `total_steps` equals that quantity.
 
 **Fix**:
-- Verify `T_max >= default_epochs(model_type)` in `config.py` (transformers use `2 * default_epochs`). `TestSchedulerCorrectness.test_scheduler_t_max_matches_default_epochs` asserts `T_max >= default_epochs`.
-- Do **not** train for more epochs than `T_max`. This was a real bug in `TuningRun._train_final_model`, which trained `2 * default_epochs` (= 16) epochs while the scheduler's `T_max` was 16 — the LR hit `eta_min` exactly at the last epoch. Final training now uses `default_epochs(model_type)` and relies on early stopping (`patience=3`) for convergence.
+- Verify that `gradient_accumulation_steps` is correctly configured. If it's too high, `steps_per_epoch` will be too small and the cosine curve will cover too few steps, causing the LR to decay too quickly.
+- `_LinearWarmupCosineScheduler` clamps `progress` to `1.0` so stepping past `total_steps` can't bounce the LR back up.
+- In Ray distributed training, `total_steps` is estimated from `train_dataset_count / num_workers` — a slightly off estimate means the cosine curve ends ~10% early or late, which is acceptable.
 
 ### Zero learning rate on first epoch (warmup)
 
@@ -265,6 +266,38 @@ The `augment_seeds()` function gracefully handles API failures — it returns th
 1. Too few training examples — run augmentation to expand seeds
 2. Hard negatives not represented — ensure `augment.py` generates category-confusing examples
 3. Consider upgrading the base model from `BAAI/bge-base-en-v1.5` to `mxbai-embed-large-v1` in `SetFitConfig`
+
+## ModernBERT Issues
+
+### Out-of-Memory (OOM) during training
+
+**Symptoms**: CUDA Out-Of-Memory (OOM) error when fine-tuning ModernBERT.
+
+**Fix**: ModernBERT is a large contextual transformer model. By default, it uses an 8-bit AdamW optimizer via `bitsandbytes` to reduce the VRAM footprint. If `bitsandbytes` is not available, training falls back to standard AdamW, which requires substantially more VRAM. Ensure you run `uv sync --extra ray` to install all required dependencies. If OOM still occurs, reduce `batch_size` in your configuration or CLI command.
+
+### Air-gapped / Offline Environment Loading
+
+**Symptoms**: Loading hangs or throws `ConnectionError` when attempting to load the ModernBERT backbone.
+
+**Fix**: The model loader supports offline mode if the Hugging Face model directory is cached locally. Set `HF_HUB_OFFLINE=1` in your environment, or configure the pre-trained weights directory in `config.py` to point directly to a local copy of the model artifacts.
+
+### ONNX Export Limitations
+
+**Symptoms**: Running ONNX export on a ModernBERT model fails.
+
+**Fix**: ModernBERT currently has `SUPPORTS_ONNX = False` configured in its class definition. The ONNX exporter explicitly checks this property and rejects the export request. Use standard PyTorch weights for serving and inference.
+
+### Ray Train Worker Crashes
+
+**Symptoms**: Ray workers crash with `ModuleNotFoundError: No module named 'ray'` when starting distributed training.
+
+**Fix**: Make sure `RAY_ENABLE_UV_RUN_RUNTIME_ENV=0` is exported in the worker subprocess environment before initializing Ray. Without this, Ray workers try to build separate virtual environments via `uv` that lack the `ray` package.
+
+### Progress Bar Spams Log Lines in Distributed Training
+
+**Symptoms**: Progress bars during distributed training output a new line for every step, filling up the console.
+
+**Fix**: Inside the distributed training loop, the code uses `ray.experimental.tqdm_ray.tqdm` instead of the standard `tqdm`. This intercepts the output and routes it back to the Ray driver centrally to update the progress bar in-place.
 
 ## Linting and Formatting
 

@@ -437,7 +437,7 @@ def load_train_val_datasets(
 ### Phase 4: Unified Data Loading (~1 hour)
 
 1. **Replace `load_train_val_corpus_datasets()` and `load_train_val_ray_datasets()`** with `load_train_val_datasets()`
-2. **Unwrap the DataSources**: Update callers (`Trainer.fit()`, `_train_func()`, `tuner.py`, `agent/skill.py`, `workflows/stages/train.py`) to convert the returned `DataSource` to the required format. Call `.to_pandas()` and wrap in `CorpusDataset(...)` for single-node paths, or call `.to_ray()` for distributed paths.
+2. **Unwrap the DataSources**: Update callers (`Trainer.fit()`, `_train_func()`, `tuner.py`, `agent/diagnose_model.py`, `workflows/stages/train.py`) to convert the returned `DataSource` to the required format. Call `.to_pandas()` and wrap in `CorpusDataset(...)` for single-node paths, or call `.to_ray()` for distributed paths.
 
 ### Phase 5: Collapse `run_tokenize()` (~1 hour)
 

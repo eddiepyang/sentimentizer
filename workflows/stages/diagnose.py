@@ -69,7 +69,7 @@ def run_diagnose_pipeline(state: State) -> None:
     """Heavy pipeline check. Imports the ML stack."""
     import json
 
-    from sentimentizer.agent.skill import diagnose_training_issues
+    from sentimentizer.agent.diagnose_model import diagnose_training_issues
 
     logger.info("running_diagnostics", model_type=state.model)
     result = diagnose_training_issues(model_type=state.model)

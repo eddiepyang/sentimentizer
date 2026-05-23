@@ -168,12 +168,12 @@ Risk/gap annotations are marked with **[RISK]**, **[GAP]**, or **[SAFE]**.
   - Update mock predictor return values
 
 **[RISK] Breaking change — the single biggest risk in this plan.** This changes the wire format that all clients consume. Specifically:
-  - `predict_batch()` return format is used by: (1) `serve.py` handlers, (2) `agent/skill.py` validation (but `skill.py` uses `model.predict_text()` not `predict_batch()`, so **[SAFE]**).
+  - `predict_batch()` return format is used by: (1) `serve.py` handlers, (2) `agent/diagnose_model.py` validation (but `diagnose_model.py` uses `model.predict_text()` not `predict_batch()`, so **[SAFE]**).
   - `predict()` (single text wrapper) calls `predict_batch([text])[0]` and returns the first element. If `predict_batch` output changes, `predict()` return changes automatically.
   - **`serve.py` handlers**: The `predict()` handler does `prediction.get("model", "")` and `prediction = await self.predict_sentiment(...)`. After the schema change, `prediction` will have `{"label", "score", "scores", "model"}` — the `.get("model")` still works. But the response embeds `prediction` directly, so the client-facing response shape changes.
   - **`/batch` handler**: Constructs `{"text": text, "prediction": pred}` where `pred` is the raw `predict_batch` output. Same shape change.
 
-**[RISK] `predict_text()` on `BaseSentimentModel` is a different API surface.** Per AGENTS.md: "`predict_text()` on `BaseSentimentModel` still returns all 3 scores: `{"negative": 0.05, "neutral": 0.12, "positive": 0.83}`. This is a different API surface used by `skill.py` and `hf.py`." That API is **not** affected by this change — it's on the model class, not the predictor. **[SAFE]**
+**[RISK] `predict_text()` on `BaseSentimentModel` is a different API surface.** Per AGENTS.md: "`predict_text()` on `BaseSentimentModel` still returns all 3 scores: `{"negative": 0.05, "neutral": 0.12, "positive": 0.83}`. This is a different API surface used by `diagnose_model.py` and `hf.py`." That API is **not** affected by this change — it's on the model class, not the predictor. **[SAFE]**
 
 **[GAP] `predictor.py` module docstring is already aspirational.** The docstring shows `{"model": "encoder", "label": "positive", "scores": {"negative": 0.02, ...}}` (the target format), but the actual code in `predict_batch()` returns Option B `{label: score, "model": model_name}`. Fix the docstring as part of this change.
 

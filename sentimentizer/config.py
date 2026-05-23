@@ -31,6 +31,8 @@ def default_epochs(model_type: str) -> int:
     RNNs need enough epochs to learn compositional patterns like negation.
     Transformers need more epochs for attention patterns to develop.
     """
+    if model_type == "modernbert":
+        return 3
     if model_type in ("encoder", "decoder"):
         return 12
     return 4
@@ -90,51 +92,96 @@ class DecoderOptimizationParams(OptimizationParams):
 
 
 @dataclass
-class SchedulerParams:
-    """Default scheduler params (used for RNN).
+class ModernBERTOptimizationParams(OptimizationParams):
+    """Optimization params for ModernBERT.
 
-    Encoder and Decoder models override these via their config.
+    Uses lower LR (2e-5) and AdamW-style weight decay (0.01).
+    """
+
+    lr: float = 2e-5
+    weight_decay: float = 0.01
+
+
+@dataclass
+class SchedulerParams:
+    """Base scheduler params.
+
+    T_max, warmup_epochs, and last_epoch are legacy fields from when
+    per-epoch stepping was used. With per-batch stepping, the scheduler
+    is rebuilt in Trainer.fit() / _train_func() once the DataLoader
+    length is known, using warmup_ratio and dynamically computed
+    total_steps. These legacy fields are kept for checkpoint compat.
     """
 
     T_max: int = 4
     eta_min: float = 1e-6
     last_epoch: int = -1
+    warmup_epochs: int = 0
+    warmup_ratio: float = 0.06
+
+
+@dataclass
+class RNNSchedulerParams(SchedulerParams):
+    """Scheduler params for RNN model.
+
+    Uses per-batch warmup+cosine decay. warmup_ratio controls what fraction
+    of total optimizer steps are spent warming up. T_max and warmup_epochs
+    are inherited but unused — the per-batch scheduler is rebuilt in
+    Trainer.fit() / _train_func() once the DataLoader length is known.
+    """
+
+    warmup_ratio: float = 0.06
+    eta_min: float = 1e-6
 
 
 @dataclass
 class EncoderSchedulerParams(SchedulerParams):
     """Scheduler params for Encoder model.
 
-    T_max is 2x default_epochs("encoder") (= 12), not equal to it: training
-    uses only the gentle first half of the cosine curve so the LR stays
-    productive through the final epoch instead of decaying to eta_min.
-    The invariant is T_max >= epochs_trained — never train more epochs
-    than T_max (see TuningRun._train_final_model).
-    Includes warmup_epochs for linear LR warmup at the start of training.
-    Inherits eta_min and last_epoch from SchedulerParams; overrides T_max
-    and adds warmup_epochs.
+    Uses per-batch warmup+cosine decay via warmup_ratio. T_max and
+    warmup_epochs are legacy fields from per-epoch stepping; the
+    per-batch scheduler is rebuilt in Trainer.fit() / _train_func()
+    once the DataLoader length is known.
     """
 
     T_max: int = 24
-    warmup_epochs: int = 1  # linear warmup for this many epochs
+    warmup_epochs: int = 1
+    warmup_ratio: float = 0.06
+    eta_min: float = 1e-6
 
 
 @dataclass
 class DecoderSchedulerParams(SchedulerParams):
     """Scheduler params for Decoder model.
 
-    T_max is 2x default_epochs("decoder") (= 12) for the same gentle-decay
-    reason as EncoderSchedulerParams; the T_max >= epochs_trained invariant
-    applies here too. Uses a higher minimum LR than the encoder because the
-    decoder has more parameters and is more prone to overfitting during
-    early training.
-    Inherits last_epoch from SchedulerParams; overrides T_max, eta_min,
-    and adds warmup_epochs.
+    Uses per-batch warmup+cosine decay via warmup_ratio. Higher eta_min
+    than encoder because the decoder has more parameters and is more
+    prone to overfitting during early training. T_max and warmup_epochs
+    are legacy fields from per-epoch stepping.
     """
 
     T_max: int = 24
     eta_min: float = 1e-5
-    warmup_epochs: int = 1  # linear warmup for this many epochs
+    warmup_epochs: int = 1
+    warmup_ratio: float = 0.06
+
+
+@dataclass
+class ModernBERTSchedulerParams(SchedulerParams):
+    """Scheduler params for ModernBERT model.
+
+    Uses per-batch (per-optimizer-step) scheduler stepping via
+    STEP_SCHEDULER_PER_BATCH=True. warmup_ratio controls what fraction
+    of total optimizer steps are spent warming up; total_steps is computed
+    dynamically from dataset size at training time.
+
+    T_max and warmup_epochs are inherited but unused for this model —
+    the per-batch scheduler is rebuilt in Trainer.fit() / _train_func()
+    once the DataLoader length is known.
+    """
+
+    warmup_ratio: float = 0.06
+    eta_min: float = 1e-6
 
 
 @dataclass(frozen=True)
@@ -159,16 +206,18 @@ class FileConfig:
     dictionary_file_path: str = f"{data_path}/data/yelp.dictionary"
     raw_reviews_file_path: str = f"{data_path}/data/review_data_raw.parquet"
     processed_reviews_file_path: str = f"{data_path}/data/review_data.parquet"
+    hf_processed_reviews_file_path: str = f"{data_path}/data/review_data_hf.parquet"
     rnn_weights_file_path: str = f"{data_path}/data/rnn_weights.pth"
     encoder_weights_file_path: str = f"{data_path}/data/encoder_weights.pth"
     decoder_weights_file_path: str = f"{data_path}/data/decoder_weights.pth"
+    hf_weights_dir: str = f"{data_path}/data/hf_weights"
 
 
 def weights_path_for(model_type: str) -> str:
     """Return the weights file path for the given model type.
 
     Args:
-        model_type: One of 'rnn', 'encoder', 'decoder'.
+        model_type: One of 'rnn', 'encoder', 'decoder', 'modernbert'.
 
     Returns:
         Absolute path to the weights file for that model type.
@@ -179,14 +228,16 @@ def weights_path_for(model_type: str) -> str:
         return FileConfig.encoder_weights_file_path
     elif model_type == "decoder":
         return FileConfig.decoder_weights_file_path
+    elif model_type == "modernbert":
+        return f"{FileConfig.hf_weights_dir}/head.pth"
     else:
         raise ValueError(f"Unknown model type: {model_type!r}")
 
 
 @dataclass
 class TrainerConfig:
-    batch_size: int = 64
-    epochs: int = -1  # -1 means use model-specific default (4 for RNN, 8 for encoder/decoder)
+    batch_size: int = 8
+    epochs: int = -1  # -1 = model-specific default (3/4/12 for modernbert/rnn/transformer)
     early_stopping_patience: int = 3  # stop if val_loss doesn't improve for this many epochs
     dataloader_workers: int = -1  # -1 means auto-detect based on device
     ray_workers: int = 1  # Ray Train workers (only used with --distributed)
@@ -198,10 +249,28 @@ class TrainerConfig:
     class_weights: list[float] | None = None  # per-class weights for CrossEntropyLoss
     balance_strategy: str = "class_weights_only"  # undersample/oversample/class_weights_only
     weight_smoothing: float = 0.5  # inverse-frequency exponent (1.0=full, 0.5=sqrt, 0.0=uniform)
-    loss_type: str = "cross_entropy"  # "cross_entropy" or "focal"
+    loss_type: str = "focal"  # "cross_entropy" or "focal" (focal is default for 3-class)
     focal_gamma: float = 2.0  # focal loss focusing parameter (loss_type="focal" only)
     label_smoothing: float = 0.1  # softens hard targets, reduces overconfident predictions
     neutral_oversample_ratio: float = 0.0  # 0.0=disabled, 0.20=neutral to 20% of data
+    use_amp: bool = True  # mixed-precision training (bfloat16/CUDA, float32/CPU)
+    gradient_accumulation_steps: int = (
+        8  # effectively increases batch size for VRAM-constrained training
+    )
+    use_8bit_optimizer: bool = True  # bitsandbytes AdamW8bit (falls back to AdamW)
+    ray_update_every: int = (
+        -1
+    )  # -1 means auto-detect based on model type (e.g. 100 for modernbert, 500 for others)
+    run_id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.run_id:
+            import datetime
+            import random
+
+            now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            rand = random.randint(1000, 9999)
+            self.run_id = f"run_{now}_{rand}"
 
 
 @dataclass
@@ -217,6 +286,7 @@ HF_WEIGHTS_REPOS: dict[str, str] = {
     "rnn": "ryeyoo/sentimentizer-rnn",
     "encoder": "ryeyoo/sentimentizer-encoder",
     "decoder": "ryeyoo/sentimentizer-decoder",
+    "modernbert": "ryeyoo/sentimentizer-modernbert",
 }
 
 
@@ -273,6 +343,18 @@ class DecoderConfig:
     num_classes: int = 3
 
 
+@dataclass(frozen=True)
+class ModernBERTConfig:
+    """Configuration for the ModernBERT model architecture."""
+
+    model_name: str = "answerdotai/ModernBERT-base"
+    dropout: float = 0.1
+    num_classes: int = 3
+    max_seq_length: int = 512
+    freeze_backbone_epochs: int = 0
+    gradient_checkpointing: bool = True  # saves ~60% activation VRAM at ~30% compute cost
+
+
 @dataclass
 class DriverConfig:
     files: type[FileConfig] = FileConfig
@@ -282,6 +364,7 @@ class DriverConfig:
     rnn: type[RNNConfig] = RNNConfig
     encoder: type[EncoderConfig] = EncoderConfig
     decoder: type[DecoderConfig] = DecoderConfig
+    modernbert: type[ModernBERTConfig] = ModernBERTConfig
     hf: type[HuggingFaceConfig] = HuggingFaceConfig
 
 
@@ -296,6 +379,7 @@ def validate_config_consistency(config: DriverConfig) -> None:
         ("rnn", config.rnn),
         ("encoder", config.encoder),
         ("decoder", config.decoder),
+        ("modernbert", config.modernbert),
     ]
     for model_type, model_cfg in model_configs:
         nc = model_cfg.num_classes

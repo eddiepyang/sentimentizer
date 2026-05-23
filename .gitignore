@@ -45,6 +45,7 @@ checkpoints/
 .mypy_cache/
 .bsp/
 *.egg-info/
+.coverage
 
 # ONNX export artifacts
 onnx_artifacts/

@@ -73,7 +73,10 @@ Both ruff and black are run in CI — PRs must pass lint and format checks befor
 - Config classes live in `sentimentizer/config.py` — use dataclasses
 - Keep `ray.init(ignore_reinit_error=True)` in tests to avoid re-init errors
 - The project requires Python 3.12+ (pinned in `.python-version`)
-- **Stale metrics cleanup**: `_reset_stale_metrics(model_type)` in `workflows/stages/train.py` is called at the start of every training run. It writes a zeroed-out per-model JSON file to `/tmp/sentimentizer_metrics/{model_type}_metrics.json` (with `_trace.reset_by` + `_trace.reset_at` trace fields for easy debugging), resets the `sentimentizer_training_*` Prometheus gauges for that model type to 0, and invalidates the `_RAY_GAUGES` cache entry. Per-model files eliminate race conditions between concurrent training processes. The standalone exporter discovers all three files and zeroes gauges for any model type whose file is missing or stale.
+- **Stale metrics cleanup & run isolation**: `_reset_stale_metrics(model_type, run_id)` in `workflows/stages/train.py` is called at the start of every training run. It writes a zeroed-out per-model JSON file to `/tmp/sentimentizer_metrics/{model_type}_metrics.json` (including the unique `run_id`), resets the `sentimentizer_training_*` Prometheus gauges for that model type/run_id to 0, and invalidates the `_RAY_GAUGES` cache entry. Every training run generates a unique `run_id` (e.g., `run_YYYYMMDD_HHMMSS_xxxx`) unless explicitly specified via `--run-id`. This `run_id` is passed as a Prometheus label to both exporter and live Ray gauges, enabling complete run isolation and deduplication on the Grafana dashboard.
+- **ModernBERT Integration**: ModernBERT uses `nomic-ai/modernbert-base` backbone, tokenized with `HFTokenizer` and formatted via `HFDataset`/`HFCollateFn` (using dynamic padding per batch). For memory efficiency, fine-tuning uses an 8-bit AdamW optimizer via `bitsandbytes` by default, falling back to standard AdamW if unavailable.
+- **ModernBERT Checkpointing**: Subclass models of `HFTransformerModel` save the full checkpoint directory, which includes a sidecar configuration JSON (`best_model_modernbert_config.json`), weights `.pth` file, and pre-trained tokenizer configs. Loading is fully offline-compatible.
+- **ModernBERT ONNX Limitations**: ModernBERT models do not support ONNX export (`SUPPORTS_ONNX = False`), which is rejected early by the export workflow.
 
 ## Ray 2.55 API conventions
 
@@ -171,7 +174,7 @@ Always verify against the installed source in `.venv/lib/python3.12/site-package
   via `_ray_cleanup()` (registered with `atexit`). Always call `ray.shutdown()`
   in tests and scripts when done.
 
-## Web search skill
+## Web search utility
 
 Web search is available via two interfaces:
 

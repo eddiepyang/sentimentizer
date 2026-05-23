@@ -6,6 +6,21 @@ Sentimentizer is a PyTorch-based sentiment analysis pipeline with three model ar
 
 ## Recent Changes
 
+### ModernBERT Integration (May 2026)
+
+**Change**: Integrated ModernBERT-base as a high-performance sentiment classification model option. This includes a new Hugging Face tokenization and training pipeline supporting 8-bit optimizer precision and layer-wise unfreezing.
+
+**Key changes**:
+- **ModernBERT Wrapper**: Added `ModernBERT` wrapper model (`new_modernbert_model` factory) utilizing the `nomic-ai/modernbert-base` backbone, mean pooling, and classifier head.
+- **Hugging Face Tokenizer & Loader**: Implemented `HFTokenizer` and `HFDataset`/`HFCollateFn` to handle tokenization and dynamic per-batch padding natively, bypassing standard static vocabulary pipelines.
+- **8-bit AdamW Optimization**: Upgraded `trainer.py` to support 8-bit AdamW via `bitsandbytes` to minimize VRAM memory footprint on consumer-grade GPUs, falling back to standard AdamW if bitsandbytes is unavailable.
+- **Backbone Unfreezing Callback**: Implemented an unfreezing callback (`UnfreezeBackboneCallback`) to gradually unfreeze layers during fine-tuning (e.g., train only classifier head for 1 epoch, then unfreeze backbone completely).
+- **Progress Bar Enhancements**: Switched training loop progress bars to use `ray.experimental.tqdm_ray.tqdm` under distributed training (rank 0) to avoid newlines in the driver console, while falling back to standard `tqdm` in local contexts.
+- **Checkpoint & Registry**: Added `HFTransformerModel` base to save weights alongside config sidecars and full pre-trained tokenizer directories for absolute offline reproducibility.
+- **ONNX Limitation**: ModernBERT has `SUPPORTS_ONNX = False` configured, so `sentimentizer export` will reject it cleanly.
+
+**Key files changed**: `sentimentizer/config.py`, `sentimentizer/trainer.py`, `sentimentizer/hf_tokenizer.py`, `sentimentizer/hf_dataset.py`, `sentimentizer/models/base.py`, `sentimentizer/models/hf_base.py`, `sentimentizer/models/modernbert.py`, `workflows/stages/train.py`, `tests/test_modernbert.py`
+
 ### Transformer Architecture and Training Optimizations (May 2026)
 
 **Change**: Optimized the Transformer Encoder, Decoder, and RNN architectures to prevent GloVe embedding overfitting, stabilize training with Pre-LN/GELU, and correctly decay learning rates to minimum values.
@@ -35,7 +50,7 @@ Sentimentizer is a PyTorch-based sentiment analysis pipeline with three model ar
 - **Training pipeline**: `compute_class_weights()` replaces `compute_pos_weight()`; `_balance_dataframe()` / `_balance_ray_dataset()` handle multi-class targets
 - **ONNX**: Metadata JSON includes `num_classes` and `label_names`
 
-**Key files changed**: `config.py`, `tokenizer.py`, `loader.py`, `metrics.py`, `metrics_publisher.py`, `exporter.py`, `trainer.py`, `models/{base,rnn,encoder,decoder}.py`, `losses.py`, `serve.py`, `tuner.py`, `agent/skill.py`, `hf.py`, `export_onnx.py`, `workflows/{cli,stages/train,stages/tune}.py`, `scripts/generate_ray_dashboards.py`
+**Key files changed**: `config.py`, `tokenizer.py`, `loader.py`, `metrics.py`, `metrics_publisher.py`, `exporter.py`, `trainer.py`, `models/{base,rnn,encoder,decoder}.py`, `losses.py`, `serve.py`, `tuner.py`, `agent/diagnose_model.py`, `hf.py`, `export_onnx.py`, `workflows/{cli,stages/train,stages/tune}.py`, `scripts/generate_ray_dashboards.py`
 
 ### torchmetrics Migration
 
@@ -77,17 +92,18 @@ Sentimentizer is a PyTorch-based sentiment analysis pipeline with three model ar
 **Key files changed**:
 - `sentimentizer/tokenizer.py` — numpy array handling in `new_dictionary()` and `_count_vocab_batch()`
 - `workflows/stages/tokenize.py` — numpy array handling in resume path
-- `sentimentizer/config.py` — `Encoder`/`DecoderSchedulerParams.T_max` set to 16 (= 2× `default_epochs`), `warmup_epochs` set to 3
-- `sentimentizer/trainer.py` — `_LinearWarmupCosineScheduler` warmup formula fix + `progress` clamp; `_train_func` steps scheduler after validation
-- `sentimentizer/agent/skill.py` — final training uses `default_epochs` (not 2×); sidecar config JSON for exact model reconstruction
+- `sentimentizer/config.py` — All `*SchedulerParams` now have `warmup_ratio=0.06`; `RNNSchedulerParams` is a new dataclass; `T_max` and `warmup_epochs` are legacy fields
+- `sentimentizer/trainer.py` — All models use per-batch `_LinearWarmupCosineScheduler`; `CosineAnnealingLR` removed; `_rebuild_optimizer_after_unfreeze()` has no `CosineAnnealingLR` branch; `new_ray_trainer()` passes `warmup_ratio` instead of `use_warmup`/`warmup_steps`/`total_steps`
+- `sentimentizer/models/base.py` — `STEP_SCHEDULER_PER_BATCH = True` (was `False`); `HFTransformerModel` no longer overrides it
+- `sentimentizer/agent/diagnose_model.py` — final training uses `default_epochs` (not 2×); sidecar config JSON for exact model reconstruction
 
 ### Stale Metrics Cleanup
 
-**Problem**: When training the encoder model, the dashboard showed unexpected RNN metrics from a previous training run because a single shared JSON file accumulated entries across runs and `prometheus_client` gauges retained their last-set values. Concurrent training processes could also race on the shared file, overwriting each other.
+**Problem**: When training the encoder model, the dashboard showed unexpected RNN metrics from a previous training run because a single shared JSON file accumulated entries across runs and `prometheus_client` gauges retained their last-set values. Concurrent training processes could also race on the shared file.
 
 **Solution**: Switched from a single shared JSON file (`/tmp/sentimentizer_training_metrics.json`) to per-model-type JSON files (`/tmp/sentimentizer_metrics/{model_type}_metrics.json`). Each model type writes to its own file, so concurrent training processes never race. The standalone exporter discovers all three files and zeroes gauges for any model type whose file is missing or stale. Added `_written_by` and `_written_at` trace fields to every write, and `_trace.reset_by` / `_trace.reset_at` to reset files, so debugging future issues is trivial: just `cat` the file to see which model_type wrote it and when.
 
-**Important**: `_reset_stale_metrics(model_type)` writes zeroed-out JSON files for **all three** model types (rnn, encoder, decoder) so the standalone exporter can clear stale values, but only resets **Prometheus gauges for the current model type**. Other model types' gauges retain their last real values — the exporter skips `_reset: true` files so untrained models don't show `epoch=0` on the dashboard. Each zeroed-out file includes `_reset: true` and `_trace.reset_by` to distinguish stale resets from real training data.
+**Important**: `_reset_stale_metrics(model_type)` writes zeroed-out JSON files for **all three** model types (rnn, encoder, decoder) so the exporter can clear stale values, but only resets **Prometheus gauges for the current model type**. Other model types' gauges retain their last real values — the exporter skips `_reset: true` files so untrained models don't show `epoch=0` on the dashboard. Each zeroed-out file includes `_reset: true` and `_trace.reset_by` to distinguish stale resets from real training data.
 
 **Tests**: `TestResetStaleMetrics` in `tests/test_training.py` (6 tests covering JSON file cleanup for all model types, stale cross-model-type data overwrite, missing/corrupt files, Prometheus gauge reset for current model type only, and Ray gauge cache invalidation).
 
@@ -96,6 +112,20 @@ Sentimentizer is a PyTorch-based sentiment analysis pipeline with three model ar
 - `tests/test_training.py` — added `TestResetStaleMetrics` test class
 - `docs/metrics.md` — added "Stale Metrics Reset" section
 - `CLAUDE.md` — added stale metrics convention
+
+### Intra-Epoch Batch Snapshots
+
+**Problem**: The Grafana dashboard showed flat-zero metrics during training because epoch-level metrics were only written to the per-model JSON file after each epoch completed. During a multi-minute epoch, the dashboard showed no data at all.
+
+**Solution**: Added lightweight batch snapshot files written every N batches (10 for ModernBERT, 50 for RNN/Encoder/Decoder) for near-real-time dashboard visibility.
+
+- **`write_batch_snapshot()`** in `sentimentizer/metrics_publisher.py` writes `/tmp/sentimentizer_metrics/{model_type}_batch.json` containing `{epoch, batch, loss_ema, avg_loss, lr, _written_by, _written_at}`. This is a tiny file (~200 bytes) written atomically via `write_text()`.
+- **`_train_func()`** in `sentimentizer/trainer.py` calls `write_batch_snapshot()` every `ray_update_every` batches on rank 0.
+- **Standalone exporter** (`sentimentizer/exporter.py`) reads `{model_type}_batch.json` for intra-epoch `train_loss_ema`, `train_loss_avg`, and `batch` gauges. Falls back to the `batch_metrics` list in the epoch-end JSON if no snapshot file exists.
+- **`_reset_stale_metrics()`** removes `{model_type}_batch.json` files at training start so stale data doesn't appear.
+- **Critical bug fix**: When the epoch metrics file had `_reset: true`, the exporter was zeroing ALL gauges (including batch gauges) and skipping the batch snapshot read. Fixed to only zero epoch-level gauges and still read the batch snapshot.
+
+**Key files changed**: `sentimentizer/metrics_publisher.py`, `sentimentizer/trainer.py`, `sentimentizer/exporter.py`, `workflows/stages/train.py`, `scripts/generate_ray_dashboards.py`
 
 ## Architecture Quick Reference
 
@@ -138,7 +168,7 @@ tests/
   test_loader.py            — DataLoader, compute_pos_weight, dictionary numpy array handling
   test_dictionary_lifecycle.py — Dictionary save/load, _count_vocab_batch with numpy arrays
   test_rnn.py                — RNN/Encoder model integration + Ray distributed tests
-  test_skill.py      — Agent/tuning config tests
+  test_diagnose_model.py      — Agent/tuning config tests
   test_export_onnx.py — ONNX export, quantization, validation, _RNNOnnxWrapper
   test_router.py      — SetFit config, labels, seeds, dataset, augmentation
 ```
@@ -161,6 +191,27 @@ See [`docs/troubleshooting.md`](docs/troubleshooting.md) for common issues and f
 - GloVe match rate below 50%
 - Scheduler T_max and warmup issues
 - Class imbalance
+
+### Checkpointing
+
+All `make train*` targets enable checkpointing by default, saving to `checkpoints/<model>/` every epoch. This prevents total loss if the machine sleeps, crashes, or is interrupted.
+
+- **Default checkpoint dir**: `CHECKPOINT_DIR ?= checkpoints/$(MODEL)` in the Makefile
+- **Resume from checkpoint**: `make train-resume MODEL=modernbert`
+- **Disable checkpointing**: `make train-no-checkpoint`
+- **Checkpoint contents**: Model weights, optimizer state, scheduler state, epoch number, val_loss
+- **Best model**: `best_model.pth` saved whenever val_loss improves (controlled by `--checkpoint-best`, default True)
+- **Periodic checkpoints**: `checkpoint_epoch_N.pth` saved every N epochs (controlled by `--checkpoint-every`, default 1)
+
+The `train-resume` target uses `--resume-train` which calls `latest_checkpoint()` to find the most recent `checkpoint_epoch_*.pth` and restores model/optimizer/scheduler state.
+
+### Sleep Prevention
+
+All `make train*` targets automatically prevent system sleep during training using `systemd-inhibit` on Linux. This is detected at Makefile parse time — if `systemd-inhibit` is available, it wraps the training command; otherwise the command runs directly (no-op fallback).
+
+- **How it works**: `INHIBIT_SLEEP` is set to `systemd-inhibit --what=sleep --who='training' --why='Model training in progress' --mode=block` if the command is available, otherwise empty
+- **To disable**: `make train INHIBIT_SLEEP=` (empty override)
+- **Scope**: Only inhibits sleep (not idle shutdown or lid close) — `--what=sleep` is targeted
 
 ### Running tests
 
@@ -197,7 +248,7 @@ Grafana only reads provisioned dashboard files on **startup**, so a restart is r
 
 1. Add config dataclass in `sentimentizer/config.py`
 2. Add model class in `sentimentizer/models/`
-3. Add optimization/scheduler params in `sentimentizer/config.py` (`_get_opt_params`, `_get_sched_params`)
+3. Add optimization/scheduler params in `sentimentizer/config.py` (`_get_opt_params`, `_get_sched_params` — include `warmup_ratio`)
 4. Add model factory import in `sentimentizer/trainer.py` (`_train_func`, `new_trainer`)
 5. Add model import in `workflows/helpers.py` (`_load_model`, `_get_model_config`)
 
@@ -216,7 +267,7 @@ Grafana only reads provisioned dashboard files on **startup**, so a restart is r
 - **3-class classification**: Models output logits of shape `(B, 3)` with label mapping: 0=negative, 1=neutral, 2=positive. `LABEL_NAMES = ["negative", "neutral", "positive"]` is the single source of truth in `config.py` — import it, don't duplicate.
 - **Loss function**: `CrossEntropyLoss` (not `BCEWithLogitsLoss`). Target dtype is `torch.long` (not `torch.float32`). `FocalCrossEntropyLoss` in `sentimentizer/losses.py` for hard-example mining.
 - **`predict_batch()` returns lean prediction format**: Each result is `{"label": "positive", "score": 0.88, "token_count": 12, "model": "encoder"}` — explicit `label`, `score`, `token_count`, and `model` fields. `predict()` returns the same dict (it's `predict_batch([text])[0]`). The old `scores` dict and dynamic winning-class key (e.g., `"positive": 0.88`) have been removed.
-- **`predict_text()` on `BaseSentimentModel` still returns all 3 scores**: `{"negative": 0.05, "neutral": 0.12, "positive": 0.83}`. This is a different API surface used by `skill.py` and `hf.py` for model validation/export — it is NOT affected by the `predict_batch()` change.
+- **`predict_text()` on `BaseSentimentModel` still returns all 3 scores**: `{"negative": 0.05, "neutral": 0.12, "positive": 0.83}`. This is a different API surface used by `diagnose_model.py` and `hf.py` for model validation/export — it is NOT affected by the `predict_batch()` change.
 - **`classify_batch()` returns prediction with label, score, and token_count**: Each result is `{"prediction": {"label": "dietary", "score": 0.95, "token_count": 8}}` — no `text` or `category` key.
 - **Serving uses FastAPI + `@serve.ingress` with `/v1/` prefix**: Sentiment and router endpoints are under `v1` sub-app (`app.mount("/v1", v1)`). Health endpoints remain unversioned. Route handlers use `@v1.post("/predict")`, `@v1.get("/models")`, etc. Health uses `@app.get("/health/live")`, `@app.get("/health/ready")`, `@app.get("/health")`.
 - **CORS middleware**: `CORSMiddleware` added with `allow_origins=cfg.cors_origins` (default `["*"]`). Configurable via `SENTIMENTIZER_CORS_ORIGINS` env var (comma-separated). CORS is registered as outermost middleware (added last in code, processed first in request).
@@ -248,9 +299,9 @@ Grafana only reads provisioned dashboard files on **startup**, so a restart is r
 - **`prometheus_client` gauges** must NOT be created at module import time for Ray workers — use lazy init via `_get_ray_gauges()`
 - **`ray.init(ignore_reinit_error=True)`** in tests; `ray.shutdown()` in cleanup
 - All function signatures need type hints
-- **Always run lint before tests after code changes**: `make test-lint` (runs `ruff check .` then `pytest`). Alternatively, run `make lint` first, fix any findings, then `make test`. Never skip lint — it catches issues that tests won't.
+- **Always run lint and tests, but only when code changes are made**: Run linting and tests (such as `make check` or `pytest`) only when actual code changes have been introduced. Do not run them if the changes are limited to documentation or markdown files. When code changes are present, run `make test-lint` (runs `ruff check .` then `pytest`) or run `make lint` first, fix findings, then `make test` to catch any issues.
 - When iterating over DataFrame or batch columns containing token lists, use `list(doc_tokens)` with a `TypeError` catch — never `str(doc_tokens)`. Numpy arrays from parquet are iterable but not `isinstance(x, list)`, and `str()` produces array representations with wrapping quotes
-- Scheduler invariant: `T_max >= epochs_trained`. Transformers set `T_max = 2 * default_epochs` (gentle half-cosine); never train more epochs than `T_max` (this includes `_train_final_model`, which must use `default_epochs`, not a multiple)
+- Scheduler invariant: All models use per-batch scheduler stepping (`STEP_SCHEDULER_PER_BATCH = True` on `BaseSentimentModel`). The scheduler is rebuilt with real optimizer-step counts in `Trainer.fit()` / `_train_func()` once the DataLoader length is known. `T_max` and `warmup_epochs` in `SchedulerParams` are legacy fields from per-epoch stepping — `warmup_ratio` (default `0.06`) controls what fraction of total optimizer steps are spent warming up. `CosineAnnealingLR` is no longer used anywhere — all models use `_LinearWarmupCosineScheduler`.
 - `_LinearWarmupCosineScheduler` warmup must use `(step + 1) / warmup_steps` to avoid zero LR at step 0, and clamp `progress` to `1.0`
 - Tuned models save a sidecar config JSON (`best_model_<type>_config.json`) — `n_heads` can't be inferred from weights, so reconstruction needs it
 - **Target dtype is `torch.long`** for `CrossEntropyLoss` — never `.float()` on targets. This applies to both DataLoader and Ray paths. The bug was that three `.float()` casts existed in the Ray distributed path — all are now `.long()`.
@@ -263,6 +314,8 @@ Grafana only reads provisioned dashboard files on **startup**, so a restart is r
 - **`weight_smoothing`** parameter (default `0.5`) controls class weight aggressiveness in `compute_class_weights()`: `1.0` = full inverse frequency, `0.0` = uniform weights
 - **`label_smoothing`** default is `0.1` for 3-class `CrossEntropyLoss`
 - **`neutral_oversample_ratio`** (default `0.0`) targets a moderate neutral class ratio; `0.20` = oversample neutral to 20% of training data
+- **Checkpointing is enabled by default**: All `make train*` targets pass `--checkpoint-dir checkpoints/<MODEL> --checkpoint-every 1`. Use `make train-no-checkpoint` to disable. Resume with `make train-resume MODEL=<type>`. The `TrainerConfig.checkpoint_dir` default is `""` (disabled) — checkpointing is only enabled via CLI/Makefile, not in the config dataclass itself.
+- **Sleep prevention is enabled by default**: All `make train*` targets automatically use `systemd-inhibit --what=sleep` on Linux to prevent the system from sleeping during training. Detected at Makefile parse time via `INHIBIT_SLEEP`. Override with `make train INHIBIT_SLEEP=` to disable.
 
 ### ONNX Export
 

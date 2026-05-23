@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -36,6 +37,8 @@ class RNN(BaseSentimentModel):
         verbose: Whether to log debug shapes
         dropout: Dropout probability
     """
+
+    MODEL_TYPE: str = "rnn"
 
     def __init__(
         self,
@@ -96,20 +99,27 @@ class RNN(BaseSentimentModel):
 
             self.embed_layer.weight.register_hook(_freeze_glove_grads)
 
-    def forward(self, inputs: torch.Tensor, onnx_export: bool = False) -> torch.Tensor:
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        onnx_export: bool = False,
+        **kwargs: Any,
+    ) -> torch.Tensor:
         """Forward pass producing raw logits.
 
         Args:
-            inputs: Token IDs of shape (batch, seq_len)
+            input_ids: Token IDs of shape (batch, seq_len)
                     Zero-padding is used to compute sequence lengths.
             onnx_export: If True, skip pack_padded_sequence for ONNX compatibility.
                          Uses masked LSTM output instead. Slightly different numerics.
                          Do NOT pass this manually — it is set by _RNNOnnxWrapper
                          during torch.onnx.export() tracing.
+            **kwargs: Ignored.
 
         Returns:
-            Logits of shape (batch,)
+            Logits of shape ``(batch, num_classes)``
         """
+        inputs = input_ids
         embeds = self.embed_layer(inputs)  # (B, seq_len, emb_dim)
         embeds = self.dropout_layer(embeds)
         if self.verbose:

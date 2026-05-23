@@ -134,7 +134,7 @@ def export_model_to_onnx(
         )
     else:
         dynamic_shapes = {
-            "inputs": {
+            "input_ids": {
                 0: torch.export.Dim.DYNAMIC,
                 1: torch.export.Dim.DYNAMIC,
             }
@@ -327,6 +327,18 @@ def export_pipeline(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Step 1: Load model
+    from sentimentizer.models.base import _MODEL_REGISTRY, _ensure_registry
+
+    _ensure_registry()
+    if model_type in _MODEL_REGISTRY:
+        ModelClass = _MODEL_REGISTRY[model_type]["model_class"]
+        if not getattr(ModelClass, "SUPPORTS_ONNX", True):
+            raise NotImplementedError(
+                f"ONNX export via this code path is not supported for {ModelClass.__name__}. "
+                f"HuggingFace models need optimum.exporters.onnx (optimum>=1.24.0) with "
+                f"attn_implementation='eager'; integrating that is a separate plan."
+            )
+
     logger.info(f"Loading {model_type} model for export...")
     model = load_model_for_export(model_type, device)
 

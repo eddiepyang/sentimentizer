@@ -551,19 +551,19 @@ class ClassificationMetrics:
 
 ### `workflows/stages/diagnose.py`
 
-- This file is **environment and pipeline diagnostics only** (no `torch.sigmoid` / model inference). It calls `diagnose_training_issues()` from `sentimentizer/agent/skill.py`, which is the actual code that needs 3-class updates:
-  - Update `diagnose_training_issues()` in `skill.py` to check for `num_classes=3` in model weights, validate 3-class label distribution, and update imbalance ratio check for 3 classes instead of 2
+- This file is **environment and pipeline diagnostics only** (no `torch.sigmoid` / model inference). It calls `diagnose_training_issues()` from `sentimentizer/agent/diagnose_model.py`, which is the actual code that needs 3-class updates:
+  - Update `diagnose_training_issues()` in `diagnose_model.py` to check for `num_classes=3` in model weights, validate 3-class label distribution, and update imbalance ratio check for 3 classes instead of 2
   - The workflow stage itself (`diagnose.py`) needs no changes — it just prints results
 
 ### `sentimentizer/hf.py`
 
 - **Audit and update** for 3-class: model card generation should include `num_classes=3` and `label_names`; model config upload should pass `num_classes`; weight download should handle `_metadata.num_classes` detection (consistent with `get_trained_model()` in PR 2)
 - ⚠️ **Binary-hardcoded lines to change**:
-  - `_format_metrics_section()` lines 134-143: `metric_keys` list references `best_positive_accuracy`, `best_negative_accuracy`, `best_precision`, `best_recall` — replace with per-class metric keys (`best_negative_f1`, `best_neutral_recall`, `best_macro_f1`, etc.)
+- `_format_metrics_section()` lines 134-143: `metric_keys` list references `best_positive_accuracy`, `best_negative_accuracy`, `best_precision`, `best_recall` — replace with per-class metric keys (`best_negative_f1`, `best_neutral_recall`, `best_macro_f1`, etc.)
   - `_format_usage_section()` line 260: `# >0.5 = positive, <0.5 = negative` — update usage example to show `dict` output with 3-class probabilities
-  - `_push_to_hub()` in `agent/skill.py` lines 363-371: passes `best_positive_accuracy`, `best_negative_accuracy` to `push_model_to_hub()` — must match new metric names
+  - `_push_to_hub()` in `agent/diagnose_model.py` lines 363-371: passes `best_positive_accuracy`, `best_negative_accuracy` to `push_model_to_hub()` — must match new metric names
 
-### `sentimentizer/agent/skill.py`
+### `sentimentizer/agent/diagnose_model.py`
 
 - **`pos_weight` field** in `TrainingConfig` (~line 125): Replace with `class_weights`, `loss_type`, `focal_gamma`, `label_smoothing`, `weight_smoothing`
 - **`pos_weight` usage** in `_run_single()` (~line 473) and `_run_distributed()` (~line 549): Pass `class_weights` instead

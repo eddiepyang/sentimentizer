@@ -1,23 +1,29 @@
-.PHONY: setup setup-ci setup-dev download-data train train-rnn train-encoder train-decoder \
-       train-distributed train-quick serve test test-lint lint format check clean docker-build docker-run \
+.PHONY: setup setup-ci setup-dev download-data train train-rnn train-encoder train-decoder train-modernbert \
+       train-distributed train-quick train-no-checkpoint train-resume serve test test-lint lint format check ci clean docker-build docker-run \
  	   gpu-reset tune tune-rnn tune-encoder tune-decoder tune-standalone \
  	   start-metrics stop-metrics setup-dashboards start-exporter stop-exporter stop-ray \
- 	   upload-rnn upload-encoder upload-decoder download-rnn download-encoder download-decoder \
+ 	   upload-rnn upload-encoder upload-decoder upload-modernbert upload-router \
+ 	   download-rnn download-encoder download-decoder download-modernbert \
  	   push-hub pull-hub diagnose diagnose-env diagnose-pipeline \
  	   router-augment router-train router-evaluate router-pipeline upload-router
 
 # Default device: use auto-detect (cuda > mps > cpu)
 DEVICE ?= auto
 # Default model type
-MODEL ?= rnn
+MODEL ?= encoder
 # Default number of lines to load
 STOP ?= 300000
 # Default run type (new or update)
 RUN_TYPE ?= new
-# Checkpoint directory (empty = no checkpointing)
-CHECKPOINT_DIR ?=
+# Checkpoint directory — checkpointing is enabled by default for all training.
+# To disable checkpointing, use: make train-no-checkpoint
+CHECKPOINT_DIR ?= checkpoints/$(MODEL)
 # Default metrics exporter port
 EXPORTER_PORT ?= 8081
+# Sleep prevention — uses systemd-inhibit on Linux to prevent system sleep
+# during training. Automatically detected; no action needed.
+# To disable: make train INHIBIT_SLEEP=
+INHIBIT_SLEEP := $(shell command -v systemd-inhibit >/dev/null 2>&1 && echo "systemd-inhibit --what=sleep --who='training' --why='Model training in progress' --mode=block" || echo "")
 
 # ──────────────────────────────────────────────
 # Setup
@@ -25,20 +31,20 @@ EXPORTER_PORT ?= 8081
 
 ## Install dependencies with CUDA-enabled PyTorch (for local GPU development)
 setup:
-	uv sync --extra ray
+	uv sync --extra ray --extra transformers --extra router --extra onnx
 
 ## Install dependencies with CPU-only PyTorch (for CI or machines without GPU)
 ## Installs the CPU-only torch wheel from PyTorch's index, then syncs the rest.
 setup-ci:
 	uv pip install --index-url https://download.pytorch.org/whl/cpu torch
-	uv sync --extra ray
+	uv sync --extra ray --extra transformers --extra router --extra onnx
 
 setup-mps:
-	uv sync
+	uv sync --extra transformers --extra router --extra onnx
 
 ## Install dependencies with dev tools (pytest, ruff, black, etc.)
 setup-dev:
-	uv sync --extra dev
+	uv sync --extra dev --extra ray --extra transformers --extra router --extra onnx
 
 # ──────────────────────────────────────────────
 # Data
@@ -52,45 +58,54 @@ download-data:
 # Training
 # ──────────────────────────────────────────────
 
-## Train a model (defaults: --model rnn --device auto --stop 10000)
+## Train a model (checkpointing enabled by default, saves to checkpoints/<MODEL>/)
 train:
-	uv run sentimentizer --model $(MODEL) --device $(DEVICE) --run-type $(RUN_TYPE) run --stop $(STOP) --save
+	$(INHIBIT_SLEEP) uv run sentimentizer --model $(MODEL) --device $(DEVICE) --run-type $(RUN_TYPE) run --stop $(STOP) \
+		--checkpoint-dir $(CHECKPOINT_DIR) --checkpoint-every 1 --save
 
 ## Train RNN model
 train-rnn:
-	uv run sentimentizer --model rnn --device $(DEVICE) --run-type $(RUN_TYPE) run --stop $(STOP) --save
+	$(INHIBIT_SLEEP) uv run sentimentizer --model rnn --device $(DEVICE) --run-type $(RUN_TYPE) run --stop $(STOP) \
+		--checkpoint-dir checkpoints/rnn --checkpoint-every 1 --save
 
 ## Train Transformer Encoder model (recommended)
 train-encoder:
-	uv run sentimentizer --model encoder --device $(DEVICE) --run-type $(RUN_TYPE) run --stop $(STOP) --save
+	$(INHIBIT_SLEEP) uv run sentimentizer --model encoder --device $(DEVICE) --run-type $(RUN_TYPE) run --stop $(STOP) \
+		--checkpoint-dir checkpoints/encoder --checkpoint-every 1 --save
 
 ## Train Transformer Decoder model
 train-decoder:
-	uv run sentimentizer --model decoder --device $(DEVICE) --run-type $(RUN_TYPE) run --stop $(STOP) --save
+	$(INHIBIT_SLEEP) uv run sentimentizer --model decoder --device $(DEVICE) --run-type $(RUN_TYPE) run --stop $(STOP) \
+		--checkpoint-dir checkpoints/decoder --checkpoint-every 1 --save
+
+## Train ModernBERT model
+train-modernbert:
+	$(INHIBIT_SLEEP) uv run sentimentizer --model modernbert --device $(DEVICE) --run-type $(RUN_TYPE) run --stop $(STOP) \
+		--checkpoint-dir checkpoints/modernbert --checkpoint-every 1 --save
 
 ## Quick training run with fewer rows for iteration
 train-quick:
-	uv run sentimentizer --model $(MODEL) --device $(DEVICE) --run-type $(RUN_TYPE) run --stop 5000 --save
+	$(INHIBIT_SLEEP) uv run sentimentizer --model $(MODEL) --device $(DEVICE) --run-type $(RUN_TYPE) run --stop 5000 \
+		--checkpoint-dir $(CHECKPOINT_DIR) --checkpoint-every 1 --save
 
-## Train with checkpointing enabled (saves to CHECKPOINT_DIR, defaults to checkpoints/)
-train-checkpoint:
-	uv run sentimentizer --model $(MODEL) --device $(DEVICE) --run-type $(RUN_TYPE) run --stop $(STOP) \
-		--checkpoint-dir $(or $(CHECKPOINT_DIR),checkpoints/) --checkpoint-every 1 --save
+## Train without checkpointing (override CHECKPOINT_DIR to disable)
+train-no-checkpoint:
+	$(INHIBIT_SLEEP) uv run sentimentizer --model $(MODEL) --device $(DEVICE) --run-type $(RUN_TYPE) run --stop $(STOP) --save
 
 ## Resume training from the latest checkpoint
 train-resume:
-	uv run sentimentizer --model $(MODEL) --device $(DEVICE) --run-type $(RUN_TYPE) run --stop $(STOP) \
-		--checkpoint-dir $(or $(CHECKPOINT_DIR),checkpoints/) --resume-train --save
+	$(INHIBIT_SLEEP) uv run sentimentizer --model $(MODEL) --device $(DEVICE) --run-type $(RUN_TYPE) run --stop $(STOP) \
+		--checkpoint-dir $(CHECKPOINT_DIR) --resume-train --save
 
 ## Distributed training with Ray Train (2 workers by default)
 train-distributed:
-	uv run sentimentizer --model $(MODEL) --device $(DEVICE) --run-type $(RUN_TYPE) run --stop $(STOP) \
-		--distributed --save
+	$(INHIBIT_SLEEP) uv run sentimentizer --model $(MODEL) --device $(DEVICE) --run-type $(RUN_TYPE) run --stop $(STOP) \
+		--distributed --checkpoint-dir $(CHECKPOINT_DIR) --checkpoint-every 1 --save
 
 ## Distributed training with custom worker count (usage: make train-dist-workers WORKERS=4)
 train-dist-workers:
-	uv run sentimentizer --model $(MODEL) --device $(DEVICE) --run-type $(RUN_TYPE) run --stop $(STOP) \
-		--distributed --num-workers $(WORKERS) --save
+	$(INHIBIT_SLEEP) uv run sentimentizer --model $(MODEL) --device $(DEVICE) --run-type $(RUN_TYPE) run --stop $(STOP) \
+		--distributed --num-workers $(WORKERS) --checkpoint-dir $(CHECKPOINT_DIR) --checkpoint-every 1 --save
 
 # ──────────────────────────────────────────────
 # Individual pipeline stages
@@ -104,31 +119,32 @@ extract:
 tokenize:
 	uv run sentimentizer --model $(MODEL) --run-type $(RUN_TYPE) tokenize
 
-## Train only (no extract/tokenize)
+## Train only (no extract/tokenize, checkpointing enabled)
 train-only:
-	uv run sentimentizer --model $(MODEL) --device $(DEVICE) --run-type $(RUN_TYPE) train --save
+	$(INHIBIT_SLEEP) uv run sentimentizer --model $(MODEL) --device $(DEVICE) --run-type $(RUN_TYPE) train \
+		--checkpoint-dir $(CHECKPOINT_DIR) --checkpoint-every 1 --save
 
 # ──────────────────────────────────────────────
 # Tuning
 # ──────────────────────────────────────────────
 
-## Run tuning skill with agent-guided loop and model validation
+## Run tuning workflow with agent-guided loop and model validation
 tune:
 	uv run sentimentizer --model $(MODEL) tune --save
 
-## Run tuning skill for RNN
+## Run tuning workflow for RNN
 tune-rnn:
 	uv run sentimentizer --model rnn tune --save
 
-## Run tuning skill for Encoder
+## Run tuning workflow for Encoder
 tune-encoder:
 	uv run sentimentizer --model encoder tune --save
 
-## Run tuning skill for Decoder
+## Run tuning workflow for Decoder
 tune-decoder:
 	uv run sentimentizer --model decoder tune --save
 
-## Run tuning skill in standalone mode (no LLM agent, single Ray Tune sweep)
+## Run tuning workflow in standalone mode (no LLM agent, single Ray Tune sweep)
 tune-standalone:
 	uv run sentimentizer --model $(MODEL) tune --mode standalone --save
 
@@ -137,11 +153,11 @@ tune-standalone:
 tune-test:
 	uv run sentimentizer --model $(MODEL) tune --mode standalone --samples $(SAMPLES) --no-validate --save
 
-## Run tuning skill with custom samples and iterations (usage: make tune-custom SAMPLES=50 ITERATIONS=10)
+## Run tuning workflow with custom samples and iterations (usage: make tune-custom SAMPLES=50 ITERATIONS=10)
 tune-custom:
 	uv run sentimentizer --model $(MODEL) tune --samples $(SAMPLES) --max-iterations $(ITERATIONS) --save
 
-## Run tuning skill without model validation
+## Run tuning workflow without model validation
 tune-no-validate:
 	uv run sentimentizer --model $(MODEL) tune --no-validate --save
 
@@ -180,12 +196,16 @@ upload-encoder:
 upload-decoder:
 	uv run sentimentizer --model decoder hf push
 
+## Upload ModernBERT weights + configuration to Hugging Face Hub
+upload-modernbert:
+	uv run sentimentizer --model modernbert hf push
+
 ## Upload Router model to Hugging Face Hub
 upload-router:
 	uv run sentimentizer router push
 
 ## Upload all models to Hugging Face Hub
-push-hub: upload-rnn upload-encoder upload-decoder upload-router
+push-hub: upload-rnn upload-encoder upload-decoder upload-modernbert upload-router
 
 ## Download RNN weights + dictionary from Hugging Face Hub
 download-rnn:
@@ -199,8 +219,12 @@ download-encoder:
 download-decoder:
 	uv run sentimentizer --model decoder hf pull
 
+## Download ModernBERT weights + configuration from Hugging Face Hub
+download-modernbert:
+	uv run sentimentizer --model modernbert hf pull
+
 ## Download all models from Hugging Face Hub
-pull-hub: download-rnn download-encoder download-decoder
+pull-hub: download-rnn download-encoder download-decoder download-modernbert
 
 # ──────────────────────────────────────────────
 # Diagnostics
@@ -260,6 +284,14 @@ check:
 	uv run black .
 	uv run ruff check . --fix
 	uv run ruff check .
+
+## Run full CI verification locally (format, lint, test, and build)
+ci: check test
+	@echo "==> Cleaning old build artifacts..."
+	rm -rf dist/
+	@echo "==> Verifying package builds successfully..."
+	uv build
+	@echo "==> CI verification passed successfully!"
 
 # ──────────────────────────────────────────────
 # Docker

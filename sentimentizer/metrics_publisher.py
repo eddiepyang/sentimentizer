@@ -63,9 +63,68 @@ def get_metrics_dir() -> Path:
     return _METRICS_DIR
 
 
+def write_batch_snapshot(
+    *,
+    model_type: str,
+    run_id: str = "",
+    epoch: int,
+    batch: int,
+    loss_ema: float,
+    avg_loss: float,
+    lr: float,
+    grad_norm: float | None = None,
+    throughput: float | None = None,
+) -> None:
+    """Write a lightweight batch-level snapshot for real-time dashboard visibility.
+
+    Written every N batches during training (controlled by ``ray_update_every``).
+    The standalone exporter reads this file alongside the epoch metrics file to
+    provide intra-epoch gauge values on the Grafana dashboard.
+
+    This is intentionally a small file (only 6 fields) — it is the sole
+    source for intra-epoch gauges on the Grafana dashboard.
+
+    Args:
+        model_type: Model type label.
+        run_id: Unique training run ID.
+        epoch: Current epoch number.
+        batch: Current batch number within the epoch.
+        loss_ema: Fast-moving EMA loss value.
+        avg_loss: Slow-moving epoch-average loss value.
+        lr: Current learning rate.
+    """
+    import contextlib
+
+    metrics_dir = get_metrics_dir()
+    with contextlib.suppress(OSError):
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+
+    path = metrics_dir / f"{model_type}_batch.json"
+
+    data: dict[str, Any] = {
+        "epoch": int(epoch),
+        "batch": int(batch),
+        "loss_ema": float(loss_ema),
+        "avg_loss": float(avg_loss),
+        "lr": float(lr),
+        "run_id": run_id,
+        "_written_by": model_type,
+        "_written_at": time.time(),
+    }
+
+    if grad_norm is not None:
+        data["grad_norm"] = float(grad_norm)
+    if throughput is not None:
+        data["throughput"] = float(throughput)
+
+    with contextlib.suppress(OSError):
+        path.write_text(json.dumps(data))
+
+
 def write_epoch_metrics_to_file(
     *,
     model_type: str,
+    run_id: str = "",
     epoch: int,
     train_loss: float,
     val_loss: float,
@@ -77,6 +136,15 @@ def write_epoch_metrics_to_file(
     Each model type writes to its own file
     (``/tmp/sentimentizer_metrics/{model_type}_metrics.json``) so concurrent
     training processes never race on a shared JSON file.
+
+    Args:
+        model_type: Model type label.
+        run_id: Unique training run ID.
+        epoch: Current epoch number.
+        train_loss: Average training loss for the epoch.
+        val_loss: Average validation loss for the epoch.
+        metrics: Computed classification metrics.
+        lr: Current learning rate.
     """
     import contextlib
 
@@ -117,6 +185,7 @@ def write_epoch_metrics_to_file(
         ),
         "epoch": int(epoch),
         "lr": float(lr) if lr is not None else None,
+        "run_id": run_id,
         "_written_by": model_type,
         "_written_at": time.time(),
     }
@@ -169,6 +238,7 @@ def _set_ray_gauges(
 
 def _set_prometheus_gauges(
     model_type: str,
+    run_id: str,
     epoch: int,
     train_loss: float,
     val_loss: float,
@@ -210,7 +280,7 @@ def _set_prometheus_gauges(
     except ImportError:
         return
 
-    lbl = {"model_type": model_type}
+    lbl = {"model_type": model_type, "run_id": run_id}
     TRAINING_TRAIN_LOSS.labels(**lbl).set(float(train_loss))
     TRAINING_VAL_LOSS.labels(**lbl).set(float(val_loss))
     TRAINING_EPOCH.labels(**lbl).set(epoch)
@@ -255,6 +325,7 @@ def _set_prometheus_gauges(
 def publish_epoch_metrics(
     *,
     model_type: str,
+    run_id: str = "",
     epoch: int,
     train_loss: float,
     val_loss: float,
@@ -268,7 +339,8 @@ def publish_epoch_metrics(
     blocks that were previously in Trainer.evaluate() and _train_func().
 
     Args:
-        model_type: Model type label (e.g. "rnn", "encoder", "decoder").
+        model_type: Model type label (e.g. "rnn", "encoder", "decoder", "modernbert").
+        run_id: Unique training run ID.
         epoch: Current training epoch number.
         train_loss: Average training loss for the epoch.
         val_loss: Average validation loss for the epoch.
@@ -292,6 +364,7 @@ def publish_epoch_metrics(
     # 2. Standalone Prometheus exporter gauges (best-effort, skip if not importable)
     _set_prometheus_gauges(
         model_type=model_type,
+        run_id=run_id,
         epoch=epoch,
         train_loss=train_loss,
         val_loss=val_loss,
@@ -302,6 +375,7 @@ def publish_epoch_metrics(
     # 3. Persist to JSON for the standalone exporter
     write_epoch_metrics_to_file(
         model_type=model_type,
+        run_id=run_id,
         epoch=epoch,
         train_loss=train_loss,
         val_loss=val_loss,
