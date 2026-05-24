@@ -48,9 +48,7 @@ class TestRequireApiKey:
             os.environ["SENTIMENTIZER_API_KEYS"] = "test-key-123"
             app = self._make_app()
             client = TestClient(app, raise_server_exceptions=False)
-            resp = client.get(
-                "/test", headers={"authorization": "Bearer wrong-key"}
-            )
+            resp = client.get("/test", headers={"authorization": "Bearer wrong-key"})
             assert resp.status_code == 401
         finally:
             if old is not None:
@@ -64,9 +62,7 @@ class TestRequireApiKey:
             os.environ["SENTIMENTIZER_API_KEYS"] = "test-key-123"
             app = self._make_app()
             client = TestClient(app, raise_server_exceptions=False)
-            resp = client.get(
-                "/test", headers={"authorization": "Bearer test-key-123"}
-            )
+            resp = client.get("/test", headers={"authorization": "Bearer test-key-123"})
             assert resp.status_code == 200
             assert resp.json()["key_prefix"] == "test-key"
         finally:
@@ -81,9 +77,7 @@ class TestRequireApiKey:
             os.environ["SENTIMENTIZER_API_KEYS"] = "test-key-123"
             app = self._make_app()
             client = TestClient(app, raise_server_exceptions=False)
-            resp = client.get(
-                "/test", headers={"authorization": "Basic dGVzdA=="}
-            )
+            resp = client.get("/test", headers={"authorization": "Basic dGVzdA=="})
             assert resp.status_code == 401
         finally:
             if old is not None:

@@ -323,6 +323,8 @@ def test_resolve_device_warns_on_cpu_torch_with_nvidia_libs(
     # Simulate CPU-only torch (+cpu suffix) with NVIDIA libs present
     monkeypatch.setattr(torch, "__version__", "2.11.0+cpu")
     monkeypatch.setattr(device_mod, "_has_nvidia_libs", lambda: True)
+    if hasattr(torch.backends, "mps"):
+        monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
 
     import logging
 
@@ -346,6 +348,8 @@ def test_resolve_device_no_warning_when_no_nvidia_libs(
 
     monkeypatch.setattr(torch, "__version__", "2.11.0+cpu")
     monkeypatch.setattr(device_mod, "_has_nvidia_libs", lambda: False)
+    if hasattr(torch.backends, "mps"):
+        monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
 
     import logging
 

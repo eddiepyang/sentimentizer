@@ -198,9 +198,7 @@ class JobStore:
         status_filter: str | None = None,
         model_filter: str | None = None,
     ) -> dict[str, Any]:
-        return self._logic.list_jobs(
-            api_key, page_size, page_token, status_filter, model_filter
-        )
+        return self._logic.list_jobs(api_key, page_size, page_token, status_filter, model_filter)
 
     def reap_expired(self) -> int:
         return self._logic.reap_expired()

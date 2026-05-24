@@ -198,11 +198,11 @@ By default, the server binds to `0.0.0.0:8000`.
 > ```bash
 > uv sync --extra ray --extra diffusion
 > ```
-> Enable image generation by setting `SENTIMENTIZER_SD_ENABLED=1` and/or `SENTIMENTIZER_FLUX_ENABLED=1`,
-> and provide API keys via `SENTIMENTIZER_API_KEYS`. Image routes require authentication;
+> Enable image generation by setting `SENTIMENTIZER_SD_ENABLED=1`, `SENTIMENTIZER_FLUX_ENABLED=1`,
+> and/or `SENTIMENTIZER_SD35_ENABLED=1`, and provide API keys via `SENTIMENTIZER_API_KEYS`. Image routes require authentication;
 > sentiment and router routes remain unauthenticated.
 
-Image generation uses separate GPU-backed Ray Serve deployments (SDDeployment, FluxDeployment)
+Image generation uses separate GPU-backed Ray Serve deployments (SDDeployment, FluxDeployment, SD35Deployment)
 behind a lightweight CPU dispatcher (ImagesDispatcher). The [diffusion serving plan](diffusion_serving_plan.md)
 has full architectural details.
 
@@ -243,7 +243,7 @@ has full architectural details.
   }
   ```
 
-Supported parameters: `prompt` (required), `model` (`"sd"` or `"flux"`), `negative_prompt`,
+Supported parameters: `prompt` (required), `model` (`"sd"`, `"flux"`, or `"sd35"`), `negative_prompt`,
 `steps`, `guidance_scale`, `width`, `height`, `seed`, `response_format` (`"b64_json"` or `"url"`),
 `output_format` (`"png"`, `"webp"`, `"jpeg"`), `user` (opaque abuse-tracking ID),
 `Idempotency-Key` header (deduplication).

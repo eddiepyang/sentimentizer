@@ -148,9 +148,7 @@ class TestJobStoreList:
         store = JobStoreLogic()
         store.submit("sd", None, "alpha-key-12345678")
         store.submit("flux", None, "alpha-key-12345678")
-        result = store.list_jobs(
-            api_key="alpha-key-12345678", model_filter="flux"
-        )
+        result = store.list_jobs(api_key="alpha-key-12345678", model_filter="flux")
         assert len(result["jobs"]) == 1
         assert result["jobs"][0]["model"] == "flux"
 
@@ -158,9 +156,7 @@ class TestJobStoreList:
         store = JobStoreLogic()
         job_id = store.submit("sd", None, "alpha-key-12345678")
         store.set_succeeded(job_id, {"id": "img_1"})
-        result = store.list_jobs(
-            api_key="alpha-key-12345678", status_filter="succeeded"
-        )
+        result = store.list_jobs(api_key="alpha-key-12345678", status_filter="succeeded")
         assert len(result["jobs"]) == 1
         assert result["jobs"][0]["status"] == "succeeded"
 

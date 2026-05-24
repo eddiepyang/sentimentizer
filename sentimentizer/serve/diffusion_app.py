@@ -166,10 +166,7 @@ class ImagesDispatcher:
                 status_code=400,
                 detail={
                     "code": "model_unavailable",
-                    "message": (
-                        f"Model '{model}' is not enabled. "
-                        f"Available: {avail}"
-                    ),
+                    "message": (f"Model '{model}' is not enabled. " f"Available: {avail}"),
                 },
             )
         return self._handles[model]
@@ -228,11 +225,7 @@ class ImagesDispatcher:
         handle = self._get_handle(model_name)
 
         defaults = self._get_predictor_defaults(model_name)
-        steps = (
-            body.steps
-            if body.steps is not None
-            else defaults.get("default_steps", 30)
-        )
+        steps = body.steps if body.steps is not None else defaults.get("default_steps", 30)
         guidance_scale = (
             body.guidance_scale
             if body.guidance_scale is not None
@@ -247,10 +240,7 @@ class ImagesDispatcher:
                 status_code=400,
                 detail={
                     "code": "invalid_dimensions",
-                    "message": (
-                        f"width×height ({w_h}) exceeds "
-                        f"model max ({max_pixels})"
-                    ),
+                    "message": (f"width×height ({w_h}) exceeds " f"model max ({max_pixels})"),
                 },
             )
         if body.width % dim_alignment or body.height % dim_alignment:
@@ -259,8 +249,7 @@ class ImagesDispatcher:
                 detail={
                     "code": "invalid_dimensions",
                     "message": (
-                        f"{model_name} requires dimensions "
-                        f"aligned to {dim_alignment}px"
+                        f"{model_name} requires dimensions " f"aligned to {dim_alignment}px"
                     ),
                 },
             )
@@ -286,9 +275,7 @@ class ImagesDispatcher:
         latency = time.perf_counter() - start
 
         img_bytes = _encode_pil(image, format=body.output_format)
-        image_b64 = (
-            _b64(img_bytes) if body.response_format == "b64_json" else None
-        )
+        image_b64 = _b64(img_bytes) if body.response_format == "b64_json" else None
         image_url = None
 
         response = {
@@ -353,10 +340,7 @@ class ImagesDispatcher:
                 status_code=400,
                 detail={
                     "code": "model_unavailable",
-                    "message": (
-                        f"Model '{name}' is not enabled. "
-                        f"Available: {avail}"
-                    ),
+                    "message": (f"Model '{name}' is not enabled. " f"Available: {avail}"),
                 },
             )
         info = await self._handles[name].info.remote()
@@ -380,11 +364,7 @@ class ImagesDispatcher:
         handle = self._get_handle(model_name)
 
         defaults = self._get_predictor_defaults(model_name)
-        steps = (
-            body.steps
-            if body.steps is not None
-            else defaults.get("default_steps", 30)
-        )
+        steps = body.steps if body.steps is not None else defaults.get("default_steps", 30)
         guidance_scale = (
             body.guidance_scale
             if body.guidance_scale is not None
@@ -399,10 +379,7 @@ class ImagesDispatcher:
                 status_code=400,
                 detail={
                     "code": "invalid_dimensions",
-                    "message": (
-                        f"width\u00d7height ({w_h}) exceeds "
-                        f"model max ({max_pixels})"
-                    ),
+                    "message": (f"width\u00d7height ({w_h}) exceeds " f"model max ({max_pixels})"),
                 },
             )
         if body.width % dim_alignment or body.height % dim_alignment:
@@ -411,8 +388,7 @@ class ImagesDispatcher:
                 detail={
                     "code": "invalid_dimensions",
                     "message": (
-                        f"{model_name} requires dimensions "
-                        f"aligned to {dim_alignment}px"
+                        f"{model_name} requires dimensions " f"aligned to {dim_alignment}px"
                     ),
                 },
             )
@@ -425,9 +401,7 @@ class ImagesDispatcher:
             self._idem.check_conflict(api_key, idempotency_key, _body_hash(body))
             cached = self._idem.get(api_key, idempotency_key)
             if cached is not None:
-                response.headers["Location"] = (
-                    f"/v1/images/jobs/{cached['job_id']}"
-                )
+                response.headers["Location"] = f"/v1/images/jobs/{cached['job_id']}"
                 return cached
 
         ref = handle.generate.remote(
@@ -483,9 +457,7 @@ class ImagesDispatcher:
             except ray.exceptions.TaskCancelledError:
                 pass
             except Exception as exc:
-                await store.set_failed.remote(
-                    job_id, "generation_failed", str(exc)
-                )
+                await store.set_failed.remote(job_id, "generation_failed", str(exc))
             finally:
                 self._refs.pop(job_id, None)
 

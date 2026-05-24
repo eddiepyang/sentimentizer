@@ -528,14 +528,16 @@ class FluxDeployment:
 )
 @serve.ingress(app)
 class ImagesDispatcher:
-    """Front-door deployment with HTTP routes; forwards work to SD/FLUX actors."""
+    """Front-door deployment with HTTP routes; forwards work to SD/FLUX/SD35 actors."""
 
-    def __init__(self, sd: DeploymentHandle | None, flux: DeploymentHandle | None) -> None:
+    def __init__(self, sd: DeploymentHandle | None, flux: DeploymentHandle | None, sd35: DeploymentHandle | None) -> None:
         self._handles = {}
         if sd:
             self._handles["sd"] = sd
         if flux:
             self._handles["flux"] = flux
+        if sd35:
+            self._handles["sd35"] = sd35
         self._idem = IdempotencyCache(ttl_s=600)
 
     def _get_handle(self, model: str) -> DeploymentHandle:
@@ -623,10 +625,11 @@ async def images_model_detail(self, name: str = Path(...)) -> dict:
   ```python
   sd_handle = SDDeployment.bind() if cfg.sd_enabled else None
   flux_handle = FluxDeployment.bind() if cfg.flux_enabled else None
+  sd35_handle = SD35Deployment.bind() if cfg.sd35_enabled else None
 
   deployments = {"sentimentizer": SentimentizerDeployment.bind()}
-  if sd_handle or flux_handle:
-      deployments["images"] = ImagesDispatcher.bind(sd_handle, flux_handle)
+  if sd_handle or flux_handle or sd35_handle:
+      deployments["images"] = ImagesDispatcher.bind(sd_handle, flux_handle, sd35_handle)
   serve.run(deployments)
   ```
 

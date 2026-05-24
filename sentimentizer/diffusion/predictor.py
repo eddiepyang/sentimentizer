@@ -196,13 +196,9 @@ class SDPredictor(DiffusionPredictor):
 
         call_kwargs: dict[str, Any] = {
             "prompt": prompt,
-            "num_inference_steps": (
-                steps if steps is not None else self.cfg.default_steps
-            ),
+            "num_inference_steps": (steps if steps is not None else self.cfg.default_steps),
             "guidance_scale": (
-                guidance_scale
-                if guidance_scale is not None
-                else self.cfg.default_guidance
+                guidance_scale if guidance_scale is not None else self.cfg.default_guidance
             ),
             "width": width,
             "height": height,
@@ -272,13 +268,9 @@ class FluxPredictor(DiffusionPredictor):
 
         call_kwargs: dict[str, Any] = {
             "prompt": prompt,
-            "num_inference_steps": (
-                steps if steps is not None else self.cfg.default_steps
-            ),
+            "num_inference_steps": (steps if steps is not None else self.cfg.default_steps),
             "guidance_scale": (
-                guidance_scale
-                if guidance_scale is not None
-                else self.cfg.default_guidance
+                guidance_scale if guidance_scale is not None else self.cfg.default_guidance
             ),
             "width": width,
             "height": height,
@@ -332,13 +324,9 @@ class SD35Predictor(DiffusionPredictor):
 
         call_kwargs: dict[str, Any] = {
             "prompt": prompt,
-            "num_inference_steps": (
-                steps if steps is not None else self.cfg.default_steps
-            ),
+            "num_inference_steps": (steps if steps is not None else self.cfg.default_steps),
             "guidance_scale": (
-                guidance_scale
-                if guidance_scale is not None
-                else self.cfg.default_guidance
+                guidance_scale if guidance_scale is not None else self.cfg.default_guidance
             ),
             "width": width,
             "height": height,
