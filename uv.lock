@@ -3398,9 +3398,10 @@ wheels = [
 
 [[package]]
 name = "sentimentizer"
-version = "0.311.2"
+version = "0.320.0"
 source = { editable = "." }
 dependencies = [
+    { name = "bitsandbytes" },
     { name = "click" },
     { name = "fastapi" },
     { name = "gensim" },
@@ -3422,6 +3423,7 @@ dependencies = [
     { name = "torch" },
     { name = "torchmetrics" },
     { name = "tqdm" },
+    { name = "transformers" },
 ]
 
 [package.optional-dependencies]
@@ -3448,10 +3450,6 @@ router = [
     { name = "requests" },
     { name = "sentence-transformers" },
 ]
-transformers = [
-    { name = "bitsandbytes" },
-    { name = "transformers" },
-]
 
 [package.dev-dependencies]
 dev = [
@@ -3466,7 +3464,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "bitsandbytes", marker = "extra == 'transformers'", specifier = ">=0.45.0" },
+    { name = "bitsandbytes", specifier = ">=0.45.0" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=26.3.0" },
     { name = "bumpver", marker = "extra == 'dev'", specifier = ">=2025.1131" },
     { name = "click", specifier = ">=8.3.0" },
@@ -3506,9 +3504,9 @@ requires-dist = [
     { name = "torch", specifier = ">=2.11.0" },
     { name = "torchmetrics", specifier = ">=1.9.0" },
     { name = "tqdm", specifier = ">=4.67.0" },
-    { name = "transformers", marker = "extra == 'transformers'", specifier = ">=4.48.0" },
+    { name = "transformers", specifier = ">=4.48.0" },
 ]
-provides-extras = ["ray", "transformers", "router", "onnx", "dev"]
+provides-extras = ["ray", "router", "onnx", "dev"]
 
 [package.metadata.requires-dev]
 dev = [

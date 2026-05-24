@@ -38,6 +38,8 @@ dependencies = [
     "huggingface_hub>=1.14.0",
     "click>=8.3.0",
     "tqdm>=4.67.0",
+    "transformers>=4.48.0",
+    "bitsandbytes>=0.45.0",
 ]
 
 [project.optional-dependencies]
@@ -47,10 +49,6 @@ ray = [
     "ray[train]>=2.55.1,<2.56.0",
     "ray[tune]>=2.55.1,<2.56.0",
     "optuna>=4.8.0",
-]
-transformers = [
-    "transformers>=4.48.0",
-    "bitsandbytes>=0.45.0",
 ]
 router = [
     "sentence-transformers>=4.0.0",
