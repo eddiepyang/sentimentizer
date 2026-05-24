@@ -5,7 +5,7 @@ on:
     types: [published]
   push:
     branches:
-      - master
+      - main
     paths:
       - 'pyproject.toml'
 
@@ -77,7 +77,7 @@ jobs:
     needs: [check-version, test]
     if: |
       needs.check-version.outputs.should_publish == 'true' &&
-      (github.event_name == 'push' || (github.event_name == 'release' && github.event.release.target_commitish == 'master'))
+      (github.event_name == 'push' || (github.event_name == 'release' && github.event.release.target_commitish == 'main'))
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
