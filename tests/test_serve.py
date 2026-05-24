@@ -18,7 +18,7 @@ import time
 from unittest.mock import MagicMock
 
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
@@ -125,6 +125,13 @@ def _run(coro):
     return asyncio.get_event_loop().run_until_complete(coro)
 
 
+def _mock_request():
+    """Build a mock Request with request_id for handler signature compatibility."""
+    req = MagicMock(spec=Request)
+    req.state.request_id = "test-req-id"
+    return req
+
+
 # ---------------------------------------------------------------------------
 # Test: _DummyServe stubs exist in source
 # ---------------------------------------------------------------------------
@@ -137,6 +144,56 @@ class TestDummyServe:
         assert "def start(self" in inspect.getsource(base)
         assert "def run(self" in inspect.getsource(base)
         assert "def shutdown(self" in inspect.getsource(base)
+
+    def test_dummy_serve_decorators(self):
+        from sentimentizer.serve.base import _DummyServe
+
+        dummy = _DummyServe()
+
+        # Test deployment
+        # 1. Bare (no parens)
+        @dummy.deployment
+        class MyClass1:
+            pass
+
+        assert MyClass1.__name__ == "MyClass1"
+
+        # 2. Call (with parens)
+        @dummy.deployment(num_replicas=2)
+        class MyClass2:
+            pass
+
+        assert MyClass2.__name__ == "MyClass2"
+
+        # Test ingress
+        # 1. Bare (no parens)
+        @dummy.ingress
+        class MyClass3:
+            pass
+
+        assert MyClass3.__name__ == "MyClass3"
+
+        # 2. Call (with parens)
+        @dummy.ingress(None)
+        class MyClass4:
+            pass
+
+        assert MyClass4.__name__ == "MyClass4"
+
+        # Test batch
+        # 1. Bare (no parens)
+        @dummy.batch
+        def my_fn1():
+            pass
+
+        assert my_fn1() is None
+
+        # 2. Call (with parens)
+        @dummy.batch(max_batch_size=10)
+        def my_fn2():
+            pass
+
+        assert my_fn2() is None
 
 
 # ---------------------------------------------------------------------------
@@ -290,7 +347,9 @@ class TestSentimentModelNotLoaded:
         )
 
         with pytest.raises(HTTPException) as exc_info:
-            _run(_SentimentizerDeployment.predict(dep, PredictRequest(text="hello")))
+            _run(
+                _SentimentizerDeployment.predict(dep, PredictRequest(text="hello"), _mock_request())
+            )
         assert exc_info.value.status_code == 503
         assert "Sentiment model not loaded" in exc_info.value.detail
 
@@ -300,7 +359,7 @@ class TestSentimentModelNotLoaded:
         )
 
         with pytest.raises(HTTPException) as exc_info:
-            _run(_SentimentizerDeployment.batch(dep, MagicMock(texts=["hello"])))
+            _run(_SentimentizerDeployment.batch(dep, MagicMock(texts=["hello"]), _mock_request()))
         assert exc_info.value.status_code == 503
 
 
@@ -319,7 +378,11 @@ class TestRouterNotLoaded:
         )
 
         with pytest.raises(HTTPException) as exc_info:
-            _run(_SentimentizerDeployment.router_predict(dep, MagicMock(text="hello")))
+            _run(
+                _SentimentizerDeployment.router_predict(
+                    dep, MagicMock(text="hello"), _mock_request()
+                )
+            )
         assert exc_info.value.status_code == 503
         assert "Router model not loaded" in exc_info.value.detail
 
@@ -332,7 +395,11 @@ class TestRouterNotLoaded:
         )
 
         with pytest.raises(HTTPException) as exc_info:
-            _run(_SentimentizerDeployment.router_batch(dep, MagicMock(texts=["hello"])))
+            _run(
+                _SentimentizerDeployment.router_batch(
+                    dep, MagicMock(texts=["hello"]), _mock_request()
+                )
+            )
         assert exc_info.value.status_code == 503
 
 
@@ -428,13 +495,21 @@ class TestMetricsEndpointRemoved:
 
 class TestV1Routes:
     def test_v1_routes_on_main_app(self):
-        """V1 routes should be registered on the main app."""
+        """Sentiment routes should be registered at both new and deprecated paths."""
         route_paths = [route.path for route in app.routes]
+        # Primary routes
+        assert "/v1/sentiment/predict" in route_paths
+        assert "/v1/sentiment/batch" in route_paths
+        assert "/v1/sentiment/tokenize" in route_paths
+        assert "/v1/sentiment/models" in route_paths
+        assert "/v1/sentiment/models/{model_name}" in route_paths
+        # Deprecated aliases (kept for backward compatibility)
         assert "/v1/predict" in route_paths
         assert "/v1/batch" in route_paths
         assert "/v1/tokenize" in route_paths
         assert "/v1/models" in route_paths
         assert "/v1/models/{model_name}" in route_paths
+        # Router routes unchanged
         assert "/v1/router/predict" in route_paths
         assert "/v1/router/batch" in route_paths
         assert "/v1/router/models" in route_paths
@@ -466,7 +541,9 @@ class TestErrorEnvelope:
             predictor=_mock_predictor(model_loaded=False, model_error="not found")
         )
         with pytest.raises(HTTPException) as exc_info:
-            _run(_SentimentizerDeployment.predict(dep, PredictRequest(text="hello")))
+            _run(
+                _SentimentizerDeployment.predict(dep, PredictRequest(text="hello"), _mock_request())
+            )
         exc = exc_info.value
         assert exc.status_code == 503
 
@@ -512,15 +589,16 @@ class TestFormatPrediction:
         assert result["model"] == "encoder"
         assert result["token_count"] == 5
 
-    def test_format_prediction_without_token_count(self):
-        """Legacy predictions without token_count should omit it."""
+    def test_format_prediction_always_includes_token_count(self):
+        """token_count is always included in the prediction output."""
         prediction = {
             "label": "positive",
             "score": 0.88,
             "model": "encoder",
+            "token_count": 3,
         }
         result = _SentimentizerDeployment._format_prediction(prediction)
-        assert "token_count" not in result
+        assert result["token_count"] == 3
         assert result["label"] == "positive"
 
     def test_format_prediction_omits_scores_and_dynamic_key(self):
@@ -574,8 +652,9 @@ class TestRequestModelFields:
 
 class TestModelDetailEndpoint:
     def test_v1_has_model_detail_route(self):
-        """The app should have /v1/models/{model_name} route."""
+        """Model detail route should exist at both primary and deprecated paths."""
         route_paths = [route.path for route in app.routes]
+        assert "/v1/sentiment/models/{model_name}" in route_paths
         assert "/v1/models/{model_name}" in route_paths
 
 
@@ -689,15 +768,16 @@ class TestTokenCount:
         result = _SentimentizerDeployment._format_prediction(prediction)
         assert result["token_count"] == 12
 
-    def test_format_prediction_omits_token_count_when_absent(self):
-        """Legacy predictions without token_count should still format correctly."""
+    def test_format_prediction_token_count_required(self):
+        """token_count is required in prediction output (predict_batch always includes it)."""
         prediction = {
             "label": "positive",
             "score": 0.88,
             "model": "encoder",
+            "token_count": 7,
         }
         result = _SentimentizerDeployment._format_prediction(prediction)
-        assert "token_count" not in result
+        assert result["token_count"] == 7
 
 
 # ---------------------------------------------------------------------------
@@ -803,6 +883,18 @@ class TestCORSMiddleware:
         for m in app.user_middleware:
             if hasattr(m, "kwargs") and "expose_headers" in m.kwargs:
                 assert "X-Request-Id" in m.kwargs["expose_headers"]
+
+    def test_cors_allow_credentials_disabled_for_wildcard(self):
+        """allow_credentials should be False when wildcard origin '*' is configured."""
+        from sentimentizer.serve.app import app
+
+        for m in app.user_middleware:
+            if (
+                hasattr(m, "kwargs")
+                and "allow_origins" in m.kwargs
+                and "*" in m.kwargs["allow_origins"]
+            ):
+                assert m.kwargs.get("allow_credentials") is False
 
 
 # ---------------------------------------------------------------------------

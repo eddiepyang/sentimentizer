@@ -52,6 +52,25 @@ class ServeConfig:
     classify_batch_wait_s: float = 0.05
     cors_origins: list[str] = field(default_factory=lambda: ["*"])
 
+    def __post_init__(self) -> None:
+        """Validate that numeric fields are positive."""
+        _positive_ints = {
+            "max_batch_size": self.max_batch_size,
+            "max_text_length": self.max_text_length,
+            "predict_batch_size": self.predict_batch_size,
+            "classify_batch_size": self.classify_batch_size,
+        }
+        _positive_floats = {
+            "predict_batch_wait_s": self.predict_batch_wait_s,
+            "classify_batch_wait_s": self.classify_batch_wait_s,
+        }
+        for name, val in _positive_ints.items():
+            if val < 1:
+                raise ValueError(f"{name} must be >= 1, got {val}")
+        for name, val in _positive_floats.items():
+            if val <= 0:
+                raise ValueError(f"{name} must be > 0, got {val}")
+
 
 def _parse_list(value: str) -> list[str]:
     """Parse a comma-separated string into a list of stripped strings."""
@@ -128,6 +147,11 @@ def load_serve_config(path: str | Path | None = None) -> ServeConfig:
             if coerce is list:
                 values[field_name] = _parse_list(env_value)
             else:
-                values[field_name] = coerce(env_value)
+                try:
+                    values[field_name] = coerce(env_value)
+                except ValueError:
+                    raise ValueError(
+                        f"Invalid {env_var}={env_value!r}: " f"expected {coerce.__name__}"
+                    ) from None
 
     return ServeConfig(**values)

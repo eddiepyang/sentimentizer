@@ -4,7 +4,7 @@ Provides a unified REST API for:
   - Sentiment analysis (encoder model by default)
   - Review routing (Dietary, Service, General categories)
 
-Uses ``serve.batch`` to auto-batch individual ``/v1/predict`` and
+Uses ``serve.batch`` to auto-batch individual ``/v1/sentiment/predict`` and
 ``/v1/router/predict`` requests into efficient forward passes, and
 ``asyncio.to_thread()`` to keep sync model inference off the event loop.
 
@@ -22,11 +22,11 @@ Usage:
 
 Endpoints:
   Sentiment analysis:
-    POST /v1/predict           -- Classify a single text (auto-batched)
-    POST /v1/batch             -- Classify multiple texts (single forward pass)
-    POST /v1/tokenize          -- Tokenize text without inference
-    GET  /v1/models             -- Sentiment model metadata (all models)
-    GET  /v1/models/{name}     -- Single model metadata
+    POST /v1/sentiment/predict           -- Classify a single text (auto-batched)
+    POST /v1/sentiment/batch             -- Classify multiple texts (single forward pass)
+    POST /v1/sentiment/tokenize          -- Tokenize text without inference
+    GET  /v1/sentiment/models            -- Sentiment model metadata (all models)
+    GET  /v1/sentiment/models/{name}     -- Single model metadata
 
   Router (review categorization):
     POST /v1/router/predict   -- Route a single text (auto-batched)
@@ -37,12 +37,20 @@ Endpoints:
     GET  /health               -- Backward-compatible alias for /health/ready
     GET  /health/live          -- Liveness probe (always 200)
     GET  /health/ready         -- Readiness probe (503 if model not loaded)
+
+  Deprecated (kept for backward compatibility, use /v1/sentiment/* instead):
+    POST /v1/predict
+    POST /v1/batch
+    POST /v1/tokenize
+    GET  /v1/models
+    GET  /v1/models/{name}
 """
 
 import asyncio
 import os
 import time
 import uuid
+from importlib.metadata import version as _pkg_version
 from typing import Any
 
 # Prevent Ray from creating isolated worker venvs via uv.
@@ -50,7 +58,7 @@ from typing import Any
 # to create a fresh venv will fail with ModuleNotFoundError.
 os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
 
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable
 
 from fastapi import FastAPI, HTTPException, Path, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -67,7 +75,6 @@ from sentimentizer.serve.models import (
     BatchRequest,
     BatchResponse,
     HealthLiveResponse,
-    HealthReadyResponse,
     ModelDetailResponse,
     ModelsResponse,
     PredictRequest,
@@ -89,9 +96,11 @@ cfg = load_serve_config()
 # FastAPI app (module-level for @serve.ingress)
 # ---------------------------------------------------------------------------
 
+_VERSION = _pkg_version("sentimentizer")
+
 app = FastAPI(
     title="Sentimentizer",
-    version="0.211.0",
+    version=_VERSION,
     description="Sentiment analysis and review routing API",
 )
 
@@ -104,6 +113,10 @@ app = FastAPI(
 #   1. CORS — must be outermost to handle preflight OPTIONS before auth
 #   2. Request-ID — adds trace IDs to all requests including CORS preflight
 #   3. Body size limit — reject oversized payloads early
+#
+# NOTE: @app.exception_handler(Exception) only catches errors from route
+# handlers, not from middleware. A bug in _RequestBodySizeLimitMiddleware
+# will bypass the error envelope and leak a raw Starlette 500.
 # ---------------------------------------------------------------------------
 
 MAX_REQUEST_BODY_BYTES = 1 * 1024 * 1024  # 1 MiB defense-in-depth limit
@@ -120,41 +133,67 @@ class _RequestBodySizeLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(
         self,
         request: StarletteRequest,
-        call_next: Callable[
-            [StarletteRequest], Coroutine[StarletteRequest, None, StarletteResponse]
-        ],
+        call_next: Callable[[StarletteRequest], Awaitable[StarletteResponse]],
     ) -> StarletteResponse:
         if request.method in ("POST", "PUT", "PATCH"):
             content_length = request.headers.get("content-length")
-            if content_length and int(content_length) > MAX_REQUEST_BODY_BYTES:
-                return JSONResponse(
-                    status_code=413,
-                    content={
-                        "error": {
-                            "code": "request_too_large",
-                            "message": (f"Request body exceeds " f"{MAX_REQUEST_BODY_BYTES} bytes"),
-                        }
-                    },
-                )
+            if content_length:
+                try:
+                    length = int(content_length)
+                except ValueError:
+                    return JSONResponse(
+                        status_code=400,
+                        content={
+                            "error": {
+                                "code": "bad_request",
+                                "message": "Invalid Content-Length header",
+                            }
+                        },
+                    )
+                # NOTE: This only checks the Content-Length header. Chunked
+                # transfer encoding requests have no Content-Length and will
+                # pass through unchecked — this is acceptable as a
+                # defense-in-depth measure behind an ingress that enforces
+                # proxy-body-size.
+                if length > MAX_REQUEST_BODY_BYTES:
+                    return JSONResponse(
+                        status_code=413,
+                        content={
+                            "error": {
+                                "code": "request_too_large",
+                                "message": f"Request body exceeds {MAX_REQUEST_BODY_BYTES} bytes",
+                            }
+                        },
+                    )
         return await call_next(request)
 
 
 app.add_middleware(_RequestBodySizeLimitMiddleware)
 
+# CORS added second so it ends up middle layer (request-ID innermost if
+# it were also added via add_middleware, but request-ID uses @app.middleware
+# which is always outermost of the add_middleware stack — see below).
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cfg.cors_origins,
-    allow_credentials=True,
+    allow_credentials="*" not in cfg.cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["X-Request-Id"],
 )
 
 
+# @app.middleware("http") is added on top of the add_middleware stack, making
+# it the outermost middleware — but we want request-ID to be #2 (after CORS).
+# Since @app.middleware always wraps around add_middleware middlewares, request-ID
+# ends up outermost. With only two add_middleware calls (body-size, CORS), the
+# actual order is: request-ID → CORS → body-size → route handler. This is
+# acceptable: request-ID tags all requests, CORS handles preflight next, and
+# body-size rejects oversized payloads before they reach the route handler.
 @app.middleware("http")
 async def request_id_middleware(
     request: StarletteRequest,
-    call_next: Callable[[StarletteRequest], Coroutine[StarletteRequest, None, StarletteResponse]],
+    call_next: Callable[[StarletteRequest], Awaitable[StarletteResponse]],
 ) -> StarletteResponse:
     """Add X-Request-Id to every request/response for distributed tracing."""
     request_id = request.headers.get("X-Request-Id") or str(uuid.uuid4())
@@ -233,6 +272,8 @@ def _status_code_to_error_code(status_code: int) -> str:
 
 
 @serve.deployment(
+    # With 1 replica and max_ongoing_requests=20, the only concurrency win
+    # is the serve.batch window. Increase num_replicas for CPU-bound load.
     num_replicas=1,
     max_ongoing_requests=20,
     ray_actor_options={"num_cpus": 2, "num_gpus": 0},
@@ -248,15 +289,14 @@ class SentimentizerDeployment:
     """
 
     def __init__(self) -> None:
-        self.cfg = load_serve_config()
         self._started_at = time.time()
         self._sentiment_metrics = ServiceMetrics(prefix="sentimentizer")
         self._router_metrics = ServiceMetrics(prefix="router")
 
         # --- Predictor handles model loading, inference, and tokenization ---
         self.predictor = SentimentPredictor(
-            model_name=self.cfg.default_model,
-            router_model_path=self.cfg.router_model_path,
+            model_name=cfg.default_model,
+            router_model_path=cfg.router_model_path,
         )
 
     def _validate_model(self, model_name: str | None) -> str:
@@ -281,24 +321,27 @@ class SentimentizerDeployment:
     def _format_prediction(
         prediction: dict[str, Any],
     ) -> dict[str, Any]:
-        """Format a prediction dict for the response.
+        """Format a prediction dict for the API response.
 
-        The prediction dict has the additive v1 format:
-        ``{label: score, "label": label, "score": score,
-        "scores": {...}, "token_count": N, "model": model}``.
-        Returns label, score, token_count, and model.
+        Extracts label, score, token_count, and model from the
+        predictor's output dict. token_count is always present in
+        predictor output (predict_batch always includes it), so
+        this field is never None.
         """
         result: dict[str, Any] = {
             "label": prediction["label"],
             "score": prediction["score"],
             "model": prediction["model"],
+            "token_count": prediction["token_count"],
         }
-        if "token_count" in prediction:
-            result["token_count"] = prediction["token_count"]
         return result
 
     # ------------------------------------------------------------------
     # Auto-batched endpoints (serve.batch collects individual calls)
+    #
+    # NOTE: @serve.batch transforms these methods so a single call returns
+    # a single dict, not list[dict]. The type hint shows list[dict] because
+    # that's the batch signature, but callers receive a single item.
     # ------------------------------------------------------------------
 
     @serve.batch(
@@ -331,12 +374,14 @@ class SentimentizerDeployment:
         return [r["prediction"] for r in results]
 
     # ------------------------------------------------------------------
-    # Sentiment handlers (v1 prefix)
+    # Sentiment handlers (v1/sentiment prefix)
+    # Old /v1/* paths are kept as deprecated aliases.
     # ------------------------------------------------------------------
 
-    @app.post("/v1/predict", response_model=PredictResponse)
-    async def predict(self, body: PredictRequest) -> dict[str, Any]:
-        """POST /v1/predict -- single text sentiment analysis (auto-batched)."""
+    @app.post("/v1/sentiment/predict", response_model=PredictResponse)
+    @app.post("/v1/predict", response_model=PredictResponse, deprecated=True)
+    async def predict(self, body: PredictRequest, request: Request) -> dict[str, Any]:
+        """POST /v1/sentiment/predict -- single text sentiment analysis (auto-batched)."""
         if not self.predictor.model_loaded:
             raise HTTPException(
                 status_code=503,
@@ -345,12 +390,19 @@ class SentimentizerDeployment:
         self._validate_model(body.model)
 
         start = time.perf_counter()
-        prediction = await self.predict_sentiment({"text": body.text})
+        try:
+            prediction = await self.predict_sentiment({"text": body.text})
+        except Exception:
+            latency = time.perf_counter() - start
+            self._sentiment_metrics.record_request(latency, error=True)
+            raise
         latency = time.perf_counter() - start
 
         self._sentiment_metrics.record_request(latency)
+        request_id = getattr(request.state, "request_id", "unknown")
         logger.info(
             "prediction completed",
+            request_id=request_id,
             input_length=len(body.text),
             latency_s=f"{latency:.4f}",
             model=prediction.get("model", ""),
@@ -361,9 +413,10 @@ class SentimentizerDeployment:
             "latency_s": round(latency, 4),
         }
 
-    @app.post("/v1/batch", response_model=BatchResponse)
-    async def batch(self, body: BatchRequest) -> dict[str, Any]:
-        """POST /v1/batch -- batch sentiment analysis (explicit forward pass)."""
+    @app.post("/v1/sentiment/batch", response_model=BatchResponse)
+    @app.post("/v1/batch", response_model=BatchResponse, deprecated=True)
+    async def batch(self, body: BatchRequest, request: Request) -> dict[str, Any]:
+        """POST /v1/sentiment/batch -- batch sentiment analysis (explicit forward pass)."""
         if not self.predictor.model_loaded:
             raise HTTPException(
                 status_code=503,
@@ -372,18 +425,25 @@ class SentimentizerDeployment:
         self._validate_model(body.model)
 
         start = time.perf_counter()
-        raw_predictions = await asyncio.to_thread(self.predictor.predict_batch, body.texts)
+        try:
+            raw_predictions = await asyncio.to_thread(self.predictor.predict_batch, body.texts)
+        except Exception:
+            latency = time.perf_counter() - start
+            self._sentiment_metrics.record_request(latency, error=True)
+            raise
+        latency = time.perf_counter() - start
+
         results = [
             {
                 "prediction": self._format_prediction(pred),
             }
             for pred in raw_predictions
         ]
-        latency = time.perf_counter() - start
-
         self._sentiment_metrics.record_request(latency)
+        request_id = getattr(request.state, "request_id", "unknown")
         logger.info(
             "batch prediction completed",
+            request_id=request_id,
             batch_size=len(body.texts),
             latency_s=f"{latency:.4f}",
         )
@@ -393,24 +453,27 @@ class SentimentizerDeployment:
             "latency_s": round(latency, 4),
         }
 
-    @app.post("/v1/tokenize", response_model=TokenizeResponse)
+    @app.post("/v1/sentiment/tokenize", response_model=TokenizeResponse)
+    @app.post("/v1/tokenize", response_model=TokenizeResponse, deprecated=True)
     async def tokenize(self, body: TokenizeRequest) -> dict[str, Any]:
-        """POST /v1/tokenize -- standalone tokenization without inference."""
+        """POST /v1/sentiment/tokenize -- standalone tokenization without inference."""
         result = await asyncio.to_thread(self.predictor.tokenize, body.text)
         return result
 
-    @app.get("/v1/models", response_model=ModelsResponse)
+    @app.get("/v1/sentiment/models", response_model=ModelsResponse)
+    @app.get("/v1/models", response_model=ModelsResponse, deprecated=True)
     async def models(self) -> dict[str, Any]:
-        """GET /v1/models -- sentiment model metadata (all models)."""
+        """GET /v1/sentiment/models -- sentiment model metadata (all models)."""
         models_info = self.predictor.get_sentiment_model_info()
         return {"models": models_info, "default": self.predictor.model_name}
 
-    @app.get("/v1/models/{model_name}", response_model=ModelDetailResponse)
+    @app.get("/v1/sentiment/models/{model_name}", response_model=ModelDetailResponse)
+    @app.get("/v1/models/{model_name}", response_model=ModelDetailResponse, deprecated=True)
     async def model_detail(
         self,
         model_name: str = Path(..., description="Model name: rnn, encoder, or decoder"),
     ) -> dict[str, Any]:
-        """GET /v1/models/{model_name} -- single model metadata."""
+        """GET /v1/sentiment/models/{model_name} -- single model metadata."""
         if model_name not in _MODEL_CONFIGS:
             raise HTTPException(
                 status_code=400,
@@ -430,7 +493,7 @@ class SentimentizerDeployment:
     # ------------------------------------------------------------------
 
     @app.post("/v1/router/predict", response_model=RouterPredictResponse)
-    async def router_predict(self, body: PredictRequest) -> dict[str, Any]:
+    async def router_predict(self, body: PredictRequest, request: Request) -> dict[str, Any]:
         """POST /v1/router/predict -- classify a single text (auto-batched)."""
         if not self.predictor.router_loaded:
             raise HTTPException(
@@ -439,12 +502,19 @@ class SentimentizerDeployment:
             )
 
         start = time.perf_counter()
-        prediction = await self.classify_route({"text": body.text})
+        try:
+            prediction = await self.classify_route({"text": body.text})
+        except Exception:
+            latency = time.perf_counter() - start
+            self._router_metrics.record_request(latency, error=True)
+            raise
         latency = time.perf_counter() - start
 
         self._router_metrics.record_request(latency)
+        request_id = getattr(request.state, "request_id", "unknown")
         logger.info(
             "router prediction completed",
+            request_id=request_id,
             input_length=len(body.text),
             latency_s=f"{latency:.4f}",
             category=prediction.get("label", ""),
@@ -455,7 +525,7 @@ class SentimentizerDeployment:
         }
 
     @app.post("/v1/router/batch", response_model=RouterBatchResponse)
-    async def router_batch(self, body: BatchRequest) -> dict[str, Any]:
+    async def router_batch(self, body: BatchRequest, request: Request) -> dict[str, Any]:
         """POST /v1/router/batch -- classify multiple texts into routes."""
         if not self.predictor.router_loaded:
             raise HTTPException(
@@ -464,12 +534,19 @@ class SentimentizerDeployment:
             )
 
         start = time.perf_counter()
-        results = await asyncio.to_thread(self.predictor.classify_batch, body.texts)
+        try:
+            results = await asyncio.to_thread(self.predictor.classify_batch, body.texts)
+        except Exception:
+            latency = time.perf_counter() - start
+            self._router_metrics.record_request(latency, error=True)
+            raise
         latency = time.perf_counter() - start
 
         self._router_metrics.record_request(latency)
+        request_id = getattr(request.state, "request_id", "unknown")
         logger.info(
             "router batch completed",
+            request_id=request_id,
             batch_size=len(body.texts),
             latency_s=f"{latency:.4f}",
         )
@@ -496,9 +573,14 @@ class SentimentizerDeployment:
             "uptime_s": round(time.time() - self._started_at, 1),
         }
 
-    @app.get("/health/ready", response_model=HealthReadyResponse)
+    @app.get("/health/ready", response_model=None)
     async def health_ready(self) -> dict[str, Any] | JSONResponse:
-        """GET /health/ready -- readiness probe (503 if model not loaded)."""
+        """GET /health/ready -- readiness probe (503 if model not loaded).
+
+        Note: response_model=None disables Pydantic response validation.
+        The 503 path returns a raw JSONResponse that bypasses schema anyway,
+        so explicit response_model would give a false guarantee.
+        """
         body = {
             "status": "ready" if self.predictor.model_loaded else "not_ready",
             "device": self.predictor.device,
@@ -512,7 +594,7 @@ class SentimentizerDeployment:
             return JSONResponse(status_code=503, content=body)
         return body
 
-    @app.get("/health", response_model=HealthReadyResponse)
+    @app.get("/health", response_model=None)
     async def health(self) -> dict[str, Any] | JSONResponse:
         """GET /health -- backward-compatible alias for /health/ready."""
         return await self.health_ready()
@@ -530,10 +612,7 @@ def main(host: str = "0.0.0.0", port: int = 8000) -> None:
     """
     import sys
 
-    # Prevent Ray from creating isolated worker venvs via uv.
-    # Workers will use the current Python executable and inherit all
-    # installed packages (including ray, torch, etc.).
-    os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
+    # RAY_ENABLE_UV_RUN_RUNTIME_ENV is already set at module level (line 51).
     os.environ.setdefault("RAY_ENABLE_RUNTIME_ENV_HOOK", "1")
     os.environ.setdefault("RAY_OVERRIDE_RUNTIME_ENV_DEFAULT_EXCLUDES", "")
 
@@ -547,14 +626,16 @@ def main(host: str = "0.0.0.0", port: int = 8000) -> None:
         },
     )
     serve.start(http_options={"host": host, "port": port})
+    # TODO: Modern Ray Serve supports serve.run(target, host=host, port=port)
+    # which combines start+run. Migrate when dropping support for older APIs.
     serve.run(deployment)
     logger.info("Sentimentizer Serve running", host=host, port=port)
 
     try:
-        import time as _time
+        import threading
 
-        while True:
-            _time.sleep(1)
+        shutdown_event = threading.Event()
+        shutdown_event.wait()
     except KeyboardInterrupt:
         logger.info("Shutting down Serve")
         serve.shutdown()

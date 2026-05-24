@@ -1,9 +1,12 @@
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
 from sentimentizer.serve.config import load_serve_config
 
+# Validation limits (max_text_length, max_batch_size) are baked at import
+# time from the ServeConfig. Environment variable changes after import will
+# not affect these limits — restart the process to pick up new values.
 cfg = load_serve_config()
 
 
@@ -223,7 +226,11 @@ class ModelsResponse(BaseModel):
 
 
 class RouterPrediction(BaseModel):
-    """Single router prediction."""
+    """Single router prediction.
+
+    Note: omits model field since there is only one router model.
+    See /v1/router/models for router model metadata.
+    """
 
     label: str = Field(..., description="Predicted route category")
     score: float = Field(..., description="Confidence score for the predicted route")
@@ -322,7 +329,7 @@ class RouterModelsResponse(BaseModel):
 class HealthLiveResponse(BaseModel):
     """Response from /health/live."""
 
-    status: str = "alive"
+    status: Literal["alive"] = "alive"
     uptime_s: float
 
     model_config = {"json_schema_extra": {"examples": [{"status": "alive", "uptime_s": 123.4}]}}
@@ -331,7 +338,7 @@ class HealthLiveResponse(BaseModel):
 class HealthReadyResponse(BaseModel):
     """Response from /health/ready."""
 
-    status: str
+    status: Literal["ready", "not_ready"]
     device: str
     version: str
     uptime_s: float
@@ -345,7 +352,7 @@ class HealthReadyResponse(BaseModel):
                 {
                     "status": "ready",
                     "device": "cpu",
-                    "version": "0.211.0",
+                    "version": "0.0.0",
                     "uptime_s": 123.4,
                     "model_loaded": "encoder",
                     "router_loaded": True,

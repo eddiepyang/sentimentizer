@@ -7,37 +7,48 @@ Provides ``ServiceMetrics`` for request/latency tracking and a
 import threading
 from typing import Any
 
+
+class _DummyServe:
+    def deployment(self, *args: Any, **kwargs: Any) -> Any:
+        def decorator(cls: Any) -> Any:
+            return cls
+
+        if len(args) == 1 and callable(args[0]):
+            return decorator(args[0])
+        return decorator
+
+    def batch(self, *args: Any, **kwargs: Any) -> Any:
+        def decorator(fn: Any) -> Any:
+            return fn
+
+        if len(args) == 1 and callable(args[0]):
+            return decorator(args[0])
+        return decorator
+
+    def ingress(self, *args: Any, **kwargs: Any) -> Any:
+        def decorator(cls: Any) -> Any:
+            return cls
+
+        if len(args) == 1 and callable(args[0]):
+            return decorator(args[0])
+        return decorator
+
+    def start(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    def run(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    def shutdown(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+
 try:
     from ray import serve
 
     RAY_SERVE_AVAILABLE = True
 except ImportError:
     RAY_SERVE_AVAILABLE = False
-
-    class _DummyServe:
-        def deployment(self, *args: Any, **kwargs: Any) -> Any:
-            return lambda cls: cls
-
-        def batch(self, *args: Any, **kwargs: Any) -> Any:
-            def decorator(fn: Any) -> Any:
-                return fn
-
-            if len(args) == 1 and callable(args[0]):
-                return decorator(args[0])
-            return decorator
-
-        def ingress(self, *args: Any, **kwargs: Any) -> Any:
-            return lambda cls: cls
-
-        def start(self, *args: Any, **kwargs: Any) -> None:
-            pass
-
-        def run(self, *args: Any, **kwargs: Any) -> None:
-            pass
-
-        def shutdown(self, *args: Any, **kwargs: Any) -> None:
-            pass
-
     serve = _DummyServe()
 
 
@@ -103,4 +114,4 @@ class ServiceMetrics:
     @property
     def avg_latency_s(self) -> float:
         with self._lock:
-            return self.total_latency_s / self.request_count if self.request_count else 0
+            return self.total_latency_s / self.request_count if self.request_count else 0.0
