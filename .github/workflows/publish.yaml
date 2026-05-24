@@ -3,13 +3,49 @@ name: Publish to PyPI
 on:
   release:
     types: [published]
+  push:
+    branches:
+      - master
+    paths:
+      - 'pyproject.toml'
 
 permissions:
   id-token: write  # Required for Trusted Publishing (OIDC)
   contents: read
 
 jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      should_publish: ${{ steps.check.outputs.should_publish }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - id: check
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+          else
+            if ! git show HEAD~1:pyproject.toml >/dev/null 2>&1; then
+              echo "No previous commit or pyproject.toml in HEAD~1"
+              echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            else
+              old_version=$(git show HEAD~1:pyproject.toml | grep '^version =' | cut -d'"' -f2)
+              new_version=$(grep '^version =' pyproject.toml | cut -d'"' -f2)
+              echo "Old version: $old_version"
+              echo "New version: $new_version"
+              if [ "$old_version" != "$new_version" ]; then
+                echo "should_publish=true" >> "$GITHUB_OUTPUT"
+              else
+                echo "should_publish=false" >> "$GITHUB_OUTPUT"
+              fi
+            fi
+          fi
+
   lint:
+    needs: check-version
+    if: needs.check-version.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,7 +57,8 @@ jobs:
       - run: uv run black --check .
 
   test:
-    needs: lint
+    needs: [check-version, lint]
+    if: needs.check-version.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
     env:
       TZ: UTC
@@ -34,14 +71,15 @@ jobs:
       - run: uv sync --extra dev,ray,onnx,router
       - run: |
           uv run pytest --exitfirst --verbose --failed-first \
-            --cov=sentimentizer --cov=workflows \
-            --cov-report=term-missing --cov-report=html
+            --cov=sentimentizer --cov-report=term-missing --cov-report=html
 
   publish:
-    needs: test
+    needs: [check-version, test]
+    if: |
+      needs.check-version.outputs.should_publish == 'true' &&
+      (github.event_name == 'push' || (github.event_name == 'release' && github.event.release.target_commitish == 'master'))
     runs-on: ubuntu-latest
     environment: pypi
-    if: github.event.release.target_commitish == 'master'
     permissions:
       id-token: write
       contents: read
