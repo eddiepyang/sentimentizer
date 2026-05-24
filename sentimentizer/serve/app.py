@@ -597,10 +597,11 @@ class SentimentizerDeployment:
             "router_loaded": self.predictor.router_loaded,
             "router_error": self.predictor.router_error,
         }
-        if cfg.sd_enabled or cfg.flux_enabled:
+        if cfg.sd_enabled or cfg.flux_enabled or cfg.sd35_enabled:
             body["image_models"] = {
                 "sd": "enabled" if cfg.sd_enabled else "disabled",
                 "flux": "enabled" if cfg.flux_enabled else "disabled",
+                "sd35": "enabled" if cfg.sd35_enabled else "disabled",
             }
         if not self.predictor.model_loaded:
             return JSONResponse(status_code=503, content=body)
@@ -647,9 +648,14 @@ def main(host: str = "0.0.0.0", port: int = 8000) -> None:
 
     deployments = {"sentimentizer": SentimentizerDeployment.bind()}
 
-    if cfg.sd_enabled or cfg.flux_enabled:
+    if cfg.sd_enabled or cfg.flux_enabled or cfg.sd35_enabled:
         from sentimentizer.diffusion.job_store import JobStore
-        from sentimentizer.serve.diffusion_app import FluxDeployment, ImagesDispatcher, SDDeployment
+        from sentimentizer.serve.diffusion_app import (
+            FluxDeployment,
+            ImagesDispatcher,
+            SD35Deployment,
+            SDDeployment,
+        )
 
         JobStore.options(
             name="diffusion_job_store",
@@ -659,7 +665,8 @@ def main(host: str = "0.0.0.0", port: int = 8000) -> None:
 
         sd_handle = SDDeployment.bind() if cfg.sd_enabled else None
         flux_handle = FluxDeployment.bind() if cfg.flux_enabled else None
-        deployments["images"] = ImagesDispatcher.bind(sd_handle, flux_handle)
+        sd35_handle = SD35Deployment.bind() if cfg.sd35_enabled else None
+        deployments["images"] = ImagesDispatcher.bind(sd_handle, flux_handle, sd35_handle)
 
     serve.run(deployments)
     logger.info("Sentimentizer Serve running", host=host, port=port)

@@ -1,8 +1,8 @@
-# Diffusion Serving (SD + FLUX) — Implementation Plan
+# Diffusion Serving (SD + FLUX + SD 3.5 Medium) — Implementation Plan
 
 Add image generation endpoints to the existing Ray Serve app at `sentimentizer/serve/app.py`,
-supporting Stable Diffusion 2.1 (small, fast) and FLUX.1-dev Q8 (large, slow). Target hardware is
-**GCP L4 GPUs (24 GB VRAM)**.
+supporting Stable Diffusion 2.1 (small, fast), FLUX.1-dev Q8 (large, slow), and SD 3.5 Medium
+(mid-size, quality). Target hardware is **GCP L4 GPUs (24 GB VRAM)**.
 
 Risk/gap annotations are marked with **[RISK]**, **[GAP]**, or **[SAFE]**.
 
@@ -39,7 +39,7 @@ GET    /v1/images/models            list available models
 GET    /v1/images/models/{name}     single model metadata
 ```
 
-Model selection is in the **request body** (`{"model": "sd" | "flux"}`), matching the existing
+Model selection is in the **request body** (`{"model": "sd" | "flux" | "sd35"}`), matching the existing
 convention in [sentimentizer/serve/models.py:14](sentimentizer/serve/models.py#L14) for sentiment.
 This means adding a new model (SDXL, FLUX-schnell) doesn't require a new route.
 
@@ -56,13 +56,17 @@ sync-only deployments don't persist images.
 
 ### Hardware sizing (L4, 24 GB)
 
-| Model | Format | VRAM | Latency (28 steps, 1024²) |
+| Model | Format | VRAM | Latency (default steps, 1024²) |
 |---|---|---|---|
-| SD 2.1 | bfloat16 | ~6 GB | ~2–3 s |
-| FLUX.1-dev | Q8 GGUF + bf16 T5 | ~22 GB | ~15–25 s |
+| SD 2.1 | bfloat16 | ~6 GB | ~2–3 s (30 steps) |
+| SD 3.5 Medium | bfloat16 | ~5–6 GB | ~4–6 s (40 steps) |
+| FLUX.1-dev | Q8 GGUF + bf16 T5 | ~22 GB | ~15–25 s (28 steps) |
 
 **[RISK]** FLUX-Q8 is tight on L4. Escape hatches if OOM appears in load testing:
 `pipe.enable_model_cpu_offload()` to swap T5 between encode and denoise, or drop to Q6.
+
+SD 3.5 Medium and FLUX can run simultaneously on L4 (~28 GB combined), but not recommended
+for production without memory monitoring.
 
 ### What runs inside `predictor.generate()`
 
@@ -146,7 +150,7 @@ What does help on L4, in rough ROI order:
 
 ---
 
-## P0 — Do now
+## P0 — ✅ Done
 
 ### 1. Diffusion predictor module
 
@@ -630,278 +634,96 @@ async def images_model_detail(self, name: str = Path(...)) -> dict:
 
 ---
 
-## P1 — Do after P0 lands
+## P1 — ✅ P1.9 done; P1.10–P1.12 pending
 
-### 9. Async job mode for FLUX
+### 9. Async job mode for FLUX ✅
 
 **Problem**: 25-second sync HTTP requests are fragile against ingress timeouts (often 30–60 s),
 mobile clients, and replica restarts. Async jobs decouple submission from result retrieval and
 expose the queue as a first-class resource (list, get, cancel) following standard
 [AIP-151](https://google.aip.dev/151) long-running-operations conventions.
 
-**Changes**:
+**Implementation** (shipped):
+Four endpoints, all gated behind auth + rate-limit:
 
-- `sentimentizer/serve/diffusion_models.py` — add models:
-  ```python
-  class JobResponse(BaseModel):
-      job_id: str                  # "job_" + 16 chars
-      status: Literal["queued", "processing", "succeeded", "failed", "canceled"]
-      created: int
-      updated: int                 # last-state-change unix ts
-      model: str                   # echoed from request
-      user: str | None             # echoed from request
-      result: GenerateResponse | None = None
-      error: dict[str, str] | None = None  # {"code": ..., "message": ...}
+- **`POST /v1/images/jobs`** — create job. Returns `201 Created` with `Location` header and
+  `JobResponse(status="processing")`. Fires `handle.generate.remote()` and stores the job
+  in `JobStore`. Supports `Idempotency-Key`.
+- **`GET /v1/images/jobs/{job_id}`** — read job. Returns current `JobResponse` (200) or 404.
+  Scoped per API key prefix.
+- **`GET /v1/images/jobs`** — list jobs ([AIP-158](https://google.aip.dev/158) pagination).
+  Filterable by `status` and `model`. Scoped per API key.
+- **`DELETE /v1/images/jobs/{job_id}`** — cancel job. Best-effort: sets status to `"canceled"`
+  and calls `ray.cancel(ref, force=False)` on the held ObjectRef. Terminal jobs return 200
+  (idempotent). Missing jobs return 404.
 
-  class JobListResponse(BaseModel):
-      jobs: list[JobResponse]
-      next_page_token: str | None = None  # AIP-158: empty/missing on last page
-  ```
+**Key design change from original plan**: The original plan assumed `ray.ObjectRef` could be
+stored inside the `JobStore` actor and queried with `ray.wait([ref], timeout=0)` to derive
+job status lazily. **This doesn't work in Ray** — `ObjectRef`s are auto-resolved to their
+values when passed as arguments to remote calls, and `ray.wait()` only works from the process
+that owns the ref. The implemented design is **push-based**:
 
-- `sentimentizer/serve/diffusion_app.py` — four endpoints, all gated behind auth + rate-limit:
+1. The dispatcher holds `ObjectRef`s locally in `self._refs: dict[str, ObjectRef]`.
+2. `create_job()` fires `handle.generate.remote()` and stores the returned ref.
+3. A background `asyncio.create_task` awaits the ref, then pushes terminal status
+   (`set_succeeded` or `set_failed`) to the `JobStore` actor.
+4. `cancel_job()` sets status to `"canceled"` in the store *and* calls `ray.cancel(ref)` on
+   the held ObjectRef.
+5. `JobStore` is a metadata-only store — it never sees ObjectRefs.
 
-  **a. `POST /v1/images/jobs`** — create job
-  - Body: same `GenerateRequest` as sync endpoint
-  - Returns `201 Created` (not 202; the job resource exists immediately) with:
-    - Header `Location: /v1/images/jobs/{job_id}`
-    - Body `JobResponse(status="queued")`
-  - Fires `handle.generate.remote(...)` which returns an `ObjectRef` immediately. The ObjectRef
-    is stored in `JobStore` keyed by `job_id`. No background task; Ray Serve's internal queue
-    handles work distribution, and job status is derived lazily from `ObjectRef` state on each
-    GET (see "Job status is derived from `ObjectRef`" below).
-  - Supports `Idempotency-Key` — second submission with same key returns the existing job's
-    response, not a new job.
+**What this loses vs. the original plan**:
 
-  **b. `GET /v1/images/jobs/{job_id}`** — read job
-  - Returns current `JobResponse` (200) or 404 with `code: "job_not_found"` if expired/unknown.
-  - Scoped per API key: a key can only see jobs it created (key prefix stored in job record).
+- **No derive-on-read status** — the store cannot determine if a job is still processing by
+  calling `ray.wait()` on a stored ref. Status transitions are explicit pushes.
+- **Dispatcher-restart window** — if the dispatcher replica that created a job crashes before
+  the background task pushes terminal status, the job stays `"processing"` until TTL expiry.
+  The original plan's `[SAFE]` guarantee (ObjectRef in GCS survives crashes) doesn't apply.
+- **Cancel is best-effort from the dispatcher** — `ray.cancel()` must be called from the
+  process holding the ref; the store can't do it. The dispatcher's `_refs` dict is per-replica,
+  so cancel only works on the replica that created the job.
+- **Full result only in the dispatcher's push** — the store gets whatever the `_track_job`
+  background task manages to push before a crash. The original plan could always `ray.get(ref)`
+  to recover the full result.
 
-  **c. `GET /v1/images/jobs`** — list jobs ([AIP-158](https://google.aip.dev/158) pagination)
-  - Query params:
-    - `page_size: int = Field(20, ge=1, le=100)` — capped server-side
-    - `page_token: str | None` — opaque cursor
-    - `status: Literal[...] | None` — optional filter
-    - `model: Literal["sd", "flux"] | None` — optional filter
-  - Returns `JobListResponse` with `next_page_token` populated iff more results exist.
-  - Scoped per API key — never lists other tenants' jobs.
+**What the push-based design keeps**:
 
-  **d. `DELETE /v1/images/jobs/{job_id}`** — cancel job
-  - **API contract: cancellation is best-effort for jobs in `processing` state.** The DELETE
-    returns immediately with `status="canceled"`, but the GPU may keep working until the
-    in-flight diffusers call returns (see below). The client stops paying attention to the
-    result; the replica does not free up instantly. Document this in the OpenAPI description.
-  - Calls `ray.cancel(object_ref, force=False)` on the stored ObjectRef. Ray's behavior:
-    - If the task is still queued in Ray Serve's internal queue → dequeued; never runs.
-    - If the task is already executing → graceful interrupt is requested. Diffusers doesn't
-      check for interruption between denoise steps, so the current step completes; once it
-      returns, Ray drops the result and frees the replica for the next request. Effectively:
-      the user stops paying for the result, but the GPU keeps going until the call returns.
-    - **[GAP]** True mid-inference abort (kill the FLUX forward pass after step N of 28)
-      requires a diffusers step-callback that raises on a cancel flag. Defer to P2.
-  - Sets `canceled=True` flag on the JobRecord; subsequent GETs short-circuit to
-    `status="canceled"` without consulting the ObjectRef (avoids returning a result for a
-    canceled job if it landed in the race window).
-  - If `status` is terminal (`succeeded`/`failed`/`canceled`): returns 200 (idempotent no-op).
-  - `DELETE` of a missing job returns 404.
+- Cross-replica **read** access to job metadata (any replica can list/get via the named actor).
+- Per-API-key scoping, pagination, and filtering.
+- TTL-based expiry via `reap_expired()`.
+- Clean test surface: `JobStoreLogic` is a plain Python class (no Ray dependency), tested
+  in ~0ms per test. One Ray integration test verifies cross-replica visibility.
 
-- **Job store as a Ray named detached actor** — cluster-wide singleton, addressable from any
-  dispatcher replica. This is the
-  [officially recommended Ray pattern](https://docs.ray.io/en/latest/ray-core/patterns/global-variables.html)
-  for cross-replica shared mutable state ("encapsulate the global variables in an actor and pass
-  the actor handle to other tasks and actors"). Plasma is **not** an option here — Ray's
-  [serialization docs](https://docs.ray.io/en/latest/ray-core/objects/serialization.html) make
-  clear that all plasma objects are immutable by design, which rules them out for job records
-  that mutate through `queued → processing → succeeded`.
+**Files changed**:
+- `sentimentizer/diffusion/job_store.py` — `JobStoreLogic` (plain Python, unit-testable) +
+  `JobStore` (thin Ray actor wrapper) + `JobRecord` dataclass + `_rec_to_response()` helper
+- `sentimentizer/diffusion/__init__.py` — exports `JobStore`
+- `sentimentizer/serve/diffusion_models.py` — `JobResponse`, `JobListResponse` models
+  (`result` field is `dict[str, Any] | None`, not `GenerateResponse | None`, since Ray
+  serializes Pydantic models to dicts across actor boundaries)
+- `sentimentizer/serve/diffusion_app.py` — `_get_store()` lazy actor lookup, `_track_job()`
+  background asyncio task, four route handlers
+- `sentimentizer/serve/config.py` — `job_ttl_s: int = 3600` field + env var + field type
+- `sentimentizer/serve/serve_config.yaml` — `job_ttl_s: 3600`
+- `sentimentizer/serve/app.py` — bootstrap `JobStore` named detached actor in `main()`
+- `tests/test_diffusion_jobs.py` — 21 tests (20 unit on `JobStoreLogic`, 1 Ray integration)
 
-  **Job status is derived from `ObjectRef`** — not tracked via a background task. The ObjectRef
-  is the source of truth for whether the work is queued, running, succeeded, or failed; we just
-  index `job_id → ObjectRef + metadata`. This removes a class of race conditions and survives
-  dispatcher restarts cleanly (any replica can compute status from the same ObjectRef).
+**Original plan text** (superseded by implementation above):
 
-  ```python
-  # sentimentizer/diffusion/job_store.py
-  from dataclasses import dataclass, field
-  import ray, secrets, time
+<details>
+<summary>Original P1.9 design (ObjectRef-derived status — does not work)</summary>
 
-  @dataclass
-  class JobRecord:
-      job_id: str
-      ref: ray.ObjectRef        # the future for the generate.remote() call
-      api_key_prefix: str       # first 8 chars, for per-key scoping
-      created: int              # unix ts
-      model: str                # echoed
-      user: str | None          # echoed (for abuse tracking)
-      canceled: bool = False    # set by cancel(); short-circuits status derivation
-      terminal_at: int | None = None   # unix ts when status first observed terminal (for TTL)
-      terminal_status: "JobResponse | None" = None  # cached terminal response; once set,
-                                                    # skip ray.wait/ray.get on every poll.
-                                                    # Critical for list-endpoint perf: a 100-item
-                                                    # page would otherwise issue 100 ray.wait calls.
+The original plan assumed `ray.ObjectRef` could be stored in and queried from inside a Ray actor.
+Key excerpt:
 
-  @ray.remote(num_cpus=0.1)
-  class JobStore:
-      """Thin index over Ray ObjectRefs — derives job status on read."""
+> Job status is derived from ObjectRef — not tracked via a background task. The ObjectRef
+> is the source of truth for whether the work is queued, running, succeeded, or failed; we just
+> index job_id → ObjectRef + metadata. This removes a class of race conditions and survives
+> dispatcher restarts cleanly (any replica can compute status from the same ObjectRef).
 
-      def __init__(self, ttl_s: int = 3600) -> None:
-          self._jobs: dict[str, JobRecord] = {}
-          self._by_key: dict[str, list[str]] = {}     # key_prefix -> [job_id, ...]
-          self._ttl_s = ttl_s
+This is incorrect because Ray auto-resolves ObjectRefs when they cross actor boundaries.
+The implemented push-based design is the correct approach given Ray's ownership model.
 
-      def submit(self, req, api_key, ref: ray.ObjectRef) -> str:
-          job_id = f"job_{secrets.token_urlsafe(12)}"
-          rec = JobRecord(
-              job_id=job_id, ref=ref, api_key_prefix=api_key[:8],
-              created=int(time.time()), model=req.model, user=req.user,
-          )
-          self._jobs[job_id] = rec
-          self._by_key.setdefault(rec.api_key_prefix, []).append(job_id)
-          return job_id
-
-      def get(self, job_id: str, api_key: str) -> JobResponse | None:
-          rec = self._jobs.get(job_id)
-          if not rec or rec.api_key_prefix != api_key[:8]:
-              return None
-          return self._derive_status(rec)
-
-      def _derive_status(self, rec: JobRecord) -> JobResponse:
-          # 0. Cached terminal response — skip ray.wait()/ray.get() entirely.
-          #    Once a job is terminal it stays terminal; no reason to keep paying for GCS RPCs.
-          if rec.terminal_status is not None:
-              return rec.terminal_status
-          # 1. Short-circuit if cancellation was requested
-          if rec.canceled:
-              rec.terminal_status = JobResponse(status="canceled", ...)
-              rec.terminal_at = rec.terminal_at or int(time.time())
-              return rec.terminal_status
-          # 2. Check ObjectRef readiness without blocking
-          ready, _ = ray.wait([rec.ref], timeout=0)
-          if not ready:
-              return JobResponse(status="processing", ...)   # not cached; still in flight
-          # 3. Terminal — extract result or error, then cache for future polls
-          try:
-              result = ray.get(rec.ref)
-              rec.terminal_at = rec.terminal_at or int(time.time())
-              rec.terminal_status = JobResponse(status="succeeded", result=result, ...)
-              return rec.terminal_status
-          except Exception as e:
-              rec.terminal_at = rec.terminal_at or int(time.time())
-              rec.terminal_status = JobResponse(
-                  status="failed", error={"code": "...", "message": str(e)}
-              )
-              return rec.terminal_status
-
-      def cancel(self, job_id: str, api_key: str) -> JobResponse | None:
-          rec = self._jobs.get(job_id)
-          if not rec or rec.api_key_prefix != api_key[:8]:
-              return None
-          if not rec.canceled:
-              rec.canceled = True
-              ray.cancel(rec.ref, force=False)
-          return self._derive_status(rec)
-
-      def list(self, api_key, page_token, page_size, **filters): ...
-      def reap_expired(self) -> int:
-          # remove records where terminal_at + ttl_s < now
-          ...
-  ```
-
-  Note: there's no `update()` method. State changes happen in Ray (the worker fulfilling the
-  ObjectRef); the JobStore is a read-side index, not a state machine we mutate from outside.
-
-  **Bootstrap once** in `sentimentizer/serve/__init__.py / main()`, before `serve.run(...)`:
-  ```python
-  # Idempotent: get_if_exists=True won't recreate if already running (e.g. on dispatcher restart)
-  JobStore.options(
-      name="diffusion_job_store",
-      lifetime="detached",
-      get_if_exists=True,
-  ).remote(ttl_s=cfg.job_ttl_s)
-  ```
-
-  **Access from any dispatcher replica** via name:
-  ```python
-  class ImagesDispatcher:
-      def __init__(self, sd, flux) -> None:
-          self._store = ray.get_actor("diffusion_job_store")
-          ...
-
-      async def create_job(self, body, api_key):
-          # Fire the work; ObjectRef returns immediately. Ray Serve's internal queue
-          # handles backpressure when FluxDeployment hits max_ongoing_requests.
-          ref = self._handles[body.model].generate.remote(**body.dict())
-          # Hand the ref to the JobStore for indexing. No background task needed —
-          # status is derived from the ref on each subsequent GET.
-          job_id = await self._store.submit.remote(body, api_key, ref)
-          return await self._store.get.remote(job_id, api_key)  # returns initial JobResponse
-  ```
-
-  **Namespace note**: lookup by name is namespace-scoped. The project already calls
-  `ray.init(namespace="sentimentizer", ...)` in [sentimentizer/serve/app.py:544](sentimentizer/serve/app.py#L544),
-  so `ray.get_actor("diffusion_job_store")` resolves without an explicit `namespace=` kwarg.
-
-  **Teardown**: detached actors are
-  [not auto-GC'd](https://docs.ray.io/en/latest/ray-core/actors/named-actors.html) — they survive
-  `serve.shutdown()`. The cluster-shutdown path at
-  [sentimentizer/serve/app.py:558](sentimentizer/serve/app.py#L558) calls `ray.shutdown()`, which
-  destroys the cluster and reaps detached actors automatically — no explicit `ray.kill()` needed
-  for the normal path. Tests that don't tear down the full cluster must call
-  `ray.kill(ray.get_actor("diffusion_job_store"))` to avoid leaking actors between test cases.
-
-- **[SAFE]** **Dispatcher-restart correctness is automatic** with the ObjectRef-derived
-  approach. If the dispatcher replica that submitted job X dies before X completes, any other
-  dispatcher replica (or the same one after restart) can still answer `GET /v1/images/jobs/X`
-  correctly — the ObjectRef lives in Ray's GCS and `ray.wait([ref], timeout=0)` returns the
-  current status regardless of which process is asking. Contrast with a background-task design,
-  where the bg task on the dead replica is lost and the job would appear stuck "processing"
-  until TTL.
-
-- **[GAP]** **Cluster-wide durability**: detached actor in-memory state is lost in two cases the
-  docs call out explicitly: (a) actor restart after node failure
-  ([fault tolerance docs](https://docs.ray.io/en/latest/ray-core/fault_tolerance/actors.html):
-  "When an actor is restarted, its state will be recreated by rerunning its constructor"), and
-  (b) full cluster destroy ("Detached actors... are cleaned up when the Ray cluster is
-  destroyed"). For v1 this is acceptable: the 1-hour TTL means most affected jobs would expire
-  soon anyway, and in-flight GPU work is also lost when an actor's node dies, so the recovery
-  story is symmetric — clients retry. If durability becomes a requirement, P2 work adds the
-  documented self-managed checkpoint pattern: the actor periodically writes `self._jobs` to GCS
-  in its update path, and the constructor reads from GCS on init. GCS (not local disk) because
-  the doc warns: "If the checkpoint is saved to external storage, make sure it's accessible to
-  the entire cluster since the actor can be restarted on a different node."
-
-- **[SAFE]** Sync `POST /v1/images` continues to work unchanged; SD callers should keep using it
-  for ergonomics. FLUX callers are encouraged to use the async API.
-
-- **[SAFE]** No Redis or other external KV needed for v1 or steady-state — Ray's own primitives
-  cover the workload. Throughput ceiling for a single-actor JobStore is ~10k ops/sec, far above
-  realistic create/poll rates for image generation (a 100 RPS sustained create rate is ~1% of
-  capacity).
-
-- `tests/test_diffusion_jobs.py`:
-  - Create job → 201 + `Location` header points to correct URL + body has `status="queued"`
-  - Get job → polls through `queued → processing → succeeded` states
-  - **Status derived from ObjectRef**: submit a slow Ray task (e.g. `time.sleep(1)` actor),
-    verify GET returns `processing` before sleep ends and `succeeded` after, **without** any
-    background task or external state push
-  - List jobs → returns only the calling key's jobs, paginates correctly, `next_page_token`
-    round-trips, filters by status/model
-  - Cancel queued job → `ray.cancel` invoked, GET returns `status="canceled"`
-  - Cancel processing job → `ray.cancel(force=False)` invoked, `canceled=True` flag set; GET
-    returns `canceled` even if the task subsequently completes (the short-circuit honors the
-    cancel flag and ignores the late-arriving result)
-  - Cancel terminal job → 200 idempotent (no second `ray.cancel` call)
-  - Cancel missing job → 404
-  - Idempotency-Key on create returns same job_id on retry
-  - Failed job → submit a Ray task that raises; GET returns `status="failed"` with `error.code`
-    and `error.message` populated from the exception
-  - **Cross-replica visibility**: create job via dispatcher replica A, GET via replica B returns
-    correct status (validates both the named-actor pattern and ObjectRef-derived status work
-    across processes; simulated via two `ImagesDispatcher` instances bound to the same
-    `JobStore` actor)
-  - **Dispatcher-restart correctness**: create job, simulate dispatcher restart by recreating
-    the `ImagesDispatcher`, GET still returns correct status (proves ObjectRef state survives
-    the dispatcher process)
-  - **Actor cleanup**: `ray.kill(ray.get_actor("diffusion_job_store"))` in fixture teardown so
-    test cases don't leak actor state between runs
+</details>
 
 ---
 
@@ -1085,18 +907,19 @@ uv run pytest tests/ -v --exitfirst --failed-first
 
 ## Rollout order
 
-1. **P0.1** Predictor + tiny-SD test — ~1 day, no infra
-2. **P0.2** Shared safety module + websearch refactor — ~½ day, no infra
-3. **P0.3** Middleware (auth, rate-limit headers, idempotency, errors) + tests — ~1.5 days
-4. **P0.4** Request/response Pydantic models — ~½ day
-5. **P0.5–7** Dispatcher + SD deployment + discovery, gated off — ~1 day, needs L4 to validate
-6. **P0.6** FLUX deployment, gated off — ~1 day, needs L4 + Q8 GGUF accessible to node
-7. **P0.8** Config wiring — ~½ day
-8. **P1.9** Async jobs — ~1 day
-9. **P1.10** URL storage backend — ~1 day
-10. **P1.11** K8s manifest + GCS mount — ~1 day, infra-side
-11. **P1.12** Observability extensions — ~½ day
-12. Flip enable flags in prod config, monitor
+1. **P0.1** Predictor + tiny-SD test — ✅ done
+2. **P0.2** Shared safety module + websearch refactor — ✅ done
+3. **P0.3** Middleware (auth, rate-limit headers, idempotency, errors) + tests — ✅ done
+4. **P0.4** Request/response Pydantic models — ✅ done
+5. **P0.5–7** Dispatcher + SD deployment + discovery, gated off — ✅ done
+6. **P0.6** FLUX deployment, gated off — ✅ done
+7. **P0.8** Config wiring — ✅ done
+8. **P1.9** Async jobs — ✅ done
+9. **SD 3.5 Medium** — ✅ done (SD35Predictor, SD35Deployment, ServeConfig fields, wiring, tests)
+10. **P1.10** URL storage backend — ~1 day
+11. **P1.11** K8s manifest + GCS mount — ~1 day, infra-side
+12. **P1.12** Observability extensions — ~½ day
+13. Flip enable flags in prod config, monitor
 
 ---
 

@@ -175,39 +175,41 @@ class IdempotencyCache:
 
     def __init__(self, ttl_s: int = 600) -> None:
         self._ttl_s = ttl_s
-        self._cache: dict[tuple[str, str], tuple[Any, float]] = {}
+        self._cache: dict[tuple[str, str], tuple[Any, str, float]] = {}
 
     def get(self, api_key: str, key: str) -> Any | None:
         cache_key = (api_key, key)
         entry = self._cache.get(cache_key)
         if entry is None:
             return None
-        body, expires_at = entry
+        body, _body_hash, expires_at = entry
         if time.time() > expires_at:
             del self._cache[cache_key]
             return None
         return body
 
-    def put(self, api_key: str, key: str, body: Any) -> None:
+    def put(self, api_key: str, key: str, body: Any, request_body_hash: str = "") -> None:
         cache_key = (api_key, key)
-        self._cache[cache_key] = (body, time.time() + self._ttl_s)
+        self._cache[cache_key] = (body, request_body_hash, time.time() + self._ttl_s)
 
-    def check_conflict(self, api_key: str, key: str, request_body: str) -> None:
-        existing = self.get(api_key, key)
-        if existing is not None:
-            cached_body = existing
-            if str(cached_body) != str(request_body):
-                raise HTTPException(
-                    status_code=409,
-                    detail={
-                        "code": "idempotency_key_conflict",
-                        "message": "Idempotency key already used with a different request body",
-                    },
-                )
+    def check_conflict(self, api_key: str, key: str, request_body_hash: str) -> None:
+        cache_key = (api_key, key)
+        entry = self._cache.get(cache_key)
+        if entry is None:
+            return
+        _body, stored_hash, _expires_at = entry
+        if stored_hash and stored_hash != request_body_hash:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "idempotency_key_conflict",
+                    "message": "Idempotency key already used with a different request body",
+                },
+            )
 
     def reap(self) -> int:
         now = time.time()
-        expired = [k for k, (_, exp) in self._cache.items() if now > exp]
+        expired = [k for k, (_, _, exp) in self._cache.items() if now > exp]
         for k in expired:
             del self._cache[k]
         return len(expired)

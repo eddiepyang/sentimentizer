@@ -30,6 +30,8 @@ sd_enabled: false
 sd_model_id: "stabilityai/stable-diffusion-2-1"
 flux_enabled: false
 flux_model_path: ""
+sd35_enabled: false
+sd35_model_id: "stabilityai/stable-diffusion-3.5-medium"
 default_image_model: "sd"
 request_timeout_s: 180
 

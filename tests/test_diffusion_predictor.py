@@ -11,6 +11,7 @@ from sentimentizer.diffusion.config import (
 )
 from sentimentizer.diffusion.predictor import (
     FluxPredictor,
+    SD35Predictor,
     SDPredictor,
     _b64,
     _encode_pil,
@@ -173,6 +174,30 @@ class TestFluxPredictorDefaults:
 
     def test_generate_raises_if_not_loaded(self) -> None:
         p = FluxPredictor()
+        with pytest.raises(RuntimeError, match="not loaded"):
+            p.generate("test prompt")
+
+
+class TestSD35PredictorDefaults:
+    def test_init_not_loaded(self) -> None:
+        p = SD35Predictor()
+        assert not p.model_loaded
+        assert p.model_error is None
+
+    def test_sd35_default_guidance(self) -> None:
+        assert SD35Predictor().cfg.default_guidance == 4.5
+
+    def test_sd35_default_steps(self) -> None:
+        assert SD35Predictor().cfg.default_steps == 40
+
+    def test_sd35_default_model_id(self) -> None:
+        assert SD35Predictor().cfg.model_id == "stabilityai/stable-diffusion-3.5-medium"
+
+    def test_sd35_dim_alignment(self) -> None:
+        assert SD35Predictor().cfg.dim_alignment == 16
+
+    def test_generate_raises_if_not_loaded(self) -> None:
+        p = SD35Predictor()
         with pytest.raises(RuntimeError, match="not loaded"):
             p.generate("test prompt")
 

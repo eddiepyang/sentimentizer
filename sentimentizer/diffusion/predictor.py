@@ -18,6 +18,7 @@ import torch
 from sentimentizer import logger
 from sentimentizer.diffusion.config import (
     FLUX_DEFAULT_CONFIG,
+    SD35_DEFAULT_CONFIG,
     SD_DEFAULT_CONFIG,
     DiffusionModelConfig,
 )
@@ -283,6 +284,69 @@ class FluxPredictor(DiffusionPredictor):
             "height": height,
             "generator": generator,
         }
+
+        result = self._pipeline(**call_kwargs)
+        return result.images[0], used_seed
+
+
+class SD35Predictor(DiffusionPredictor):
+    """Stable Diffusion 3.5 Medium predictor wrapping StableDiffusion3Pipeline."""
+
+    def __init__(self, cfg: DiffusionModelConfig | None = None) -> None:
+        super().__init__(cfg or SD35_DEFAULT_CONFIG)
+
+    def warmup(self) -> None:
+        if self._model_loaded:
+            return
+        try:
+            from diffusers import StableDiffusion3Pipeline
+
+            dtype = _resolve_dtype(self.cfg.dtype, self._device)
+            load_kwargs: dict[str, Any] = {"torch_dtype": dtype}
+            self._pipeline = StableDiffusion3Pipeline.from_pretrained(
+                self.cfg.model_id,
+                **load_kwargs,
+            )
+            self._pipeline.to(self._device)
+            self._model_loaded = True
+            logger.info("SD3.5 model warmed up", model_id=self.cfg.model_id, device=self._device)
+        except Exception as exc:
+            self._model_error = str(exc)
+            logger.exception("SD3.5 warmup failed")
+
+    def generate(
+        self,
+        prompt: str,
+        negative_prompt: str | None = None,
+        steps: int | None = None,
+        guidance_scale: float | None = None,
+        width: int = 1024,
+        height: int = 1024,
+        seed: int | None = None,
+    ) -> tuple[Any, int]:
+        if not self._model_loaded:
+            raise RuntimeError(f"SD3.5 model not loaded: {self._model_error}")
+
+        used_seed = self._resolve_seed(seed)
+        generator = torch.Generator(device=_generator_device(self._device)).manual_seed(used_seed)
+
+        call_kwargs: dict[str, Any] = {
+            "prompt": prompt,
+            "num_inference_steps": (
+                steps if steps is not None else self.cfg.default_steps
+            ),
+            "guidance_scale": (
+                guidance_scale
+                if guidance_scale is not None
+                else self.cfg.default_guidance
+            ),
+            "width": width,
+            "height": height,
+            "generator": generator,
+            "max_sequence_length": 256,
+        }
+        if negative_prompt:
+            call_kwargs["negative_prompt"] = negative_prompt
 
         result = self._pipeline(**call_kwargs)
         return result.images[0], used_seed

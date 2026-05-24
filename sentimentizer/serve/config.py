@@ -44,7 +44,9 @@ class ServeConfig:
         sd_model_id: HuggingFace model ID for SD.
         flux_enabled: Enable FLUX.1-dev deployment.
         flux_model_path: Path to FLUX weights (e.g. GGUF file).
-        default_image_model: Default image model ("sd" or "flux").
+        sd35_enabled: Enable SD 3.5 Medium deployment.
+        sd35_model_id: HuggingFace model ID for SD 3.5 Medium.
+        default_image_model: Default image model ("sd", "flux", or "sd35").
         request_timeout_s: HTTP request timeout in seconds.
         api_keys: Comma-separated list of valid API keys (for image routes).
         rate_limit_per_min: Rate limit per API key per minute.
@@ -67,6 +69,8 @@ class ServeConfig:
     sd_model_id: str = "stabilityai/stable-diffusion-2-1"
     flux_enabled: bool = False
     flux_model_path: str = ""
+    sd35_enabled: bool = False
+    sd35_model_id: str = "stabilityai/stable-diffusion-3.5-medium"
     default_image_model: str = "sd"
     request_timeout_s: int = 180
     api_keys: list[str] = field(default_factory=list)
@@ -116,6 +120,8 @@ _ENV_OVERRIDES: dict[str, str] = {
     "SENTIMENTIZER_SD_MODEL_ID": "sd_model_id",
     "SENTIMENTIZER_FLUX_ENABLED": "flux_enabled",
     "SENTIMENTIZER_FLUX_MODEL_PATH": "flux_model_path",
+    "SENTIMENTIZER_SD35_ENABLED": "sd35_enabled",
+    "SENTIMENTIZER_SD35_MODEL_ID": "sd35_model_id",
     "SENTIMENTIZER_DEFAULT_IMAGE_MODEL": "default_image_model",
     "SENTIMENTIZER_REQUEST_TIMEOUT_S": "request_timeout_s",
     "SENTIMENTIZER_API_KEYS": "api_keys",
@@ -138,6 +144,7 @@ _FIELD_TYPES: dict[str, type] = {
     "cors_origins": list,
     "sd_enabled": bool,
     "flux_enabled": bool,
+    "sd35_enabled": bool,
     "request_timeout_s": int,
     "api_keys": list,
     "rate_limit_per_min": int,

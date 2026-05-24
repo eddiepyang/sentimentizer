@@ -54,3 +54,13 @@ FLUX_DEFAULT_CONFIG = DiffusionModelConfig(
     max_pixels=1048576,
     dim_alignment=16,
 )
+
+SD35_DEFAULT_CONFIG = DiffusionModelConfig(
+    model_id="stabilityai/stable-diffusion-3.5-medium",
+    dtype="bfloat16",
+    quantization=None,
+    default_steps=40,
+    default_guidance=4.5,
+    max_pixels=1048576,
+    dim_alignment=16,
+)

@@ -52,6 +52,7 @@ ray = [
 ]
 diffusion = [
     "diffusers>=0.34.0",
+    "accelerate>=1.8.0",
     "pillow>=12.0.0",
 ]
 router = [

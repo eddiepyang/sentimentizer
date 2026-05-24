@@ -51,6 +51,92 @@ Models output **3-class probabilities** (negative, neutral, positive) that sum t
 
 ---
 
+## Image Generation (SD 2.1 / FLUX.1-dev / SD 3.5 Medium)
+
+The diffusion serving pipeline adds GPU-backed image generation endpoints alongside sentiment analysis. Disabled by default; enable via config.
+
+### Prerequisites
+
+```bash
+# Install with diffusion support (includes diffusers, transformers, accelerate, safetensors)
+uv sync --extra diffusion
+
+# For GPU: install CUDA-enabled PyTorch
+uv sync --no-sources-package torch
+```
+
+### Configure
+
+Set environment variables or edit `sentimentizer/serve/serve_config.yaml`:
+
+```yaml
+# Enable one or more models
+sd_enabled: true
+flux_enabled: false            # FLUX needs ~22 GB VRAM (L4/A100)
+sd35_enabled: false            # SD 3.5 Medium needs ~5-6 GB VRAM
+default_image_model: "sd"      # used when request omits model field
+
+# Auth — required for image routes (/v1/images/*)
+api_keys: ["sk-your-secret-key"]
+
+# Optional: custom model paths
+sd_model_id: "stabilityai/stable-diffusion-2-1"
+sd35_model_id: "stabilityai/stable-diffusion-3.5-medium"
+flux_model_path: "/path/to/flux1-dev-q8_0.gguf"   # GGUF quantized weights
+```
+
+Or via environment variables:
+
+```bash
+export SENTIMENTIZER_SD_ENABLED=true
+export SENTIMENTIZER_API_KEYS=sk-your-secret-key
+```
+
+### Run
+
+```bash
+# Start the Ray Serve deployment (loads model on startup)
+python -m sentimentizer.serve
+
+# SD generation (sync, ~2-3s on L4)
+curl -X POST http://localhost:8000/v1/images \
+  -H "Authorization: Bearer sk-your-secret-key" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "a red apple on a wooden table", "model": "sd", "width": 512, "height": 512}'
+
+# List available models
+curl http://localhost:8000/v1/images/models \
+  -H "Authorization: Bearer sk-your-secret-key"
+
+# Async job mode (for FLUX or long-running requests)
+curl -X POST http://localhost:8000/v1/images/jobs \
+  -H "Authorization: Bearer sk-your-secret-key" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "a cinematic portrait of an astronaut", "model": "flux"}'
+
+# Poll job status
+curl http://localhost:8000/v1/images/jobs/{job_id} \
+  -H "Authorization: Bearer sk-your-secret-key"
+```
+
+### MPS (Apple Silicon) Support
+
+SD 2.1 and SD 3.5 Medium work on MPS devices. FLUX GGUF is CUDA-only; setting `flux_enabled: true` on MPS raises `RuntimeError` at startup.
+
+### API Endpoints
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/v1/images` | Required | Synchronous image generation |
+| POST | `/v1/images/jobs` | Required | Async job creation (201 + Location) |
+| GET | `/v1/images/jobs` | Required | List jobs (paginated, scoped to API key) |
+| GET | `/v1/images/jobs/{id}` | Required | Get job status |
+| DELETE | `/v1/images/jobs/{id}` | Required | Cancel job (best-effort) |
+| GET | `/v1/images/models` | Required | List available image models |
+| GET | `/v1/images/models/{name}` | Required | Single model metadata |
+
+---
+
 ## Models
 
 Four architectures are available:
@@ -71,7 +157,7 @@ All models output **3-class logits** `(B, 3)` mapped to: negative (0), neutral (
 Detailed guides and implementation details are available in the specialized documentation files:
 
 - 🚀 **[Model Serving Guide](docs/serving.md)**: Ray Serve application deployment, FastAPI endpoints (sentiment/routing/image generation), and the Go CLI client.
-- 🎨 **[Diffusion Serving Plan](docs/diffusion_serving_plan.md)**: Image generation API design (SD 2.1, FLUX.1-dev), middleware (auth, rate limiting, idempotency), and GPU deployment.
+- 🎨 **[Diffusion Serving Plan](docs/diffusion_serving_plan.md)**: Image generation API design (SD 2.1, FLUX.1-dev, SD 3.5 Medium), middleware (auth, rate limiting, idempotency), and GPU deployment.
 - 🏋️ **[Model Training & Checkpointing Guide](docs/training.md)**: Yelp datasets, single-node/distributed commands, training arguments, sleep prevention, and checkpoint resuming.
 - ⚙️ **[Model Configuration Reference](docs/configuration.md)**: Configuration dataclasses (`RNNConfig`, `EncoderConfig`, etc.), parameter defaults, and consistency checks.
 - 🎛️ **[Hyperparameter Tuning Guide](docs/tuning.md)**: Optuna searches, LangGraph iterative agent tuning (via Ollama GLM 5.1), and validation/retries.
@@ -160,11 +246,12 @@ sentimentizer/
 │   ├── config.py           # Serve deployment configuration (YAML/env var loading, incl. cors_origins)
 │   ├── middleware.py       # Auth, rate limiting, idempotency, prompt safety for image routes
 │   ├── models.py          # Pydantic request/response models for Swagger docs
-│   ├── diffusion_models.py # Pydantic request/response models for image generation
-│   └── diffusion_app.py    # SD/FLUX deployments + ImagesDispatcher routes
+│   ├── diffusion_models.py # Pydantic request/response models for image generation (+ Job models)
+│   └── diffusion_app.py    # SD/FLUX/SD35 deployments + ImagesDispatcher routes + job endpoints
 ├── diffusion/              # Diffusion model loading + inference
-│   ├── config.py           # DiffusionModelConfig, SD/FLUX default configs
-│   └── predictor.py         # DiffusionPredictor ABC, SDPredictor, FluxPredictor
+│   ├── config.py           # DiffusionModelConfig, SD/FLUX/SD35 default configs
+│   ├── job_store.py         # JobStoreLogic + Ray actor for async job metadata
+│   └── predictor.py         # DiffusionPredictor ABC, SDPredictor, FluxPredictor, SD35Predictor
 ├── tokenizer.py           # Text tokenizer with pre-trained support
 ├── trainer.py             # Training logic
 ├── tuner.py               # Ray Tune + Optuna hyperparameter search

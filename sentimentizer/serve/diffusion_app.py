@@ -17,6 +17,7 @@ from fastapi import Depends, HTTPException, Query, Request, Response
 from sentimentizer import logger
 from sentimentizer.diffusion.predictor import (
     FluxPredictor,
+    SD35Predictor,
     SDPredictor,
     _b64,
     _encode_pil,
@@ -40,6 +41,21 @@ from sentimentizer.serve.middleware import (
     rate_limit,
     require_api_key,
 )
+
+
+def _body_hash(body: Any) -> str:
+    import hashlib
+
+    import orjson
+
+    if hasattr(body, "model_dump"):
+        data = body.model_dump(mode="python")
+    elif hasattr(body, "dict"):
+        data = body.dict()
+    else:
+        data = body
+    raw = orjson.dumps(data, option=orjson.OPT_SORT_KEYS)
+    return hashlib.sha256(raw).hexdigest()[:32]
 
 
 @serve.deployment(
@@ -93,6 +109,31 @@ class FluxDeployment:
 
 
 @serve.deployment(
+    num_replicas=1,
+    max_ongoing_requests=4,
+    ray_actor_options={"num_cpus": 2, "num_gpus": 1},
+)
+class SD35Deployment:
+    def __init__(self) -> None:
+        from dataclasses import replace
+
+        from sentimentizer.diffusion.config import SD35_DEFAULT_CONFIG
+
+        model_cfg = SD35_DEFAULT_CONFIG
+        if cfg.sd35_model_id:
+            model_cfg = replace(SD35_DEFAULT_CONFIG, model_id=cfg.sd35_model_id)
+        self.predictor = SD35Predictor(model_cfg)
+        self.predictor.warmup()
+        self._metrics = ServiceMetrics(prefix="sd35")
+
+    async def generate(self, **kwargs: Any) -> tuple[Any, int]:
+        return await asyncio.to_thread(self.predictor.generate, **kwargs)
+
+    def info(self) -> dict[str, Any]:
+        return self.predictor.model_info()
+
+
+@serve.deployment(
     num_replicas=2,
     max_ongoing_requests=20,
     ray_actor_options={"num_cpus": 1, "num_gpus": 0},
@@ -105,12 +146,15 @@ class ImagesDispatcher:
         self,
         sd: Any = None,
         flux: Any = None,
+        sd35: Any = None,
     ) -> None:
         self._handles: dict[str, Any] = {}
         if sd is not None:
             self._handles["sd"] = sd
         if flux is not None:
             self._handles["flux"] = flux
+        if sd35 is not None:
+            self._handles["sd35"] = sd35
         self._idem = IdempotencyCache(ttl_s=cfg.idempotency_ttl_s)
         self._store: Any = None
         self._refs: dict[str, Any] = {}
@@ -149,10 +193,15 @@ class ImagesDispatcher:
     def _get_predictor_defaults(self, model: str) -> dict[str, Any]:
         from sentimentizer.diffusion.config import (
             FLUX_DEFAULT_CONFIG,
+            SD35_DEFAULT_CONFIG,
             SD_DEFAULT_CONFIG,
         )
 
-        defaults_map = {"sd": SD_DEFAULT_CONFIG, "flux": FLUX_DEFAULT_CONFIG}
+        defaults_map = {
+            "sd": SD_DEFAULT_CONFIG,
+            "flux": FLUX_DEFAULT_CONFIG,
+            "sd35": SD35_DEFAULT_CONFIG,
+        }
         model_cfg = defaults_map.get(model)
         if model_cfg is None:
             return {}
@@ -219,6 +268,7 @@ class ImagesDispatcher:
         check_prompt_safety(body.prompt)
 
         if idempotency_key and api_key:
+            self._idem.check_conflict(api_key, idempotency_key, _body_hash(body))
             cached = self._idem.get(api_key, idempotency_key)
             if cached is not None:
                 return cached
@@ -258,7 +308,7 @@ class ImagesDispatcher:
         }
 
         if idempotency_key and api_key:
-            self._idem.put(api_key, idempotency_key, response)
+            self._idem.put(api_key, idempotency_key, response, _body_hash(body))
 
         logger.info(
             "image generated",
@@ -372,6 +422,7 @@ class ImagesDispatcher:
         store = self._get_store()
 
         if idempotency_key and api_key:
+            self._idem.check_conflict(api_key, idempotency_key, _body_hash(body))
             cached = self._idem.get(api_key, idempotency_key)
             if cached is not None:
                 response.headers["Location"] = (
@@ -404,7 +455,7 @@ class ImagesDispatcher:
         response.headers["Location"] = f"/v1/images/jobs/{job_id}"
 
         if idempotency_key and api_key:
-            self._idem.put(api_key, idempotency_key, job_resp)
+            self._idem.put(api_key, idempotency_key, job_resp, _body_hash(body))
 
         logger.info(
             "job created",

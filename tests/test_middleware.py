@@ -150,8 +150,29 @@ class TestIdempotencyCache:
         time.sleep(0.01)
         cache.put("k2", "id2", "v2")
         reaped = cache.reap()
-        # At least the first entry should be expired
         assert reaped >= 0
+
+    def test_check_conflict_same_body(self) -> None:
+        cache = IdempotencyCache(ttl_s=600)
+        cache.put("api-key-1", "idem-1", {"result": "ok"}, request_body_hash="abc123")
+        cache.check_conflict("api-key-1", "idem-1", "abc123")
+
+    def test_check_conflict_different_body_raises(self) -> None:
+        cache = IdempotencyCache(ttl_s=600)
+        cache.put("api-key-1", "idem-1", {"result": "ok"}, request_body_hash="abc123")
+        with pytest.raises(HTTPException) as exc_info:
+            cache.check_conflict("api-key-1", "idem-1", "def456")
+        assert exc_info.value.status_code == 409
+        assert exc_info.value.detail["code"] == "idempotency_key_conflict"
+
+    def test_check_conflict_no_existing_key(self) -> None:
+        cache = IdempotencyCache(ttl_s=600)
+        cache.check_conflict("api-key-1", "idem-new", "abc123")
+
+    def test_check_conflict_scoped_per_api_key(self) -> None:
+        cache = IdempotencyCache(ttl_s=600)
+        cache.put("api-key-1", "idem-1", {"result": "a"}, request_body_hash="abc123")
+        cache.check_conflict("api-key-2", "idem-1", "def456")
 
 
 class TestCheckPromptSafety:
