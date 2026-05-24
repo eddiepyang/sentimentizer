@@ -188,7 +188,7 @@ class TestExportPipeline:
         assert result["tolerance"] == 1e-2
 
     def test_encoder_tolerance_strict(self, small_encoder, tmp_path) -> None:
-        """Encoder should use tolerance 1e-4 (strict) by default."""
+        """Encoder should use tolerance 5e-2 (dynamo exporter) by default."""
         from sentimentizer.export_onnx import export_model_to_onnx, validate_onnx_export
 
         output_path = tmp_path / "encoder_tolerance.onnx"
@@ -196,5 +196,4 @@ class TestExportPipeline:
 
         test_input = torch.randint(1, 99, (4, 20), dtype=torch.long)
         result = validate_onnx_export(output_path, small_encoder, "encoder", test_input)
-        # Default tolerance for Encoder should be 1e-4
-        assert result["tolerance"] == 1e-4
+        assert result["tolerance"] == 5e-2
