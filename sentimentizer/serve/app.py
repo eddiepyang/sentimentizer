@@ -48,6 +48,7 @@ Endpoints:
 
 import asyncio
 import os
+import threading
 import time
 import uuid
 from importlib.metadata import version as _pkg_version
@@ -262,11 +263,6 @@ def _status_code_to_error_code(status_code: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Pydantic request models (use module-level cfg for validation limits)
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
 # Deployment
 # ---------------------------------------------------------------------------
 
@@ -283,7 +279,7 @@ class SentimentizerDeployment:
     """Serves sentiment analysis and review routing over HTTP.
 
     Uses ``serve.ingress`` with FastAPI for HTTP routing.
-    ``serve.batch`` auto-batches individual ``/v1/predict`` calls into
+    ``serve.batch`` auto-batches individual ``/v1/sentiment/predict`` calls into
     efficient forward passes. Sync model inference runs via
     ``asyncio.to_thread()`` to avoid blocking the event loop.
     """
@@ -351,7 +347,7 @@ class SentimentizerDeployment:
     async def predict_sentiment(self, inputs: list[dict]) -> list[dict]:
         """Auto-batched sentiment prediction.
 
-        Collects up to ``predict_batch_size`` individual ``/v1/predict``
+        Collects up to ``predict_batch_size`` individual ``/v1/sentiment/predict``
         requests over a ``predict_batch_wait_s`` window, then
         runs them through a single forward pass.
         """
@@ -632,8 +628,6 @@ def main(host: str = "0.0.0.0", port: int = 8000) -> None:
     logger.info("Sentimentizer Serve running", host=host, port=port)
 
     try:
-        import threading
-
         shutdown_event = threading.Event()
         shutdown_event.wait()
     except KeyboardInterrupt:
