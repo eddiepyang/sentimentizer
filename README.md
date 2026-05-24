@@ -18,6 +18,12 @@ uv add sentimentizer
 
 # Install with distributed training, tuning, and serving features
 uv add "sentimentizer[ray]"
+
+# Install with image generation (Stable Diffusion / FLUX)
+uv add "sentimentizer[diffusion]"
+
+# Install both
+uv add "sentimentizer[ray,diffusion]"
 ```
 
 ---
@@ -64,7 +70,8 @@ All models output **3-class logits** `(B, 3)` mapped to: negative (0), neutral (
 
 Detailed guides and implementation details are available in the specialized documentation files:
 
-- 🚀 **[Model Serving Guide](docs/serving.md)**: Ray Serve application deployment, FastAPI endpoints (sentiment/routing), and the Go CLI client.
+- 🚀 **[Model Serving Guide](docs/serving.md)**: Ray Serve application deployment, FastAPI endpoints (sentiment/routing/image generation), and the Go CLI client.
+- 🎨 **[Diffusion Serving Plan](docs/diffusion_serving_plan.md)**: Image generation API design (SD 2.1, FLUX.1-dev), middleware (auth, rate limiting, idempotency), and GPU deployment.
 - 🏋️ **[Model Training & Checkpointing Guide](docs/training.md)**: Yelp datasets, single-node/distributed commands, training arguments, sleep prevention, and checkpoint resuming.
 - ⚙️ **[Model Configuration Reference](docs/configuration.md)**: Configuration dataclasses (`RNNConfig`, `EncoderConfig`, etc.), parameter defaults, and consistency checks.
 - 🎛️ **[Hyperparameter Tuning Guide](docs/tuning.md)**: Optuna searches, LangGraph iterative agent tuning (via Ollama GLM 5.1), and validation/retries.
@@ -91,6 +98,12 @@ uv sync --extra ray
 
 # Install dev and test suites
 uv sync --extra dev --extra ray
+
+# Install with diffusion (image generation) support
+uv sync --extra diffusion
+
+# Full development install
+uv sync --extra dev --extra ray --extra diffusion
 ```
 
 ### Local CUDA / GPU development
@@ -140,11 +153,18 @@ sentimentizer/
 ├── metrics.py            # 3-class classification metrics (per-class P/R/F1, balanced accuracy, MCC)
 ├── metrics_publisher.py   # Epoch metrics publishing (Prometheus + JSON) + intra-epoch batch snapshots
 ├── predictor.py           # SentimentPredictor (model loading, inference)
+├── safety.py              # Shared prompt safety (NSFW blocklist, injection patterns)
 ├── serve/                 # Ray Serve deployment: FastAPI + @serve.ingress, /v1/ prefix
 │   ├── app.py             # FastAPI route handlers and deployment class
 │   ├── base.py            # ServiceMetrics (request/latency tracking), _DummyServe fallback
 │   ├── config.py           # Serve deployment configuration (YAML/env var loading, incl. cors_origins)
-│   └── models.py          # Pydantic request/response models for Swagger docs
+│   ├── middleware.py       # Auth, rate limiting, idempotency, prompt safety for image routes
+│   ├── models.py          # Pydantic request/response models for Swagger docs
+│   ├── diffusion_models.py # Pydantic request/response models for image generation
+│   └── diffusion_app.py    # SD/FLUX deployments + ImagesDispatcher routes
+├── diffusion/              # Diffusion model loading + inference
+│   ├── config.py           # DiffusionModelConfig, SD/FLUX default configs
+│   └── predictor.py         # DiffusionPredictor ABC, SDPredictor, FluxPredictor
 ├── tokenizer.py           # Text tokenizer with pre-trained support
 ├── trainer.py             # Training logic
 ├── tuner.py               # Ray Tune + Optuna hyperparameter search

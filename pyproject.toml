@@ -50,6 +50,10 @@ ray = [
     "ray[tune]>=2.55.1,<2.56.0",
     "optuna>=4.8.0",
 ]
+diffusion = [
+    "diffusers>=0.34.0",
+    "pillow>=12.0.0",
+]
 router = [
     "sentence-transformers>=4.0.0",
     "datasets",

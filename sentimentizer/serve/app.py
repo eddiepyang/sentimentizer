@@ -92,6 +92,9 @@ from sentimentizer.serve.models import (
 
 cfg = load_serve_config()
 
+if cfg.api_keys:
+    os.environ.setdefault("SENTIMENTIZER_API_KEYS", ",".join(cfg.api_keys))
+
 # ---------------------------------------------------------------------------
 # FastAPI app (module-level for @serve.ingress)
 # ---------------------------------------------------------------------------
@@ -119,7 +122,7 @@ app = FastAPI(
 # will bypass the error envelope and leak a raw Starlette 500.
 # ---------------------------------------------------------------------------
 
-MAX_REQUEST_BODY_BYTES = 1 * 1024 * 1024  # 1 MiB defense-in-depth limit
+MAX_REQUEST_BODY_BYTES = 4 * 1024 * 1024  # 4 MiB defense-in-depth limit
 
 
 class _RequestBodySizeLimitMiddleware(BaseHTTPMiddleware):
@@ -253,9 +256,13 @@ def _status_code_to_error_code(status_code: int) -> str:
     """Map common HTTP status codes to machine-readable error codes."""
     mapping = {
         400: "bad_request",
+        401: "invalid_api_key",
+        403: "forbidden",
         404: "not_found",
+        409: "idempotency_key_conflict",
         413: "request_too_large",
         422: "validation_error",
+        429: "rate_limit_exceeded",
         503: "service_unavailable",
     }
     return mapping.get(status_code, f"error_{status_code}")
@@ -590,6 +597,11 @@ class SentimentizerDeployment:
             "router_loaded": self.predictor.router_loaded,
             "router_error": self.predictor.router_error,
         }
+        if cfg.sd_enabled or cfg.flux_enabled:
+            body["image_models"] = {
+                "sd": "enabled" if cfg.sd_enabled else "disabled",
+                "flux": "enabled" if cfg.flux_enabled else "disabled",
+            }
         if not self.predictor.model_loaded:
             return JSONResponse(status_code=503, content=body)
         return body
@@ -625,10 +637,31 @@ def main(host: str = "0.0.0.0", port: int = 8000) -> None:
             "py_executable": sys.executable,
         },
     )
-    serve.start(http_options={"host": host, "port": port})
-    # TODO: Modern Ray Serve supports serve.run(target, host=host, port=port)
-    # which combines start+run. Migrate when dropping support for older APIs.
-    serve.run(deployment)
+    serve.start(
+        http_options={
+            "host": host,
+            "port": port,
+            "request_timeout_s": cfg.request_timeout_s,
+        }
+    )
+
+    deployments = {"sentimentizer": SentimentizerDeployment.bind()}
+
+    if cfg.sd_enabled or cfg.flux_enabled:
+        from sentimentizer.diffusion.job_store import JobStore
+        from sentimentizer.serve.diffusion_app import FluxDeployment, ImagesDispatcher, SDDeployment
+
+        JobStore.options(
+            name="diffusion_job_store",
+            lifetime="detached",
+            get_if_exists=True,
+        ).remote(ttl_s=cfg.job_ttl_s)
+
+        sd_handle = SDDeployment.bind() if cfg.sd_enabled else None
+        flux_handle = FluxDeployment.bind() if cfg.flux_enabled else None
+        deployments["images"] = ImagesDispatcher.bind(sd_handle, flux_handle)
+
+    serve.run(deployments)
     logger.info("Sentimentizer Serve running", host=host, port=port)
 
     try:

@@ -37,6 +37,7 @@ from typing import Literal
 
 from sentimentizer import new_logger
 from sentimentizer.config import DEFAULT_LOG_LEVEL
+from sentimentizer.safety import INJECTION_PATTERNS
 
 logger = new_logger(DEFAULT_LOG_LEVEL)
 
@@ -50,15 +51,6 @@ DEFAULT_MAX_QUERY_LENGTH = 200
 DEFAULT_MAX_CONTENT_LENGTH = 2000
 DEFAULT_TIMEOUT_SECONDS = 15
 MAX_CALLS_PER_RUN = 3
-
-# Patterns that may indicate prompt injection in web content
-_INJECTION_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r"(?i)ignore\s+(previous|above|prior)\s+instructions", re.IGNORECASE),
-    re.compile(r"(?i)forget\s+(previous|above|prior|all)\s+instructions", re.IGNORECASE),
-    re.compile(r"(?i)you\s+are\s+now\s+a\s+", re.IGNORECASE),
-    re.compile(r"(?i)system\s*:\s*", re.IGNORECASE),
-    re.compile(r"<\s*/?\s*(system|assistant|user)\s*>", re.IGNORECASE),
-]
 
 # Patterns that look like secrets/API keys in queries
 _SECRET_PATTERNS: list[re.Pattern[str]] = [
@@ -153,7 +145,7 @@ def sanitize_content(content: str, max_length: int = DEFAULT_MAX_CONTENT_LENGTH)
         content = content[:max_length] + "...[truncated]"
 
     # Strip potential prompt-injection patterns
-    for pattern in _INJECTION_PATTERNS:
+    for pattern in INJECTION_PATTERNS:
         content = pattern.sub("[filtered]", content)
 
     return content

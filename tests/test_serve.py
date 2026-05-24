@@ -908,4 +908,4 @@ class TestRequestBodySizeLimit:
     def test_max_body_size_constant(self):
         from sentimentizer.serve.app import MAX_REQUEST_BODY_BYTES
 
-        assert MAX_REQUEST_BODY_BYTES == 1 * 1024 * 1024  # 1 MiB
+        assert MAX_REQUEST_BODY_BYTES == 4 * 1024 * 1024  # 4 MiB

@@ -64,6 +64,86 @@ sync-only deployments don't persist images.
 **[RISK]** FLUX-Q8 is tight on L4. Escape hatches if OOM appears in load testing:
 `pipe.enable_model_cpu_offload()` to swap T5 between encode and denoise, or drop to Q6.
 
+### What runs inside `predictor.generate()`
+
+The diffusers pipeline is **multiple steps**, not a single forward pass. The denoising loop
+dominates latency (N × UNet/DiT forward passes), and the loop's shape is what makes vLLM-style
+continuous batching irrelevant (fixed N, no KV cache, every step the same cost). Step-reduction
+techniques (LCM-LoRA for SD, `flux-schnell` for FLUX) attack the loop directly by shrinking N.
+
+```mermaid
+flowchart TD
+    REQ["POST /v1/images<br/>(prompt, model, steps=N, guidance, seed, w, h)"]
+    REQ --> ROUTE["Route handler<br/>auth → rate-limit → safety → defaults → idempotency"]
+    ROUTE --> GEN["predictor.generate(...)"]
+
+    subgraph SETUP["Setup — runs once per request"]
+        direction TB
+        TE["Text encoder forward<br/>SD: CLIP ViT-L (1 pass)<br/>FLUX: T5-XXL + CLIP-L (2 passes — T5 is the big one)"]
+        NOISE["Sample initial latent<br/>torch.randn(seed)<br/>shape: 4 × H/8 × W/8"]
+        SCH["Scheduler.set_timesteps(N)<br/>→ noise schedule t₀..t_{N-1}<br/>SD: DPM++ / Euler · FLUX: FlowMatchEulerDiscrete"]
+        TE --> NOISE --> SCH
+    end
+
+    subgraph LOOP["Denoising loop — runs N times (dominates latency)"]
+        direction TB
+        UNET["UNet (SD) / DiT (FLUX) forward<br/>(latent_k, t_k, text_emb) → noise prediction<br/><i>2× forward pass when classifier-free guidance enabled</i>"]
+        CFG["Combine cond + uncond predictions<br/>× guidance_scale"]
+        STEP["Scheduler.step<br/>latent_(k+1) = f(latent_k, prediction, σ_k)"]
+        UNET --> CFG --> STEP
+        STEP -. "k < N-1" .-> UNET
+    end
+
+    subgraph DECODE["Decode + encode — runs once"]
+        direction TB
+        VAE["VAE.decode<br/>latent → RGB tensor (8× upsample on H, W)"]
+        PIL["PIL.Image"]
+        ENC["Encode bytes<br/>PNG / WebP / JPEG"]
+        B64["base64 → GenerateResponse JSON"]
+        VAE --> PIL --> ENC --> B64
+    end
+
+    GEN --> SETUP
+    SETUP --> LOOP
+    LOOP --> DECODE
+    DECODE --> RESP["Response to client"]
+```
+
+**Where time goes** (L4, 1024², 28 steps, CFG on):
+
+| Stage | SD 2.1 | FLUX.1-dev Q8 |
+|---|---|---|
+| Text encode | ~50 ms (CLIP-L) | ~500 ms (T5-XXL is big) |
+| Denoising loop (28 × UNet/DiT, ×2 for CFG) | ~1.5–2 s | ~14–22 s |
+| VAE decode | ~150 ms | ~250 ms |
+| Encode + b64 (PNG, 1024²) | ~50 ms | ~50 ms |
+| **Total** | **~2–3 s** | **~15–25 s** |
+
+The loop is ~85% of FLUX wall-time, which is why `torch.compile` on the DiT (item 1 below) is
+the highest-ROI P0 optimization.
+
+### Inference acceleration (what to use, what to skip)
+
+**vLLM is not a fit here.** vLLM targets autoregressive LLM inference (PagedAttention,
+continuous batching, KV-cache paging) — diffusion has no KV cache, fixed step counts, and a
+UNet/DiT forward pass as the bottleneck. Adoption would add a dependency without moving
+throughput. vLLM only enters the picture if a text-generation model (e.g. a prompt enhancer)
+is later added as a separate deployment.
+
+What does help on L4, in rough ROI order:
+
+1. **`torch.compile(mode="reduce-overhead")`** on the UNet / DiT — 15–30% speedup, drop-in from
+   diffusers. Call inside `predictor.warmup()` so the compile cost is paid before serving traffic.
+   **P0** (cheap, no infra).
+2. **SDPA / xformers attention** — diffusers enables SDPA by default in recent versions; verify
+   it is active, fall back to `enable_xformers_memory_efficient_attention()` if not. **P0**.
+3. **TensorRT or specialized diffusion compilers** ([Stable-Fast](https://github.com/chengzeyi/stable-fast),
+   [OneDiff](https://github.com/siliconflow/onediff)) — ~2× wins, more setup cost. **P2**.
+4. **Step-reduction**: LCM-LoRA or DPM-Solver++ for SD; `flux-schnell` (4-step) for FLUX if
+   quality allows. **P2**.
+5. **FP8 quantization** for SD via [TorchAO](https://github.com/pytorch/ao) — frees VRAM for
+   higher concurrency or resolution. Already on Q8 GGUF for FLUX. **P2**.
+
 ---
 
 ## P0 — Do now
@@ -79,7 +159,8 @@ dispatcher can target SD or FLUX through one interface.
 - `sentimentizer/diffusion/__init__.py` — new package
 - `sentimentizer/diffusion/config.py`:
   - `DiffusionModelConfig` dataclass: `model_id`, `model_path`, `dtype`, `quantization`,
-    plus per-model defaults: `default_steps`, `default_guidance`, `max_pixels`
+    plus per-model defaults: `default_steps`, `default_guidance`, `max_pixels`,
+    `dim_alignment` (8 for SD, 16 for FLUX)
 - `sentimentizer/diffusion/predictor.py`:
   - `DiffusionPredictor` ABC with `generate()`, `warmup()`, `model_loaded` property,
     `resolve_defaults(req) -> dict` (fills in per-model defaults for unset fields),
@@ -205,18 +286,47 @@ class GenerateRequest(BaseModel):
     negative_prompt: str | None = Field(None, max_length=2000)
     steps: int | None = Field(None, ge=1, le=100, description="default depends on model")
     guidance_scale: float | None = Field(None, ge=0.0, le=20.0)
-    width: int = Field(1024, ge=256, le=2048, multiple_of=8)
-    height: int = Field(1024, ge=256, le=2048, multiple_of=8)
+    width: int = Field(1024, ge=256, le=2048, multiple_of=8,
+        description="loosest constraint (8) enforced at schema level. Per-model alignment "
+                    "(FLUX needs multiple_of=16 in some configs) is enforced post-resolve "
+                    "inside the route — see invalid_dimensions error code.")
+    height: int = Field(1024, ge=256, le=2048, multiple_of=8, description="see width")
     seed: int | None = None
     response_format: Literal["b64_json", "url"] = "b64_json"  # url is P1
     output_format: Literal["png", "webp", "jpeg"] = "png"
     user: str | None = Field(None, max_length=128, description="opaque end-user id for abuse tracking")
 
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "prompt": "a red apple on a wooden table",
+                    "model": "sd",
+                    "width": 1024,
+                    "height": 1024,
+                    "output_format": "png",
+                },
+                {
+                    "prompt": "a cinematic portrait of an astronaut",
+                    "negative_prompt": "blurry, low quality",
+                    "model": "flux",
+                    "steps": 28,
+                    "guidance_scale": 3.5,
+                    "width": 1024,
+                    "height": 1024,
+                    "seed": 42,
+                    "response_format": "b64_json",
+                    "output_format": "webp",
+                },
+            ]
+        }
+    }
+
     @model_validator(mode="after")
     def _check_pixel_budget(self) -> "GenerateRequest":
-        # Per-model max_pixels enforced inside the route after model is resolved,
-        # because limits differ between SD and FLUX. This validator only checks
-        # the cross-field invariant width*height > 0.
+        # Per-model max_pixels AND per-model dimension alignment (FLUX 16 vs SD 8) are
+        # enforced inside the route after model is resolved, because limits differ between
+        # SD and FLUX. This validator only checks the cross-field invariant width*height > 0.
         ...
 
 class GenerateResponse(BaseModel):
@@ -290,10 +400,14 @@ async def generate_image(
     if not predictor.model_loaded:
         raise HTTPException(503, detail={"code": "model_not_loaded", ...})
 
-    # 2. Resolve per-model defaults + enforce pixel budget
+    # 2. Resolve per-model defaults + enforce pixel budget + per-model alignment
     resolved = predictor.resolve_defaults(body)   # fills steps, guidance, seed
     if resolved.width * resolved.height > predictor.cfg.max_pixels:
         raise HTTPException(400, detail={"code": "invalid_dimensions", ...})
+    if resolved.width % predictor.cfg.dim_alignment or resolved.height % predictor.cfg.dim_alignment:
+        raise HTTPException(400, detail={"code": "invalid_dimensions",
+            "message": f"{model_name} requires dimensions aligned to "
+                       f"{predictor.cfg.dim_alignment}px"})
 
     # 3. Safety
     check_prompt_safety(resolved.prompt)
@@ -302,9 +416,20 @@ async def generate_image(
     if idempotency_key and (cached := self._idem.get(api_key, idempotency_key)):
         return cached
 
-    # 5. Generate
+    # 5. Generate — pass only inference-relevant kwargs explicitly. Do NOT splat
+    # resolved.model_dump(); it would leak response_format, output_format, user,
+    # idempotency, etc. into the predictor signature.
     start = time.perf_counter()
-    image, used_seed = await asyncio.to_thread(predictor.generate, **resolved.model_dump())
+    image, used_seed = await asyncio.to_thread(
+        predictor.generate,
+        prompt=resolved.prompt,
+        negative_prompt=resolved.negative_prompt,
+        steps=resolved.steps,
+        guidance_scale=resolved.guidance_scale,
+        width=resolved.width,
+        height=resolved.height,
+        seed=resolved.seed,
+    )
     latency = time.perf_counter() - start
 
     # 6. Encode (respect output_format)
@@ -561,6 +686,10 @@ expose the queue as a first-class resource (list, get, cancel) following standar
   - Scoped per API key — never lists other tenants' jobs.
 
   **d. `DELETE /v1/images/jobs/{job_id}`** — cancel job
+  - **API contract: cancellation is best-effort for jobs in `processing` state.** The DELETE
+    returns immediately with `status="canceled"`, but the GPU may keep working until the
+    in-flight diffusers call returns (see below). The client stops paying attention to the
+    result; the replica does not free up instantly. Document this in the OpenAPI description.
   - Calls `ray.cancel(object_ref, force=False)` on the stored ObjectRef. Ray's behavior:
     - If the task is still queued in Ray Serve's internal queue → dequeued; never runs.
     - If the task is already executing → graceful interrupt is requested. Diffusers doesn't
@@ -604,6 +733,10 @@ expose the queue as a first-class resource (list, get, cancel) following standar
       user: str | None          # echoed (for abuse tracking)
       canceled: bool = False    # set by cancel(); short-circuits status derivation
       terminal_at: int | None = None   # unix ts when status first observed terminal (for TTL)
+      terminal_status: "JobResponse | None" = None  # cached terminal response; once set,
+                                                    # skip ray.wait/ray.get on every poll.
+                                                    # Critical for list-endpoint perf: a 100-item
+                                                    # page would otherwise issue 100 ray.wait calls.
 
   @ray.remote(num_cpus=0.1)
   class JobStore:
@@ -631,21 +764,31 @@ expose the queue as a first-class resource (list, get, cancel) following standar
           return self._derive_status(rec)
 
       def _derive_status(self, rec: JobRecord) -> JobResponse:
+          # 0. Cached terminal response — skip ray.wait()/ray.get() entirely.
+          #    Once a job is terminal it stays terminal; no reason to keep paying for GCS RPCs.
+          if rec.terminal_status is not None:
+              return rec.terminal_status
           # 1. Short-circuit if cancellation was requested
           if rec.canceled:
-              return JobResponse(status="canceled", ...)
+              rec.terminal_status = JobResponse(status="canceled", ...)
+              rec.terminal_at = rec.terminal_at or int(time.time())
+              return rec.terminal_status
           # 2. Check ObjectRef readiness without blocking
           ready, _ = ray.wait([rec.ref], timeout=0)
           if not ready:
-              return JobResponse(status="processing", ...)
-          # 3. Terminal — extract result or error
+              return JobResponse(status="processing", ...)   # not cached; still in flight
+          # 3. Terminal — extract result or error, then cache for future polls
           try:
               result = ray.get(rec.ref)
               rec.terminal_at = rec.terminal_at or int(time.time())
-              return JobResponse(status="succeeded", result=result, ...)
+              rec.terminal_status = JobResponse(status="succeeded", result=result, ...)
+              return rec.terminal_status
           except Exception as e:
               rec.terminal_at = rec.terminal_at or int(time.time())
-              return JobResponse(status="failed", error={"code": "...", "message": str(e)})
+              rec.terminal_status = JobResponse(
+                  status="failed", error={"code": "...", "message": str(e)}
+              )
+              return rec.terminal_status
 
       def cancel(self, job_id: str, api_key: str) -> JobResponse | None:
           rec = self._jobs.get(job_id)

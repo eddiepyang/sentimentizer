@@ -12,7 +12,7 @@ This document describes how to deploy and interact with the unified Sentimentize
 > uv add "sentimentizer[ray]"
 > ```
 
-The `serve` command starts a Ray Serve application with FastAPI routing (featuring interactive Swagger docs at `/docs`). It loads the sentiment model (defaulting to the configuration in `serve_config.yaml`) and the SetFit router at startup. Both services share the same port and handle incoming requests via route-based dispatch.
+The `serve` command starts a Ray Serve application with FastAPI routing (featuring interactive Swagger docs at `/docs`). It loads the sentiment model (defaulting to the configuration in `serve_config.yaml`) and the SetFit router at startup. Image generation (Stable Diffusion 2.1, FLUX.1-dev) can be enabled via configuration. All services share the same port and handle incoming requests via route-based dispatch.
 
 ### Starting the Server
 
@@ -187,6 +187,86 @@ By default, the server binds to `0.0.0.0:8000`.
 - **Command**:
   ```bash
   curl http://localhost:8000/v1/router/models
+  ```
+
+---
+
+### Image Generation Endpoints
+
+> [!NOTE]
+> Image generation requires the `diffusion` extra and a GPU. You can install it using:
+> ```bash
+> uv sync --extra ray --extra diffusion
+> ```
+> Enable image generation by setting `SENTIMENTIZER_SD_ENABLED=1` and/or `SENTIMENTIZER_FLUX_ENABLED=1`,
+> and provide API keys via `SENTIMENTIZER_API_KEYS`. Image routes require authentication;
+> sentiment and router routes remain unauthenticated.
+
+Image generation uses separate GPU-backed Ray Serve deployments (SDDeployment, FluxDeployment)
+behind a lightweight CPU dispatcher (ImagesDispatcher). The [diffusion serving plan](diffusion_serving_plan.md)
+has full architectural details.
+
+#### Synchronous Image Generation
+- **Route**: `POST /v1/images`
+- **Auth**: `Authorization: Bearer <api_key>` (required)
+- **Request Body**:
+  ```json
+  {
+    "prompt": "a red apple on a wooden table",
+    "model": "sd",
+    "width": 1024,
+    "height": 1024,
+    "output_format": "png"
+  }
+  ```
+- **Command**:
+  ```bash
+  curl -X POST http://localhost:8000/v1/images \
+    -H "Authorization: Bearer test-key-123" \
+    -H "Content-Type: application/json" \
+    -d '{"prompt": "a red apple on a wooden table", "model": "sd"}'
+  ```
+- **Response**:
+  ```json
+  {
+    "id": "img_ABCDEFGHIJKL",
+    "created": 1700000000,
+    "model": "sd",
+    "image_b64": "...",
+    "format": "png",
+    "width": 1024,
+    "height": 1024,
+    "seed": 42,
+    "steps": 30,
+    "guidance_scale": 7.5,
+    "latency_s": 2.5
+  }
+  ```
+
+Supported parameters: `prompt` (required), `model` (`"sd"` or `"flux"`), `negative_prompt`,
+`steps`, `guidance_scale`, `width`, `height`, `seed`, `response_format` (`"b64_json"` or `"url"`),
+`output_format` (`"png"`, `"webp"`, `"jpeg"`), `user` (opaque abuse-tracking ID),
+`Idempotency-Key` header (deduplication).
+
+Rate-limit headers (`X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`) are
+returned on every response. Exceeding the limit returns `429` with a `Retry-After` header.
+
+#### List Image Models
+- **Route**: `GET /v1/images/models`
+- **Auth**: Required
+- **Command**:
+  ```bash
+  curl http://localhost:8000/v1/images/models \
+    -H "Authorization: Bearer test-key-123"
+  ```
+
+#### Single Image Model Metadata
+- **Route**: `GET /v1/images/models/{name}`
+- **Auth**: Required
+- **Command**:
+  ```bash
+  curl http://localhost:8000/v1/images/models/sd \
+    -H "Authorization: Bearer test-key-123"
   ```
 
 ---
