@@ -20,9 +20,9 @@ import torch
 import torch.nn as nn
 
 from sentimentizer.config import LABEL_NAMES, NUM_CLASSES, weights_path_for
-from sentimentizer.models.decoder import Decoder
-from sentimentizer.models.encoder import Encoder
-from sentimentizer.models.rnn import RNN
+from sentimentizer.models.decoder import Decoder, get_trained_model as get_trained_decoder
+from sentimentizer.models.encoder import Encoder, get_trained_model as get_trained_encoder
+from sentimentizer.models.rnn import RNN, get_trained_model as get_trained_rnn
 
 logger = logging.getLogger(__name__)
 
@@ -61,11 +61,11 @@ def load_model_for_export(model_type: str, device: str = "cpu") -> nn.Module:
         ValueError: If model_type is not recognized.
     """
     if model_type == "rnn":
-        model = RNN.get_trained_model(device)
+        model = get_trained_rnn(device)
     elif model_type == "encoder":
-        model = Encoder.get_trained_model(device)
+        model = get_trained_encoder(device)
     elif model_type == "decoder":
-        model = Decoder.get_trained_model(device)
+        model = get_trained_decoder(device)
     else:
         raise ValueError(
             f"Unknown model type: {model_type!r}. Must be 'rnn', 'encoder', or 'decoder'."

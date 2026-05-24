@@ -31,20 +31,20 @@ INHIBIT_SLEEP := $(shell command -v systemd-inhibit >/dev/null 2>&1 && echo "sys
 
 ## Install dependencies with CUDA-enabled PyTorch (for local GPU development)
 setup:
-	uv sync --extra ray --extra transformers --extra router --extra onnx
+	uv sync --extra ray --extra router --extra onnx
 
 ## Install dependencies with CPU-only PyTorch (for CI or machines without GPU)
 ## Installs the CPU-only torch wheel from PyTorch's index, then syncs the rest.
 setup-ci:
 	uv pip install --index-url https://download.pytorch.org/whl/cpu torch
-	uv sync --extra ray --extra transformers --extra router --extra onnx
+	uv sync --extra ray --extra router --extra onnx
 
 setup-mps:
-	uv sync --extra transformers --extra router --extra onnx
+	uv sync --extra router --extra onnx
 
 ## Install dependencies with dev tools (pytest, ruff, black, etc.)
 setup-dev:
-	uv sync --extra dev --extra ray --extra transformers --extra router --extra onnx
+	uv sync --extra dev --extra ray --extra router --extra onnx
 
 # ──────────────────────────────────────────────
 # Data
