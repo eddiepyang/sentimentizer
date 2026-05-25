@@ -41,7 +41,7 @@ jobs:
         enable-cache: true
 
     - name: install dependencies
-      run: uv sync --extra dev,ray,onnx,router
+      run: uv sync --extra dev,diffusion,ray,onnx,router
 
     - name: ruff lint
       run: uv run ruff check .

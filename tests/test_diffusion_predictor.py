@@ -19,6 +19,14 @@ from sentimentizer.diffusion.predictor import (
     _resolve_dtype,
 )
 
+_PIL_AVAILABLE: bool = False
+try:
+    import PIL  # noqa: F401
+
+    _PIL_AVAILABLE = True
+except ModuleNotFoundError:
+    pass
+
 
 class TestResolveDtype:
     def test_bfloat16(self) -> None:
@@ -57,6 +65,7 @@ class TestGenerateId:
 
 
 class TestEncodePil:
+    @pytest.mark.skipif(not _PIL_AVAILABLE, reason="pillow not installed")
     def test_png(self) -> None:
         from PIL import Image
 
@@ -64,6 +73,7 @@ class TestEncodePil:
         data = _encode_pil(img, "png")
         assert data[:4] == b"\x89PNG"
 
+    @pytest.mark.skipif(not _PIL_AVAILABLE, reason="pillow not installed")
     def test_jpeg(self) -> None:
         from PIL import Image
 
@@ -71,6 +81,7 @@ class TestEncodePil:
         data = _encode_pil(img, "jpeg")
         assert data[:2] == b"\xff\xd8"
 
+    @pytest.mark.skipif(not _PIL_AVAILABLE, reason="pillow not installed")
     def test_webp(self) -> None:
         from PIL import Image
 
