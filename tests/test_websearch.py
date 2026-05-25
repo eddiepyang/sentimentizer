@@ -603,6 +603,7 @@ class TestCLI:
         with (
             patch.dict("os.environ", {}, clear=True),
             patch("sentimentizer.agent.websearch._suppress_structlog"),
+            patch("sentimentizer.agent.websearch._load_dotenv"),
         ):
             exit_code = main(["test query"])
 
@@ -749,6 +750,7 @@ class TestCLI:
         with (
             patch.dict("os.environ", {}, clear=True),
             patch("sentimentizer.agent.websearch._suppress_structlog"),
+            patch("sentimentizer.agent.websearch._load_dotenv"),
         ):
             exit_code = main(["test query"])
 

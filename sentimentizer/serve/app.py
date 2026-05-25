@@ -194,27 +194,27 @@ def create_fastapi_app(title: str, description: str) -> FastAPI:
             },
         )
 
-    @app.exception_handler(HTTPException)
-    async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
-        """Wrap HTTPException in the standard error envelope."""
-        detail = exc.detail
-        if isinstance(detail, str):
-            error_code = _status_code_to_error_code(exc.status_code)
-            content = {
-                "error": {
-                    "code": error_code,
-                    "message": detail,
-                }
-            }
-        else:
-            content = (
-                {"error": detail}
-                if isinstance(detail, dict)
-                else {"error": {"message": str(detail)}}
-            )
-        return JSONResponse(status_code=exc.status_code, content=content)
+    app.add_exception_handler(HTTPException, http_exception_handler)
 
     return app
+
+
+async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    """Wrap HTTPException in the standard error envelope."""
+    detail = exc.detail
+    if isinstance(detail, str):
+        error_code = _status_code_to_error_code(exc.status_code)
+        content = {
+            "error": {
+                "code": error_code,
+                "message": detail,
+            }
+        }
+    else:
+        content = (
+            {"error": detail} if isinstance(detail, dict) else {"error": {"message": str(detail)}}
+        )
+    return JSONResponse(status_code=exc.status_code, content=content)
 
 
 app = create_fastapi_app(
