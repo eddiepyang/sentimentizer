@@ -221,7 +221,7 @@ class ImagesDispatcher:
         }
 
     @images_app.post(
-        "/",
+        "/generate",
         response_model=GenerateResponse,
         dependencies=[Depends(require_api_key), Depends(rate_limit)],
     )

@@ -207,7 +207,7 @@ behind a lightweight CPU dispatcher (ImagesDispatcher). The [diffusion serving p
 has full architectural details.
 
 #### Synchronous Image Generation
-- **Route**: `POST /v1/images`
+- **Route**: `POST /v1/images/generate`
 - **Auth**: `Authorization: Bearer <api_key>` (required)
 - **Request Body**:
   ```json
@@ -221,7 +221,7 @@ has full architectural details.
   ```
 - **Command**:
   ```bash
-  curl -X POST http://localhost:8000/v1/images \
+  curl -X POST http://localhost:8000/v1/images/generate \
     -H "Authorization: Bearer test-key-123" \
     -H "Content-Type: application/json" \
     -d '{"prompt": "a red apple on a wooden table", "model": "sd"}'
@@ -373,7 +373,7 @@ from sentimentizer.serve.base import serve  # grace fallback without ray
 
 1. `RAY_ENABLE_UV_RUN_RUNTIME_ENV=0` — prevents worker venv issues
 2. `ray.init(namespace="sentimentizer", runtime_env={"py_executable": sys.executable})` — uses current Python
-3. `serve.start(http_options={...})` — starts HTTP proxy
+3. `serve.start(http_options=HTTPOptions(...))` — starts HTTP proxy
 4. `serve.run(SentimentizerDeployment.bind(), ...)` — deploys the app
 5. Model loading in `__init__()` — `/health/ready` returns 503 until models load
 

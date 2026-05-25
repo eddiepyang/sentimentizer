@@ -27,7 +27,7 @@ remain unauthenticated to preserve backwards compatibility.
 ### API surface (overview)
 
 ```
-POST   /v1/images                   synchronous generation (default)
+POST   /v1/images/generate          synchronous generation (default)
 GET    /v1/images/{id}              fetch image by id (P1, requires URL-mode storage)
 
 POST   /v1/images/jobs              async generation (P1) — 201 Created + Location header
@@ -46,7 +46,7 @@ This means adding a new model (SDXL, FLUX-schnell) doesn't require a new route.
 ### Design notes
 
 The shape is **partially resource-oriented**: collections (`/models`, `/jobs`) follow standard
-ROD/AIP conventions (list, get, create, delete, paginated); the sync `POST /v1/images` endpoint
+ROD/AIP conventions (list, get, create, delete, paginated); the sync `POST /v1/images/generate` endpoint
 returns the image inline rather than redirecting to a separately-`GET`able resource, matching
 OpenAI/Stability/Replicate convention and avoiding a round-trip on the hot path for fast SD.
 List endpoints follow [AIP-158](https://google.aip.dev/158) pagination
@@ -377,7 +377,7 @@ rich.
 
 ### 5. Synchronous generation endpoint
 
-**Problem**: A single `/v1/images` endpoint must dispatch to either SDDeployment or FluxDeployment
+**Problem**: A single `/v1/images/generate` endpoint must dispatch to either SDDeployment or FluxDeployment
 based on the request body, handle defaults resolution, enforce per-model memory limits, and emit
 all the headers from middleware.
 
@@ -475,7 +475,7 @@ async def generate_image(
     `1 * 1024 * 1024` to `4 * 1024 * 1024` (prompts + negative_prompts + idempotency keys can
     push past 1 MB only in pathological cases, but headroom is cheap and base64 is asymmetric)
   - In `main()` ([app.py:524](sentimentizer/serve/app.py#L524)): set
-    `http_options.request_timeout_s=180` so sync FLUX requests don't get killed
+    `http_options=HTTPOptions(host=host, port=port, request_timeout_s=cfg.request_timeout_s)` with timeout set to `600` so sync FLUX and SD35 requests don't get killed
   - **Do not** wrap diffusion handlers in `serve.batch` — inference too slow to benefit
 
 **[SAFE]** Reuses existing `ServiceMetrics`, exception handlers, request-ID middleware.
@@ -604,7 +604,7 @@ async def images_model_detail(self, name: str = Path(...)) -> dict:
   flux_enabled: bool = False
   flux_model_path: str = ""
   default_image_model: str = "sd"
-  request_timeout_s: int = 180
+  request_timeout_s: int = 600
 
   # Middleware
   api_keys: list[str] = field(default_factory=list)
@@ -734,7 +734,7 @@ The implemented push-based design is the correct approach given Ray's ownership 
 
 **Problem**: `b64_json` responses are large and uncacheable. Production clients (web apps,
 mobile, third-party integrations) want a URL they can `<img src=>` and share. Once images
-are persisted, the `id` returned from `POST /v1/images` becomes a real resource that should be
+are persisted, the `id` returned from `POST /v1/images/generate` becomes a real resource that should be
 addressable via `GET /v1/images/{id}` — making the API meaningfully more ROD-aligned.
 
 **Changes**:

@@ -415,7 +415,7 @@ This runs inference in a thread pool, keeping the event loop responsive. The `@s
 1. `os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")` — must precede any Ray import
 2. `os.environ.setdefault("RAY_ENABLE_RUNTIME_ENV_HOOK", "1")` — prevents Ray from creating isolated venvs
 3. `ray.init(namespace="sentimentizer", runtime_env={"py_executable": sys.executable})` — uses current Python executable, avoiding venv issues
-4. `serve.start(http_options={"host": host, "port": port, "request_timeout_s": cfg.request_timeout_s})` — starts HTTP proxy
+4. `serve.start(http_options=HTTPOptions(host=host, port=port, request_timeout_s=600))` — starts HTTP proxy
 5. `serve.run(SentimentizerDeployment.bind(), name="sentimentizer", route_prefix="/")` — deploys with route prefix `/`
 6. Model loading happens in `SentimentizerDeployment.__init__()` — if loading fails, `self._ready` stays `False` and the `/health/ready` endpoint returns 503
 
