@@ -13,6 +13,14 @@ if __name__ == "__main__":
         "Must be set before module imports, so it's promoted to "
         "SENTIMENTIZER_SERVE_CONFIG.",
     )
+    parser.add_argument(
+        "--diffusion",
+        action="store_true",
+        default=False,
+        help="Enable image generation (SD/FLUX/SD35) endpoints. "
+        "Requires GPU hardware and model weights. "
+        "Can also be enabled via config (sd_enabled, flux_enabled, sd35_enabled).",
+    )
     args = parser.parse_args()
 
     if args.config:
@@ -20,4 +28,4 @@ if __name__ == "__main__":
 
     from sentimentizer.serve.app import main
 
-    main(host=args.host, port=args.port)
+    main(host=args.host, port=args.port, diffusion=args.diffusion)

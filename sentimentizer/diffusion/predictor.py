@@ -331,7 +331,6 @@ class SD35Predictor(DiffusionPredictor):
             "width": width,
             "height": height,
             "generator": generator,
-            "max_sequence_length": 256,
         }
         if negative_prompt:
             call_kwargs["negative_prompt"] = negative_prompt

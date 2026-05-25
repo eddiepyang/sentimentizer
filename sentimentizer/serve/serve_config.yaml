@@ -32,8 +32,8 @@ flux_enabled: false
 flux_model_path: ""
 sd35_enabled: false
 sd35_model_id: "stabilityai/stable-diffusion-3.5-medium"
-default_image_model: "sd"
-request_timeout_s: 180
+default_image_model: "sd35"
+request_timeout_s: 600
 
 # Middleware for image routes
 api_keys: []

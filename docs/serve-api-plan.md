@@ -305,3 +305,180 @@ This gives us both per-item string length validation *and* list size validation 
 ### 16. API key authentication
 
 **[RISK] Auth middleware and `@serve.ingress`.** Ray Serve's HTTP proxy processes requests before they reach FastAPI. If we add auth middleware in FastAPI but Ray Serve doesn't enforce it at the proxy level, a determined attacker can bypass it by hitting the Ray Serve proxy directly. **Recommendation**: If auth is needed, implement at the ingress controller level (NGINX `nginx.ingress.kubernetes.io/auth-url`) or via a sidecar auth proxy, not in the application layer.
+
+---
+
+## Ray Serve Architecture & Pitfalls
+
+This section documents the non-obvious interactions between Ray Serve, FastAPI, and our deployment that have caused (or could cause) bugs. Read this before modifying `sentimentizer/serve/` or `workflows/cli.py`.
+
+### `@serve.ingress` and `APIRouter` incompatibility
+
+**Problem**: FastAPI `APIRouter` sub-apps do not work correctly with Ray Serve deployments. When a sub-app is mounted (e.g., `app.mount("/v1", v1_router)`), `@serve.ingress` fails to register the routes from the sub-app. This includes issues with `@serve.batch` interaction on sub-app routes.
+
+**Solution**: All routes must be registered directly on the root `FastAPI` app instance with explicit path prefixes (e.g., `@app.post("/v1/predict")`, not `@v1.post("/predict")` where `v1` is an `APIRouter`). The deployment class uses `@serve.ingress(app)` where `app` is the root `FastAPI` instance.
+
+**Impact**: This is why the codebase uses `@app.post("/v1/sentiment/predict")` directly instead of an `APIRouter`-based approach. Any future route additions must follow this pattern.
+
+### `RAY_ENABLE_UV_RUN_RUNTIME_ENV=0` — must be set before any Ray import
+
+**Problem**: Ray 2.x workers try to create isolated virtual environments using `uv` when `RAY_ENABLE_UV_RUN_RUNTIME_ENV` is not explicitly disabled. These venvs lack the `ray` package, causing `ModuleNotFoundError: No module named 'ray'` in worker processes.
+
+**Solution**: `os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")` must be called **before** any `import ray` or `from ray import serve`. The codebase sets this in three places:
+1. `sentimentizer/serve/app.py` — module-level (line ~51), before `from ray import serve`
+2. `sentimentizer/serve/app.py` — `main()` function, before `ray.init()`
+3. `workflows/cli.py` — `serve_cmd()` function, before importing `sentimentizer.serve`
+4. `sentimentizer/lifecycle.py` — module-level, covers training paths
+
+**Debugging**: If workers crash with `ModuleNotFoundError: No module named 'ray'`, check that all entry points set this env var. A missing entry point will cause failures that look like Ray itself is broken.
+
+### `@serve.batch` semantics — single-item call returns single dict, not list
+
+**Problem**: `@serve.batch` is deceptive about its type contract. When you call `self.predict_sentiment({"text": "hello"})` from a handler, you receive a single `dict` back — not a `list[dict]`. But the **batched function signature** shows `list[dict]` → `list[dict]`. This is because `@serve.batch` decorates a method that receives a batch of inputs and returns a batch of outputs, but individual callers receive only their own item from the batch.
+
+**Current code**:
+```python
+@serve.batch(max_batch_size=32, batch_wait_timeout_s=0.05)
+async def predict_sentiment(self, inputs: list[dict]) -> list[dict]:
+    texts = [inp["text"] for inp in inputs]
+    predictions = await asyncio.to_thread(self.predictor.predict_batch, texts)
+    return predictions  # Must return list[dict] with same length as inputs
+```
+
+**Gotcha**: The handler calls `await self.predict_sentiment({"text": body.text})` and gets a single `dict`. Never index into the return value (e.g., `result[0]`) — it's already unwrapped.
+
+**Impact**: If `predict_sentiment` returns a list with fewer items than `inputs`, the remaining callers will hang forever waiting for their result. Always ensure the return list length matches `len(inputs)`.
+
+### `@serve.ingress` forbids `__call__` on the deployment class
+
+**Problem**: Defining `__call__` on a class decorated with `@serve.ingress(app)` raises a `RuntimeError`. Ray Serve's ingress mechanism routes HTTP requests through FastAPI, and `__call__` would conflict with this routing.
+
+**Solution**: Don't define `__call__` on `SentimentizerDeployment`. All request handling goes through `@app.get`/`@app.post` decorated methods. `@serve.batch` methods (e.g., `predict_sentiment`, `classify_route`) are internal methods called from route handlers — they're not HTTP endpoints themselves.
+
+### Middleware ordering — LIFO registration, outermost-first execution
+
+**Problem**: Starlette (which FastAPI is built on) processes middleware in LIFO order — the last middleware added is the outermost. This means the execution order is the **reverse** of the code order where `app.add_middleware()` calls appear.
+
+**Current middleware stack** (outermost first):
+1. **Request-ID** (`@app.middleware("http")`) — outermost, tags all requests with `X-Request-Id`
+2. **CORS** (`app.add_middleware(CORSMiddleware, ...)`) — handles preflight OPTIONS
+3. **Body size limit** (`app.add_middleware(_RequestBodySizeLimitMiddleware)`) — innermost, rejects oversized payloads
+
+**Note on `@app.middleware("http")`**: The `@app.middleware("http")` decorator **always** wraps on top of the `add_middleware` stack, making it the outermost regardless of where it appears in code. This is why the actual order is request-ID → CORS → body-size, even though in the source code, body-size is added first, CORS second, and request-ID last.
+
+**Impact**: When adding new middleware, consider where it should sit in the stack. CORS must be outermost to handle preflight before auth. Body-size limiting should be innermost so it runs after CORS and request-ID tagging.
+
+### Configuration loading — module-level vs. runtime
+
+**Problem**: `ServeConfig` is loaded at module import time via `cfg = load_serve_config()` in both `serve/app.py` and `serve/models.py`. This means:
+- Environment variable changes after the process starts are **not** picked up.
+- Pydantic validation limits (`max_text_length`, `max_batch_size`) are baked at import time.
+- The deployment's `self.cfg` (if added) and the module-level `cfg` could diverge if env vars change between module load and deployment init.
+
+**Current approach**: The module-level `cfg` is used for Pydantic model definitions and `@serve.batch` parameters. Runtime checks in the deployment use `self.predictor` properties. There is no `self.cfg` — the deployment reads config from the module-level `cfg` and from the predictor.
+
+**Impact**: If you need to change config at runtime (e.g., `max_text_length`), you must restart the process. Do not add `self.cfg` to the deployment without understanding the module-vs-instance split.
+
+### `asyncio.to_thread()` for sync model inference
+
+**Problem**: PyTorch model inference (`predictor.predict_batch()`) is a blocking CPU/GPU call. If called directly in an `async def` handler, it blocks the Ray Serve event loop, preventing other requests from being processed.
+
+**Solution**: All sync model inference is wrapped in `asyncio.to_thread()`:
+```python
+predictions = await asyncio.to_thread(self.predictor.predict_batch, texts)
+```
+
+This runs inference in a thread pool, keeping the event loop responsive. The `@serve.batch` decorator handles request aggregation, while `asyncio.to_thread()` handles the actual compute.
+
+**Impact**: Never call sync model inference directly from an async handler. Always use `asyncio.to_thread()`. For `@serve.batch` methods, the batch function itself is async and calls `asyncio.to_thread()` to run the batched inference off the event loop.
+
+### Deployment configuration — `num_replicas` and `max_ongoing_requests`
+
+**Current config**:
+```python
+@serve.deployment(
+    num_replicas=1,
+    max_ongoing_requests=20,
+    ray_actor_options={"num_cpus": 2, "num_gpus": 0},
+)
+```
+
+**`num_replicas=1`**: Only one replica of the SentimentizerDeployment runs. The only concurrency benefit comes from `@serve.batch` request aggregation within the single replica. Scale to `num_replicas > 1` for CPU-bound load.
+
+**`max_ongoing_requests=20`**: Each replica queues up to 20 requests. Requests beyond this are rejected with 503. This is a backpressure mechanism — if inference takes 100ms and 20 requests are queued, the 21st request gets a fast 503 instead of a slow timeout.
+
+**`ray_actor_options`**: CPU and GPU allocation per replica. Change `"num_gpus": 0` to `1` for GPU inference. The deployment creates its own Ray actor with these resources.
+
+### Ray Serve startup and model loading
+
+**Startup sequence** (in `main()`):
+1. `os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")` — must precede any Ray import
+2. `os.environ.setdefault("RAY_ENABLE_RUNTIME_ENV_HOOK", "1")` — prevents Ray from creating isolated venvs
+3. `ray.init(namespace="sentimentizer", runtime_env={"py_executable": sys.executable})` — uses current Python executable, avoiding venv issues
+4. `serve.start(http_options={"host": host, "port": port, "request_timeout_s": cfg.request_timeout_s})` — starts HTTP proxy
+5. `serve.run(SentimentizerDeployment.bind(), name="sentimentizer", route_prefix="/")` — deploys with route prefix `/`
+6. Model loading happens in `SentimentizerDeployment.__init__()` — if loading fails, `self._ready` stays `False` and the `/health/ready` endpoint returns 503
+
+**Readiness vs. liveness**: `/health/live` always returns 200 (process is alive). `/health/ready` returns 503 until `SentimentPredictor` loads successfully. The K8s liveness probe should use `/health/live` and the readiness probe should use `/health/ready`.
+
+### Request body size limiting — defense in depth
+
+**Problem**: The K8s ingress enforces `proxy-body-size: "1m"` (1 MiB), but requests that bypass the ingress (port-forward, node port) have no size limit.
+
+**Solution**: `_RequestBodySizeLimitMiddleware` rejects POST/PUT/PATCH requests with `Content-Length > 4 MiB`. This is intentionally larger than the ingress limit (1 MiB) because:
+- The ingress strips `Content-Length` for chunked transfers, so the middleware acts as a safety net for direct access
+- The middleware only checks the `Content-Length` header — it doesn't read the body, so chunked transfers without a `Content-Length` header pass through unchecked
+- This is acceptable because the ingress is the primary defense
+
+**Gotcha**: `@app.exception_handler(Exception)` only catches errors from route handlers, not from middleware. A bug in `_RequestBodySizeLimitMiddleware` will bypass the error envelope and leak a raw Starlette 500. The middleware returns `JSONResponse` directly (not raising an exception) to avoid this issue.
+
+### `ServiceMetrics` — in-process, per-replica metrics
+
+**Problem**: `ServiceMetrics` tracks request_count, error_count, and total_latency per deployment replica. This data is **not** exposed on any HTTP endpoint (the old `/metrics` endpoint was removed). It's used internally for structured logging.
+
+**Future**: The `ServiceMetrics.to_prometheus()` method exists with a `# TODO(P3)` comment for future Prometheus push to the standalone exporter (port 8081). Until P3 is implemented, per-replica metrics are only visible in structured logs.
+
+### The `_DummyServe` fallback pattern
+
+**Problem**: The `serve` module needs to be importable even when Ray is not installed (e.g., for testing or lightweight usage). Importing `ray.serve` raises `ImportError` when Ray isn't installed.
+
+**Solution**: `sentimentizer/serve/base.py` provides a `_DummyServe` object that implements the `serve.deployment`, `serve.batch`, `serve.ingress`, `serve.start`, `serve.run`, and `serve.shutdown` interfaces as no-ops. All decorators pass through to the original class/function unchanged. Only `serve.bind()` returns a `_DummyHandle` that raises `RuntimeError` on `.remote()` calls.
+
+**Impact**: Do not move `from ray import serve` imports to module top-level in files that need to work without Ray. Always import from `sentimentizer.serve.base`:
+```python
+from sentimentizer.serve.base import serve  # graceful fallback
+# NOT: from ray import serve  # crashes without ray installed
+```
+
+### CORS configuration
+
+**Problem**: The CORS middleware must be the outermost middleware (processed first on requests, last on responses) to handle preflight `OPTIONS` requests correctly.
+
+**Current config**:
+- `allow_origins`: Default `["*"]`, configurable via `SENTIMENTIZER_CORS_ORIGINS` env var (comma-separated)
+- `allow_credentials`: Automatically set to `False` when `allow_origins` is `["*"]` (per CORS spec, credentials + wildcard is forbidden)
+- `expose_headers`: `["X-Request-Id"]` — so clients can read the request ID from CORS responses
+
+**Gotcha**: When `allow_origins` is `["*"]`, `allow_credentials` is forced to `False`. If you need credentials with specific origins, set `SENTIMENTIZER_CORS_ORIGINS=http://localhost:3000,https://app.example.com` and `allow_credentials` will become `True` automatically.
+
+**Ray Serve proxy consideration**: Ray Serve's HTTP proxy processes requests before they reach FastAPI middleware. Some Ray Serve versions have their own CORS handling. If duplicate CORS headers appear in responses, check the Ray Serve proxy configuration. In practice, the current setup works correctly because Ray's proxy doesn't add CORS headers — it passes requests through to the FastAPI app.
+
+### Error response envelope
+
+**All error responses** use `{"error": {"code": "...", "message": "..."}}` format via `http_exception_handler`. The `_status_code_to_error_code()` function maps common HTTP status codes to machine-readable strings.
+
+**Exceptions**:
+- **Pydantic 422 validation errors** retain their default format (`{"detail": [{"loc": [...], "msg": "...", "type": "..."}]}`). This is intentional — Pydantic's structured validation errors are more useful than a single error string.
+- **Unhandled exceptions** return `500` with `{"error": {"code": "internal_error", "message": "Internal server error", "request_id": "..."}}`. The request_id comes from the `X-Request-Id` middleware, or "unknown" if not available.
+
+### Deprecated vs. current endpoint paths
+
+The original `/v1/predict`, `/v1/batch`, `/v1/tokenize`, `/v1/models`, and `/v1/models/{name}` endpoints are retained as **deprecated aliases** using FastAPI's `deprecated=True` parameter on the route decorator. Current endpoints are under `/v1/sentiment/`:
+
+```python
+@app.post("/v1/sentiment/predict", response_model=PredictResponse)
+@app.post("/v1/predict", response_model=PredictResponse, deprecated=True)
+async def predict(self, body: PredictRequest, request: Request) -> dict[str, Any]:
+```
+
+**Impact**: Both paths call the same handler function. FastAPI marks the deprecated paths in the OpenAPI schema. Clients should migrate to `/v1/sentiment/*` paths; the old `/v1/*` paths will be removed in a future version.

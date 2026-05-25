@@ -71,8 +71,8 @@ class ServeConfig:
     flux_model_path: str = ""
     sd35_enabled: bool = False
     sd35_model_id: str = "stabilityai/stable-diffusion-3.5-medium"
-    default_image_model: str = "sd"
-    request_timeout_s: int = 180
+    default_image_model: str = "sd35"
+    request_timeout_s: int = 600
     api_keys: list[str] = field(default_factory=list)
     rate_limit_per_min: int = 60
     rate_limit_burst: int = 10

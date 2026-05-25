@@ -88,7 +88,12 @@ flux_model_path: "/path/to/flux1-dev-q8_0.gguf"   # GGUF quantized weights
 Or via environment variables:
 
 ```bash
+# Enable SD 2.1
 export SENTIMENTIZER_SD_ENABLED=true
+export SENTIMENTIZER_API_KEYS=sk-your-secret-key
+
+# Or enable SD 3.5 Medium
+export SENTIMENTIZER_SD35_ENABLED=true
 export SENTIMENTIZER_API_KEYS=sk-your-secret-key
 ```
 
@@ -98,11 +103,17 @@ export SENTIMENTIZER_API_KEYS=sk-your-secret-key
 # Start the Ray Serve deployment (loads model on startup)
 python -m sentimentizer.serve
 
-# SD generation (sync, ~2-3s on L4)
-curl -X POST http://localhost:8000/v1/images \
+# SD 2.1 generation (sync, ~2-3s on L4)
+curl -X POST http://localhost:8000/v1/images/ \
   -H "Authorization: Bearer sk-your-secret-key" \
   -H "Content-Type: application/json" \
   -d '{"prompt": "a red apple on a wooden table", "model": "sd", "width": 512, "height": 512}'
+
+# SD 3.5 Medium generation (sync, ~4-6s on L4)
+curl -X POST http://localhost:8000/v1/images/ \
+  -H "Authorization: Bearer sk-your-secret-key" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "a cinematic portrait of an astronaut", "model": "sd35", "width": 1024, "height": 1024}'
 
 # List available models
 curl http://localhost:8000/v1/images/models \

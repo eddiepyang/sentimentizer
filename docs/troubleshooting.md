@@ -287,6 +287,84 @@ The `augment_seeds()` function gracefully handles API failures — it returns th
 
 **Fix**: ModernBERT currently has `SUPPORTS_ONNX = False` configured in its class definition. The ONNX exporter explicitly checks this property and rejects the export request. Use standard PyTorch weights for serving and inference.
 
+### Ray Serve Worker Crashes with ModuleNotFoundError
+
+**Symptoms**: `ModuleNotFoundError: No module named 'ray'` in Ray Serve worker processes.
+
+**Root cause**: Ray 2.x workers try to create isolated venvs using `uv` when `RAY_ENABLE_UV_RUN_RUNTIME_ENV` is not set to `"0"`. These venvs lack the `ray` package.
+
+**Fix**: Ensure `RAY_ENABLE_UV_RUN_RUNTIME_ENV=0` is set before any `import ray` in all entry points:
+- `sentimentizer/serve/app.py` (module-level and `main()`)
+- `workflows/cli.py` (`serve_cmd()`)
+- `sentimentizer/lifecycle.py` (module-level)
+
+If you add a new CLI command or entry point that uses Ray, add `os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")` at the top.
+
+### Ray Serve startup hangs
+
+**Symptoms**: `ray.init()` or `serve.start()` times out.
+
+**Root cause**: Stale Ray processes (raylet, gcs_server) from a previous Ctrl-C or crash are holding ports.
+
+**Fix**: The `lifecycle.py` module-level cleanup handles this automatically — it kills stale processes and cleans `/tmp/ray/` before `ray.init()`. If the auto-retry doesn't help:
+
+```bash
+pkill -9 -f raylet
+pkill -9 -f gcs_server
+rm -rf /tmp/ray/
+```
+
+Then restart `make serve`.
+
+### `/health/ready` returns 503 permanently
+
+**Symptoms**: The server is running but `/health/ready` always returns 503 with "models not loaded".
+
+**Root cause**: Model loading failed in `SentimentizerDeployment.__init__()`. The error message is in the 503 response body and in the server logs.
+
+**Fix**: Check the server logs for the model loading error. Common causes:
+- Missing model weights (`models/encoder_sentiment.model` or `models/router/`)
+- Out of memory (especially with GPU inference)
+- Wrong `--model-path` for the router (set via `ROUTER_MODEL_PATH` env var or `--model-path` CLI flag)
+
+### Requests hang indefinitely on `/v1/predict`
+
+**Symptoms**: POST requests to `/v1/predict` never return.
+
+**Root cause**: The `@serve.batch` decorator on `predict_sentiment()` collects requests over a `batch_wait_timeout_s` window (default 50ms). If the batch function raises an exception, individual callers hang because `@serve.batch` doesn't propagate errors back to all callers in all Ray versions.
+
+**Fix**: The batch function (`predict_sentiment`, `classify_route`) must always return a list with the same length as the `inputs` argument. Never let a batch function return fewer items than it received. Wrap inference in try/except and return error dicts if needed.
+
+### Ray Serve worker venv issues (uv)
+
+**Symptoms**: Workers crash with `ModuleNotFoundError` for packages that are installed in the main environment.
+
+**Root cause**: Related to `RAY_ENABLE_UV_RUN_RUNTIME_ENV`. Ray may still try to use `uv` even when the env var is set if `RAY_ENABLE_RUNTIME_ENV_HOOK` is not also set.
+
+**Fix**: The `main()` function in `serve/app.py` sets both:
+```python
+os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
+os.environ.setdefault("RAY_ENABLE_RUNTIME_ENV_HOOK", "1")
+os.environ.setdefault("RAY_OVERRIDE_RUNTIME_ENV_DEFAULT_EXCLUDES", "")
+```
+And passes `runtime_env={"py_executable": sys.executable}` to `ray.init()`. This forces workers to use the same Python executable as the driver.
+
+### Batch endpoint returns fewer items than input
+
+**Symptoms**: The `/v1/router/batch` endpoint returns fewer items than the number of input texts.
+
+**Root cause**: `RouterBatchResponse` includes `"count": len(results)` which should always equal `len(body.texts)`. If it doesn't, there's a bug in the batch handler or in `predictor.classify_batch()`.
+
+**Fix**: Verify that `classify_batch()` in the predictor always returns exactly one result per input text.
+
+### CORS preflight fails with duplicate headers
+
+**Symptoms**: Browser requests fail with duplicate `Access-Control-Allow-Origin` headers.
+
+**Root cause**: Some Ray Serve versions add their own CORS headers. If the FastAPI `CORSMiddleware` is also adding CORS headers, you get duplicates.
+
+**Fix**: Check the raw response headers with `curl -v`. If duplicates appear, check the Ray Serve proxy configuration. In the current setup, this shouldn't happen because Ray's proxy doesn't add CORS headers by default.
+
 ### Ray Train Worker Crashes
 
 **Symptoms**: Ray workers crash with `ModuleNotFoundError: No module named 'ray'` when starting distributed training.

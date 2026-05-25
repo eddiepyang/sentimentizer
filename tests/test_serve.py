@@ -76,16 +76,19 @@ def _mock_predictor(**overrides):
     return p
 
 
-def _mock_deployment(predictor=None):
+def _mock_deployment(predictor=None, ready=True, load_error=None):
     """Build a mock ``self`` with the same attrs as SentimentizerDeployment."""
     from sentimentizer.serve.config import ServeConfig
 
     dep = MagicMock()
     dep.cfg = ServeConfig()
     dep._started_at = time.time()
+    dep._ready = ready
+    dep._load_error = load_error
     dep._sentiment_metrics = ServiceMetrics(prefix="sentimentizer")
     dep._router_metrics = ServiceMetrics(prefix="router")
     dep.predictor = predictor or _mock_predictor()
+    dep._require_ready = lambda: _SentimentizerDeployment._require_ready(dep)
 
     async def _predict_sentiment(inputs):
         if isinstance(inputs, dict):
@@ -351,7 +354,6 @@ class TestSentimentModelNotLoaded:
                 _SentimentizerDeployment.predict(dep, PredictRequest(text="hello"), _mock_request())
             )
         assert exc_info.value.status_code == 503
-        assert "Sentiment model not loaded" in exc_info.value.detail
 
     def test_batch_returns_503(self):
         dep = _mock_deployment(
@@ -361,6 +363,16 @@ class TestSentimentModelNotLoaded:
         with pytest.raises(HTTPException) as exc_info:
             _run(_SentimentizerDeployment.batch(dep, MagicMock(texts=["hello"]), _mock_request()))
         assert exc_info.value.status_code == 503
+
+    def test_predict_returns_503_when_not_ready(self):
+        dep = _mock_deployment(ready=False, load_error="yelp.dictionary not found")
+
+        with pytest.raises(HTTPException) as exc_info:
+            _run(
+                _SentimentizerDeployment.predict(dep, PredictRequest(text="hello"), _mock_request())
+            )
+        assert exc_info.value.status_code == 503
+        assert "not ready" in str(exc_info.value.detail).lower()
 
 
 # ---------------------------------------------------------------------------

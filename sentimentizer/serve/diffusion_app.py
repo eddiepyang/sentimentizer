@@ -12,6 +12,7 @@ import asyncio
 import time
 from typing import Any
 
+import torch
 from fastapi import Depends, HTTPException, Query, Request, Response
 
 from sentimentizer import logger
@@ -23,8 +24,10 @@ from sentimentizer.diffusion.predictor import (
     _encode_pil,
     _generate_id,
 )
-from sentimentizer.serve.app import app as fastapi_app
-from sentimentizer.serve.app import cfg  # noqa: E402
+from sentimentizer.serve.app import (
+    cfg,  # noqa: E402
+    create_fastapi_app,
+)
 from sentimentizer.serve.base import ServiceMetrics, serve
 from sentimentizer.serve.diffusion_models import (
     GenerateRequest,
@@ -58,10 +61,18 @@ def _body_hash(body: Any) -> str:
     return hashlib.sha256(raw).hexdigest()[:32]
 
 
+_num_gpus = 1 if torch.cuda.is_available() else 0
+
+images_app = create_fastapi_app(
+    title="Sentimentizer Images",
+    description="Image generation API (Stable Diffusion / FLUX)",
+)
+
+
 @serve.deployment(
     num_replicas=1,
     max_ongoing_requests=4,
-    ray_actor_options={"num_cpus": 2, "num_gpus": 1},
+    ray_actor_options={"num_cpus": 2, "num_gpus": _num_gpus},
 )
 class SDDeployment:
     def __init__(self) -> None:
@@ -86,7 +97,7 @@ class SDDeployment:
 @serve.deployment(
     num_replicas=1,
     max_ongoing_requests=2,
-    ray_actor_options={"num_cpus": 4, "num_gpus": 1},
+    ray_actor_options={"num_cpus": 4, "num_gpus": _num_gpus},
 )
 class FluxDeployment:
     def __init__(self) -> None:
@@ -111,7 +122,7 @@ class FluxDeployment:
 @serve.deployment(
     num_replicas=1,
     max_ongoing_requests=4,
-    ray_actor_options={"num_cpus": 2, "num_gpus": 1},
+    ray_actor_options={"num_cpus": 2, "num_gpus": _num_gpus},
 )
 class SD35Deployment:
     def __init__(self) -> None:
@@ -138,7 +149,7 @@ class SD35Deployment:
     max_ongoing_requests=20,
     ray_actor_options={"num_cpus": 1, "num_gpus": 0},
 )
-@serve.ingress(fastapi_app)
+@serve.ingress(images_app)
 class ImagesDispatcher:
     """Front-door deployment with HTTP routes; forwards work to SD/FLUX actors."""
 
@@ -209,8 +220,8 @@ class ImagesDispatcher:
             "dim_alignment": model_cfg.dim_alignment,
         }
 
-    @fastapi_app.post(
-        "/v1/images",
+    @images_app.post(
+        "/",
         response_model=GenerateResponse,
         dependencies=[Depends(require_api_key), Depends(rate_limit)],
     )
@@ -222,6 +233,14 @@ class ImagesDispatcher:
         idempotency_key: str | None = Depends(idempotent),
     ) -> dict[str, Any]:
         model_name = body.model or cfg.default_image_model
+        request_id = getattr(request.state, "request_id", "unknown")
+        logger.info(
+            "Received image generation request",
+            model=model_name,
+            width=body.width,
+            height=body.height,
+            request_id=request_id,
+        )
         handle = self._get_handle(model_name)
 
         defaults = self._get_predictor_defaults(model_name)
@@ -308,8 +327,8 @@ class ImagesDispatcher:
 
         return response
 
-    @fastapi_app.get(
-        "/v1/images/models",
+    @images_app.get(
+        "/models",
         response_model=ImageModelsResponse,
     )
     async def images_models(
@@ -325,8 +344,8 @@ class ImagesDispatcher:
             "default": cfg.default_image_model,
         }
 
-    @fastapi_app.get(
-        "/v1/images/models/{name}",
+    @images_app.get(
+        "/models/{name}",
         response_model=ImageModelDetailResponse,
     )
     async def images_model_detail(
@@ -346,8 +365,8 @@ class ImagesDispatcher:
         info = await self._handles[name].info.remote()
         return {"model": name, "info": info}
 
-    @fastapi_app.post(
-        "/v1/images/jobs",
+    @images_app.post(
+        "/jobs",
         status_code=201,
         response_model=JobResponse,
         dependencies=[Depends(require_api_key), Depends(rate_limit)],
@@ -465,8 +484,8 @@ class ImagesDispatcher:
 
         asyncio.create_task(_poll())
 
-    @fastapi_app.get(
-        "/v1/images/jobs/{job_id}",
+    @images_app.get(
+        "/jobs/{job_id}",
         response_model=JobResponse,
         dependencies=[Depends(require_api_key)],
     )
@@ -484,8 +503,8 @@ class ImagesDispatcher:
             )
         return result
 
-    @fastapi_app.get(
-        "/v1/images/jobs",
+    @images_app.get(
+        "/jobs",
         response_model=JobListResponse,
         dependencies=[Depends(require_api_key)],
     )
@@ -506,8 +525,8 @@ class ImagesDispatcher:
             model_filter=model,
         )
 
-    @fastapi_app.delete(
-        "/v1/images/jobs/{job_id}",
+    @images_app.delete(
+        "/jobs/{job_id}",
         response_model=JobResponse,
         dependencies=[Depends(require_api_key)],
     )
