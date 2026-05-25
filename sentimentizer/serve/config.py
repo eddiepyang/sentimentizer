@@ -40,6 +40,20 @@ class ServeConfig:
         classify_batch_size: Maximum requests collected per /v1/router/predict batch.
         classify_batch_wait_s: Seconds to wait before processing a partial router batch.
         cors_origins: Allowed CORS origins (comma-separated for env var).
+        sd_enabled: Enable Stable Diffusion 2.1 deployment.
+        sd_model_id: HuggingFace model ID for SD.
+        flux_enabled: Enable FLUX.1-dev deployment.
+        flux_model_path: Path to FLUX weights (e.g. GGUF file).
+        sd35_enabled: Enable SD 3.5 Medium deployment.
+        sd35_model_id: HuggingFace model ID for SD 3.5 Medium.
+        default_image_model: Default image model ("sd", "flux", or "sd35").
+        request_timeout_s: HTTP request timeout in seconds.
+        api_keys: Comma-separated list of valid API keys (for image routes).
+        rate_limit_per_min: Rate limit per API key per minute.
+        rate_limit_burst: Token bucket burst size.
+        idempotency_ttl_s: Cache TTL for idempotency keys.
+        job_ttl_s: TTL in seconds before terminal job records are reaped.
+        prompt_blocklist_path: Path to prompt blocklist file.
     """
 
     default_model: str = "encoder"
@@ -51,6 +65,20 @@ class ServeConfig:
     classify_batch_size: int = 32
     classify_batch_wait_s: float = 0.05
     cors_origins: list[str] = field(default_factory=lambda: ["*"])
+    sd_enabled: bool = False
+    sd_model_id: str = "stabilityai/stable-diffusion-2-1"
+    flux_enabled: bool = False
+    flux_model_path: str = ""
+    sd35_enabled: bool = False
+    sd35_model_id: str = "stabilityai/stable-diffusion-3.5-medium"
+    default_image_model: str = "sd35"
+    request_timeout_s: int = 600
+    api_keys: list[str] = field(default_factory=list)
+    rate_limit_per_min: int = 60
+    rate_limit_burst: int = 10
+    idempotency_ttl_s: int = 600
+    job_ttl_s: int = 3600
+    prompt_blocklist_path: str = ""
 
     def __post_init__(self) -> None:
         """Validate that numeric fields are positive."""
@@ -88,6 +116,20 @@ _ENV_OVERRIDES: dict[str, str] = {
     "SENTIMENTIZER_CLASSIFY_BATCH_SIZE": "classify_batch_size",
     "SENTIMENTIZER_CLASSIFY_BATCH_WAIT_S": "classify_batch_wait_s",
     "SENTIMENTIZER_CORS_ORIGINS": "cors_origins",
+    "SENTIMENTIZER_SD_ENABLED": "sd_enabled",
+    "SENTIMENTIZER_SD_MODEL_ID": "sd_model_id",
+    "SENTIMENTIZER_FLUX_ENABLED": "flux_enabled",
+    "SENTIMENTIZER_FLUX_MODEL_PATH": "flux_model_path",
+    "SENTIMENTIZER_SD35_ENABLED": "sd35_enabled",
+    "SENTIMENTIZER_SD35_MODEL_ID": "sd35_model_id",
+    "SENTIMENTIZER_DEFAULT_IMAGE_MODEL": "default_image_model",
+    "SENTIMENTIZER_REQUEST_TIMEOUT_S": "request_timeout_s",
+    "SENTIMENTIZER_API_KEYS": "api_keys",
+    "SENTIMENTIZER_RATE_LIMIT_PER_MIN": "rate_limit_per_min",
+    "SENTIMENTIZER_RATE_LIMIT_BURST": "rate_limit_burst",
+    "SENTIMENTIZER_IDEMPOTENCY_TTL_S": "idempotency_ttl_s",
+    "SENTIMENTIZER_JOB_TTL_S": "job_ttl_s",
+    "SENTIMENTIZER_PROMPT_BLOCKLIST_PATH": "prompt_blocklist_path",
 }
 
 # Type coercion for non-string fields
@@ -100,6 +142,15 @@ _FIELD_TYPES: dict[str, type] = {
     "classify_batch_size": int,
     "classify_batch_wait_s": float,
     "cors_origins": list,
+    "sd_enabled": bool,
+    "flux_enabled": bool,
+    "sd35_enabled": bool,
+    "request_timeout_s": int,
+    "api_keys": list,
+    "rate_limit_per_min": int,
+    "rate_limit_burst": int,
+    "idempotency_ttl_s": int,
+    "job_ttl_s": int,
 }
 
 

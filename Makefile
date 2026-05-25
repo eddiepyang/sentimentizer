@@ -246,9 +246,13 @@ diagnose:
 # Serving
 # ──────────────────────────────────────────────
 
-## Start Ray Serve with all three models (default: 0.0.0.0:8000)
+## Start Ray Serve with sentiment + router (no GPU required)
 serve:
 	uv run --active python -m sentimentizer.serve
+
+## Start Ray Serve with all models including image generation (GPU required)
+serve-all:
+	uv run --active python -m sentimentizer.serve --diffusion
 
 # ──────────────────────────────────────────────
 # Testing & Linting

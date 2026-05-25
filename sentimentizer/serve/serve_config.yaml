@@ -24,3 +24,21 @@ classify_batch_wait_s: 0.05   # Seconds to wait before processing a partial rout
 # Set to ["*"] for development, restrict in production via env var
 cors_origins:
   - "*"
+
+# Diffusion serving (image generation) — disabled by default
+sd_enabled: false
+sd_model_id: "stabilityai/stable-diffusion-2-1"
+flux_enabled: false
+flux_model_path: ""
+sd35_enabled: false
+sd35_model_id: "stabilityai/stable-diffusion-3.5-medium"
+default_image_model: "sd35"
+request_timeout_s: 600
+
+# Middleware for image routes
+api_keys: []
+rate_limit_per_min: 60
+rate_limit_burst: 10
+idempotency_ttl_s: 600
+job_ttl_s: 3600
+prompt_blocklist_path: ""

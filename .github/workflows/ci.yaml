@@ -19,15 +19,16 @@ jobs:
   lint-and-test:
     name: lint and test
     runs-on: ubuntu-latest
+    env:
+      TZ: UTC
+      RAY_DISABLE_IMPORT_WARNING: "1"
+      RAY_ENABLE_UV_RUN_RUNTIME_ENV: "0"
+      RAY_DEFAULT_OBJECT_STORE_MEMORY_PROPORTION: "0.5"
+      RAY_TQDM: "0"
 
     steps:
 
     - uses: actions/checkout@v4
-
-    - name: setup timezone
-      uses: zcong1993/setup-timezone@master
-      with:
-        timezone: UTC
 
     - name: set up Python 3.12
       uses: actions/setup-python@v5
@@ -39,8 +40,8 @@ jobs:
       with:
         enable-cache: true
 
-    - name: install dependencies (CPU-only torch + ray + onnx + router)
-      run: uv sync --extra dev,ray,onnx,router
+    - name: install dependencies
+      run: uv sync --extra dev,diffusion,ray,onnx,router
 
     - name: ruff lint
       run: uv run ruff check .
@@ -53,6 +54,3 @@ jobs:
         uv run pytest --exitfirst --verbose --failed-first \
           --cov=sentimentizer --cov=workflows \
           --cov-report=term-missing --cov-report=html
-      working-directory: .
-      env:
-        RAY_DISABLE_IMPORT_WARNING: "1"

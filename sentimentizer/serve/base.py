@@ -8,9 +8,21 @@ import threading
 from typing import Any
 
 
+class _DummyHandle:
+    """Stub for Ray Serve deployment handles (returned by Deployment.bind())."""
+
+    def remote(self, *args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("Ray Serve is not available. Install with: pip install 'ray[serve]'")
+
+    def options(self, **kwargs: Any) -> "_DummyHandle":
+        return self
+
+
 class _DummyServe:
     def deployment(self, *args: Any, **kwargs: Any) -> Any:
         def decorator(cls: Any) -> Any:
+            if not hasattr(cls, "bind"):
+                cls.bind = classmethod(lambda cls_, *a, **kw: _DummyHandle())
             return cls
 
         if len(args) == 1 and callable(args[0]):
@@ -29,7 +41,7 @@ class _DummyServe:
         def decorator(cls: Any) -> Any:
             return cls
 
-        if len(args) == 1 and callable(args[0]):
+        if len(args) == 1 and callable(args[0]) and not hasattr(args[0], "routes"):
             return decorator(args[0])
         return decorator
 
