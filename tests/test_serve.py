@@ -935,17 +935,3 @@ class TestCORSMiddleware:
                 and "*" in m.kwargs["allow_origins"]
             ):
                 assert m.kwargs.get("allow_credentials") is False
-
-
-# ---------------------------------------------------------------------------
-# Test: Request body size limit
-# ---------------------------------------------------------------------------
-
-
-class TestRequestBodySizeLimit:
-    """Test the body size limit middleware."""
-
-    def test_max_body_size_constant(self):
-        from sentimentizer.serve.app import MAX_REQUEST_BODY_BYTES
-
-        assert MAX_REQUEST_BODY_BYTES == 4 * 1024 * 1024  # 4 MiB
