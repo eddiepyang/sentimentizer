@@ -33,6 +33,20 @@ Endpoints:
     POST /v1/router/batch     -- Route multiple texts
     GET  /v1/router/models    -- Router model metadata
 
+  Image Generation (if enabled):
+    POST /v1/images/generate    -- Generate an image synchronously (SD3.5/FLUX.2/SDXL)
+    POST /v1/images/jobs        -- Create an async image generation job
+    GET  /v1/images/jobs        -- List image generation jobs
+    GET  /v1/images/jobs/{id}   -- Get job status/result
+    DELETE /v1/images/jobs/{id} -- Cancel a queued job
+    GET  /v1/images/models      -- Image model metadata
+    GET  /v1/images/models/{name} -- Single image model metadata
+
+  Reference images:
+    The POST /v1/images/generate and POST /v1/images/jobs endpoints support
+    a `reference_images` field (list of base64 strings, up to 2 images, each <= 512x512 pixels).
+    Supported by FLUX.2 Klein only.
+
   Infrastructure (unversioned):
     GET  /health               -- Backward-compatible alias for /health/ready
     GET  /health/live          -- Liveness probe (always 200)
@@ -57,6 +71,7 @@ from typing import Any
 # Must be set before Ray imports occur — Ray workers that use uv
 # to create a fresh venv will fail with ModuleNotFoundError.
 os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 from collections.abc import Awaitable, Callable
 
@@ -71,7 +86,7 @@ from starlette.responses import Response as StarletteResponse
 from sentimentizer import logger
 from sentimentizer.predictor import _MODEL_CONFIGS, SentimentPredictor
 from sentimentizer.serve.base import ServiceMetrics, serve
-from sentimentizer.serve.config import load_serve_config
+from sentimentizer.serve.config import load_serve_config, parse_sdxl_models
 from sentimentizer.serve.models import (
     BatchRequest,
     BatchResponse,
@@ -103,16 +118,23 @@ if cfg.api_keys:
 _VERSION = _pkg_version("sentimentizer")
 
 
-MAX_REQUEST_BODY_BYTES = 4 * 1024 * 1024  # 4 MiB defense-in-depth limit
-
-
 class _RequestBodySizeLimitMiddleware(BaseHTTPMiddleware):
-    """Reject requests with body exceeding MAX_REQUEST_BODY_BYTES.
+    """Reject requests with body exceeding max_bytes limit.
 
     Defense-in-depth: the K8s ingress already enforces
     ``proxy-body-size: "1m"``, but this middleware catches requests
     that bypass the ingress (e.g., port-forward, node port).
     """
+
+    def __init__(
+        self,
+        app: Any,
+        default_max_bytes: int = 1 * 1024 * 1024,
+        path_limits: dict[str, int] | None = None,
+    ) -> None:
+        super().__init__(app)
+        self.default_max_bytes = default_max_bytes
+        self.path_limits = path_limits or {}
 
     async def dispatch(
         self,
@@ -134,13 +156,19 @@ class _RequestBodySizeLimitMiddleware(BaseHTTPMiddleware):
                             }
                         },
                     )
-                if length > MAX_REQUEST_BODY_BYTES:
+                max_bytes = self.default_max_bytes
+                for prefix, limit in self.path_limits.items():
+                    if request.url.path.startswith(prefix):
+                        max_bytes = limit
+                        break
+
+                if length > max_bytes:
                     return JSONResponse(
                         status_code=413,
                         content={
                             "error": {
                                 "code": "request_too_large",
-                                "message": f"Request body exceeds {MAX_REQUEST_BODY_BYTES} bytes",
+                                "message": f"Request body exceeds {max_bytes} bytes",
                             }
                         },
                     )
@@ -155,7 +183,11 @@ def create_fastapi_app(title: str, description: str) -> FastAPI:
         description=description,
     )
 
-    app.add_middleware(_RequestBodySizeLimitMiddleware)
+    app.add_middleware(
+        _RequestBodySizeLimitMiddleware,
+        default_max_bytes=1 * 1024 * 1024,
+        path_limits={"/v1/images/": 4 * 1024 * 1024},
+    )
 
     app.add_middleware(
         CORSMiddleware,
@@ -605,11 +637,13 @@ class SentimentizerDeployment:
             "router_loaded": self.predictor.router_loaded,
             "router_error": self.predictor.router_error,
         }
-        if cfg.sd_enabled or cfg.flux_enabled or cfg.sd35_enabled:
+        if cfg.flux2_klein_enabled or cfg.sd35_enabled or bool(cfg.sdxl_models):
             body["image_models"] = {
-                "sd": "enabled" if cfg.sd_enabled else "disabled",
-                "flux": "enabled" if cfg.flux_enabled else "disabled",
+                "flux2_klein": "enabled" if cfg.flux2_klein_enabled else "disabled",
                 "sd35": "enabled" if cfg.sd35_enabled else "disabled",
+                "sdxl": (
+                    list(parse_sdxl_models(cfg.sdxl_models).keys()) if cfg.sdxl_models else []
+                ),
             }
         if not self.predictor.model_loaded:
             return JSONResponse(status_code=503, content=body)
@@ -630,9 +664,9 @@ def main(host: str = "0.0.0.0", port: int = 8000, diffusion: bool = False) -> No
         diffusion: If True, start the image generation (diffusion) deployment
             alongside sentiment. This requires GPU hardware and model weights.
             When False (default), only sentiment + router endpoints are served.
-            Diffusion can also be enabled via config: set ``sd_enabled``,
-            ``flux_enabled``, or ``sd35_enabled`` in ``serve_config.yaml`` or
-            their corresponding env vars.
+            Diffusion can also be enabled via config: set
+            ``flux2_klein_enabled``, ``sd35_enabled``, or ``sdxl_models`` in
+            ``serve_config.yaml`` or their corresponding env vars.
 
     Workers use the current Python executable directly (no isolated venv),
     which avoids the ``ModuleNotFoundError: No module named 'ray'`` issue
@@ -667,14 +701,16 @@ def main(host: str = "0.0.0.0", port: int = 8000, diffusion: bool = False) -> No
         route_prefix="/",
     )
 
-    start_diffusion = diffusion or cfg.sd_enabled or cfg.flux_enabled or cfg.sd35_enabled
+    start_diffusion = (
+        diffusion or cfg.flux2_klein_enabled or cfg.sd35_enabled or bool(cfg.sdxl_models)
+    )
     if start_diffusion:
         from sentimentizer.diffusion.job_store import JobStore
         from sentimentizer.serve.diffusion_app import (
-            FluxDeployment,
+            Flux2KleinDeployment,
             ImagesDispatcher,
             SD35Deployment,
-            SDDeployment,
+            SDXLDeployment,
         )
 
         JobStore.options(
@@ -683,12 +719,19 @@ def main(host: str = "0.0.0.0", port: int = 8000, diffusion: bool = False) -> No
             get_if_exists=True,
         ).remote(ttl_s=cfg.job_ttl_s)
 
-        sd_handle = SDDeployment.bind() if cfg.sd_enabled else None
-        flux_handle = FluxDeployment.bind() if cfg.flux_enabled else None
+        flux2_klein_handle = Flux2KleinDeployment.bind() if cfg.flux2_klein_enabled else None
         sd35_handle = SD35Deployment.bind() if cfg.sd35_enabled else None
 
+        sdxl_handles: dict[str, Any] | None = None
+        sdxl_slots = parse_sdxl_models(cfg.sdxl_models)
+        if sdxl_slots:
+            sdxl_handles = {
+                name: SDXLDeployment.options(name=f"sdxl_{name}").bind(model_id)
+                for name, model_id in sdxl_slots.items()
+            }
+
         serve.run(
-            ImagesDispatcher.bind(sd_handle, flux_handle, sd35_handle),
+            ImagesDispatcher.bind(flux2_klein_handle, sd35_handle, sdxl_handles),
             name="images",
             route_prefix="/v1/images",
         )

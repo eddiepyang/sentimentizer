@@ -1,4 +1,4 @@
-"""Diffusion serving: dispatcher, SD/FLUX deployments, and image generation routes.
+"""Diffusion serving: dispatcher, SD3.5/FLUX.2 Klein/SDXL deployments, and image routes.
 
 Uses the Ray Serve composition pattern: a lightweight CPU dispatcher
 holds DeploymentHandles to GPU-backed model deployments. Routes are
@@ -17,10 +17,12 @@ from fastapi import Depends, HTTPException, Query, Request, Response
 
 from sentimentizer import logger
 from sentimentizer.diffusion.predictor import (
-    FluxPredictor,
+    _REF_MAX_PIXELS,
+    Flux2KleinPredictor,
     SD35Predictor,
-    SDPredictor,
+    SDXLPredictor,
     _b64,
+    _decode_b64_image,
     _encode_pil,
     _generate_id,
 )
@@ -65,7 +67,7 @@ _num_gpus = 1 if torch.cuda.is_available() else 0
 
 images_app = create_fastapi_app(
     title="Sentimentizer Images",
-    description="Image generation API (Stable Diffusion / FLUX)",
+    description="Image generation API (SD 3.5 Medium / FLUX.2 Klein / SDXL)",
 )
 
 
@@ -74,43 +76,27 @@ images_app = create_fastapi_app(
     max_ongoing_requests=4,
     ray_actor_options={"num_cpus": 2, "num_gpus": _num_gpus},
 )
-class SDDeployment:
+class Flux2KleinDeployment:
     def __init__(self) -> None:
         from dataclasses import replace
 
-        from sentimentizer.diffusion.config import SD_DEFAULT_CONFIG
+        from sentimentizer.diffusion.config import FLUX2_KLEIN_DEFAULT_CONFIG
 
-        model_cfg = SD_DEFAULT_CONFIG
-        if cfg.sd_model_id:
-            model_cfg = replace(SD_DEFAULT_CONFIG, model_id=cfg.sd_model_id)
-        self.predictor = SDPredictor(model_cfg)
+        overrides: dict[str, Any] = {}
+        if cfg.flux2_klein_model_id:
+            overrides["model_id"] = cfg.flux2_klein_model_id
+        if cfg.flux2_klein_cpu_offload:
+            overrides["cpu_offload"] = cfg.flux2_klein_cpu_offload
+        if cfg.flux2_klein_quantization:
+            overrides["quantization"] = cfg.flux2_klein_quantization
+        model_cfg = (
+            replace(FLUX2_KLEIN_DEFAULT_CONFIG, **overrides)
+            if overrides
+            else FLUX2_KLEIN_DEFAULT_CONFIG
+        )
+        self.predictor = Flux2KleinPredictor(model_cfg)
         self.predictor.warmup()
-        self._metrics = ServiceMetrics(prefix="sd")
-
-    async def generate(self, **kwargs: Any) -> tuple[Any, int]:
-        return await asyncio.to_thread(self.predictor.generate, **kwargs)
-
-    def info(self) -> dict[str, Any]:
-        return self.predictor.model_info()
-
-
-@serve.deployment(
-    num_replicas=1,
-    max_ongoing_requests=2,
-    ray_actor_options={"num_cpus": 4, "num_gpus": _num_gpus},
-)
-class FluxDeployment:
-    def __init__(self) -> None:
-        from dataclasses import replace
-
-        from sentimentizer.diffusion.config import FLUX_DEFAULT_CONFIG
-
-        model_cfg = FLUX_DEFAULT_CONFIG
-        if cfg.flux_model_path:
-            model_cfg = replace(FLUX_DEFAULT_CONFIG, model_path=cfg.flux_model_path)
-        self.predictor = FluxPredictor(model_cfg)
-        self.predictor.warmup()
-        self._metrics = ServiceMetrics(prefix="flux")
+        self._metrics = ServiceMetrics(prefix="flux2_klein")
 
     async def generate(self, **kwargs: Any) -> tuple[Any, int]:
         return await asyncio.to_thread(self.predictor.generate, **kwargs)
@@ -130,12 +116,40 @@ class SD35Deployment:
 
         from sentimentizer.diffusion.config import SD35_DEFAULT_CONFIG
 
-        model_cfg = SD35_DEFAULT_CONFIG
+        overrides: dict[str, Any] = {}
         if cfg.sd35_model_id:
-            model_cfg = replace(SD35_DEFAULT_CONFIG, model_id=cfg.sd35_model_id)
+            overrides["model_id"] = cfg.sd35_model_id
+        if cfg.sd35_cpu_offload:
+            overrides["cpu_offload"] = cfg.sd35_cpu_offload
+        model_cfg = replace(SD35_DEFAULT_CONFIG, **overrides) if overrides else SD35_DEFAULT_CONFIG
         self.predictor = SD35Predictor(model_cfg)
         self.predictor.warmup()
         self._metrics = ServiceMetrics(prefix="sd35")
+
+    async def generate(self, **kwargs: Any) -> tuple[Any, int]:
+        return await asyncio.to_thread(self.predictor.generate, **kwargs)
+
+    def info(self) -> dict[str, Any]:
+        return self.predictor.model_info()
+
+
+@serve.deployment(
+    num_replicas=1,
+    max_ongoing_requests=4,
+    ray_actor_options={"num_cpus": 2, "num_gpus": _num_gpus},
+)
+class SDXLDeployment:
+    def __init__(self, model_id: str) -> None:
+        from dataclasses import replace
+
+        from sentimentizer.diffusion.config import SDXL_DEFAULT_CONFIG
+
+        model_cfg = (
+            replace(SDXL_DEFAULT_CONFIG, model_id=model_id) if model_id else SDXL_DEFAULT_CONFIG
+        )
+        self.predictor = SDXLPredictor(model_cfg)
+        self.predictor.warmup()
+        self._metrics = ServiceMetrics(prefix="sdxl")
 
     async def generate(self, **kwargs: Any) -> tuple[Any, int]:
         return await asyncio.to_thread(self.predictor.generate, **kwargs)
@@ -155,17 +169,18 @@ class ImagesDispatcher:
 
     def __init__(
         self,
-        sd: Any = None,
-        flux: Any = None,
+        flux2_klein: Any = None,
         sd35: Any = None,
+        sdxl: dict[str, Any] | None = None,
     ) -> None:
         self._handles: dict[str, Any] = {}
-        if sd is not None:
-            self._handles["sd"] = sd
-        if flux is not None:
-            self._handles["flux"] = flux
+        if flux2_klein is not None:
+            self._handles["flux2_klein"] = flux2_klein
         if sd35 is not None:
             self._handles["sd35"] = sd35
+        for name, handle in (sdxl or {}).items():
+            self._handles[name] = handle
+        self._sdxl_names: set[str] = set(sdxl.keys()) if sdxl else set()
         self._idem = IdempotencyCache(ttl_s=cfg.idempotency_ttl_s)
         self._store: Any = None
         self._refs: dict[str, Any] = {}
@@ -200,17 +215,18 @@ class ImagesDispatcher:
 
     def _get_predictor_defaults(self, model: str) -> dict[str, Any]:
         from sentimentizer.diffusion.config import (
-            FLUX_DEFAULT_CONFIG,
+            FLUX2_KLEIN_DEFAULT_CONFIG,
             SD35_DEFAULT_CONFIG,
-            SD_DEFAULT_CONFIG,
+            SDXL_DEFAULT_CONFIG,
         )
 
         defaults_map = {
-            "sd": SD_DEFAULT_CONFIG,
-            "flux": FLUX_DEFAULT_CONFIG,
+            "flux2_klein": FLUX2_KLEIN_DEFAULT_CONFIG,
             "sd35": SD35_DEFAULT_CONFIG,
         }
         model_cfg = defaults_map.get(model)
+        if model_cfg is None and model in self._sdxl_names:
+            model_cfg = SDXL_DEFAULT_CONFIG
         if model_cfg is None:
             return {}
         return {
@@ -233,6 +249,31 @@ class ImagesDispatcher:
         idempotency_key: str | None = Depends(idempotent),
     ) -> dict[str, Any]:
         model_name = body.model or cfg.default_image_model
+
+        if body.reference_images is not None:
+            if model_name != "flux2_klein":
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "reference_images_unsupported",
+                        "message": "Reference images are only supported by FLUX.2 Klein",
+                    },
+                )
+            try:
+                reference_images = [
+                    _decode_b64_image(b64, _REF_MAX_PIXELS) for b64 in body.reference_images
+                ]
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "invalid_reference_image",
+                        "message": str(exc),
+                    },
+                ) from exc
+        else:
+            reference_images = None
+
         request_id = getattr(request.state, "request_id", "unknown")
         logger.info(
             "Received image generation request",
@@ -290,6 +331,7 @@ class ImagesDispatcher:
             width=body.width,
             height=body.height,
             seed=body.seed,
+            reference_images=reference_images,
         )
         latency = time.perf_counter() - start
 
@@ -323,6 +365,7 @@ class ImagesDispatcher:
             user=body.user,
             key_prefix=api_key[:8] if api_key else None,
             latency_s=latency,
+            reference_images_count=len(body.reference_images) if body.reference_images else 0,
         )
 
         return response
@@ -380,6 +423,31 @@ class ImagesDispatcher:
         idempotency_key: str | None = Depends(idempotent),
     ) -> dict[str, Any]:
         model_name = body.model or cfg.default_image_model
+
+        if body.reference_images is not None:
+            if model_name != "flux2_klein":
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "reference_images_unsupported",
+                        "message": "Reference images are only supported by FLUX.2 Klein",
+                    },
+                )
+            try:
+                reference_images = [
+                    _decode_b64_image(b64, _REF_MAX_PIXELS) for b64 in body.reference_images
+                ]
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "invalid_reference_image",
+                        "message": str(exc),
+                    },
+                ) from exc
+        else:
+            reference_images = None
+
         handle = self._get_handle(model_name)
 
         defaults = self._get_predictor_defaults(model_name)
@@ -431,6 +499,7 @@ class ImagesDispatcher:
             width=body.width,
             height=body.height,
             seed=body.seed,
+            reference_images=reference_images,
         )
 
         job_id = await store.submit.remote(
@@ -456,6 +525,7 @@ class ImagesDispatcher:
             model=model_name,
             user=body.user,
             key_prefix=api_key[:8],
+            reference_images_count=len(body.reference_images) if body.reference_images else 0,
         )
 
         return job_resp

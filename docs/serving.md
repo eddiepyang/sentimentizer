@@ -12,7 +12,7 @@ This document describes how to deploy and interact with the unified Sentimentize
 > uv add "sentimentizer[ray]"
 > ```
 
-The `serve` command starts a Ray Serve application with FastAPI routing (featuring interactive Swagger docs at `/docs`). It loads the sentiment model (defaulting to the configuration in `serve_config.yaml`) and the SetFit router at startup. Image generation (Stable Diffusion 2.1, FLUX.1-dev) can be enabled via configuration. All services share the same port and handle incoming requests via route-based dispatch.
+The `serve` command starts a Ray Serve application with FastAPI routing (featuring interactive Swagger docs at `/docs`). It loads the sentiment model (defaulting to the configuration in `serve_config.yaml`) and the SetFit router at startup. Image generation (SD 3.5 Medium, FLUX.2 Klein, SDXL slots) can be enabled via configuration. All services share the same port and handle incoming requests via route-based dispatch.
 
 ### Starting the Server
 
@@ -198,13 +198,18 @@ By default, the server binds to `0.0.0.0:8000`.
 > ```bash
 > uv sync --extra ray --extra diffusion
 > ```
-> Enable image generation by setting `SENTIMENTIZER_SD_ENABLED=1`, `SENTIMENTIZER_FLUX_ENABLED=1`,
-> and/or `SENTIMENTIZER_SD35_ENABLED=1`, and provide API keys via `SENTIMENTIZER_API_KEYS`. Image routes require authentication;
-> sentiment and router routes remain unauthenticated.
+> Enable image generation by setting `SENTIMENTIZER_SD35_ENABLED=1` and/or
+> `SENTIMENTIZER_FLUX2_KLEIN_ENABLED=1`, and provide API keys via `SENTIMENTIZER_API_KEYS`.
+> Image routes require authentication; sentiment and router routes remain unauthenticated.
+> SDXL slots are enabled via `SENTIMENTIZER_SDXL_MODELS="name1:model_id1,name2:model_id2"`
+> — each entry spawns its own GPU deployment addressable by `name` in the request body.
+> For VRAM-constrained GPUs, set `SENTIMENTIZER_SD35_CPU_OFFLOAD=sequential` (or `model`)
+> or the same for `FLUX2_KLEIN` to enable diffusers' CPU offload.
+> See [configuration.md](configuration.md#runtime-configuration) for the full env-var reference.
 
-Image generation uses separate GPU-backed Ray Serve deployments (SDDeployment, FluxDeployment, SD35Deployment)
-behind a lightweight CPU dispatcher (ImagesDispatcher). The [diffusion serving plan](diffusion_serving_plan.md)
-has full architectural details.
+Image generation uses separate GPU-backed Ray Serve deployments (SD35Deployment, Flux2KleinDeployment,
+plus one SDXLDeployment per `sdxl_models` slot) behind a lightweight CPU dispatcher (ImagesDispatcher).
+The [diffusion serving plan](diffusion_serving_plan.md) has full architectural details.
 
 #### Synchronous Image Generation
 - **Route**: `POST /v1/images/generate`
@@ -212,8 +217,8 @@ has full architectural details.
 - **Request Body**:
   ```json
   {
-    "prompt": "a red apple on a wooden table",
-    "model": "sd",
+    "prompt": "a calico cat in a teacup, soft window light",
+    "model": "sd35",
     "width": 1024,
     "height": 1024,
     "output_format": "png"
@@ -224,32 +229,43 @@ has full architectural details.
   curl -X POST http://localhost:8000/v1/images/generate \
     -H "Authorization: Bearer test-key-123" \
     -H "Content-Type: application/json" \
-    -d '{"prompt": "a red apple on a wooden table", "model": "sd"}'
+    -d '{"prompt": "a calico cat in a teacup", "model": "sd35"}'
   ```
 - **Response**:
   ```json
   {
     "id": "img_ABCDEFGHIJKL",
     "created": 1700000000,
-    "model": "sd",
+    "model": "sd35",
     "image_b64": "...",
     "format": "png",
     "width": 1024,
     "height": 1024,
     "seed": 42,
-    "steps": 30,
-    "guidance_scale": 7.5,
-    "latency_s": 2.5
+    "steps": 40,
+    "guidance_scale": 4.5,
+    "latency_s": 4.8
   }
   ```
 
-Supported parameters: `prompt` (required), `model` (`"sd"`, `"flux"`, or `"sd35"`), `negative_prompt`,
+Supported parameters: `prompt` (required), `model` (`"sd35"`, `"flux2_klein"`, or any SDXL slot name configured via `SENTIMENTIZER_SDXL_MODELS`), `negative_prompt`,
 `steps`, `guidance_scale`, `width`, `height`, `seed`, `response_format` (`"b64_json"` or `"url"`),
 `output_format` (`"png"`, `"webp"`, `"jpeg"`), `user` (opaque abuse-tracking ID),
 `Idempotency-Key` header (deduplication).
 
 Rate-limit headers (`X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`) are
 returned on every response. Exceeding the limit returns `429` with a `Retry-After` header.
+
+#### Reference Images
+
+The `POST /v1/images/generate` and `POST /v1/images/jobs` endpoints support a `reference_images` field (a list of base64 strings) for true reference conditioning.
+
+- **Supported Models**: FLUX.2 Klein only (requests targeting other models return HTTP 400).
+- **Constraints**: Maximum 2 reference images per request. Each image must be ≤ 512×512 pixels after decoding (262,144 pixels). Exceeding these limits results in an auto-rejection.
+- **Resolution Behavior**: Reference images do not need to match the generation resolution. The pipeline encodes them at their native dimensions and concatenates the resulting tokens. Non-square references may be cropped by the pipeline's `resize_mode="crop"`.
+- **Payload Limits**: The body size limit is 4 MiB for `/v1/images/` routes (1 MiB for all other routes). It is highly recommended to use WebP or JPEG format for reference images to stay under the limit.
+- **VRAM Implications**: Reference images increase attention memory quadratically.
+- **Configuration**: `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` is set automatically to reduce VRAM fragmentation.
 
 #### List Image Models
 - **Route**: `GET /v1/images/models`

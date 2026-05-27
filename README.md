@@ -51,9 +51,9 @@ Models output **3-class probabilities** (negative, neutral, positive) that sum t
 
 ---
 
-## Image Generation (SD 2.1 / FLUX.1-dev / SD 3.5 Medium)
+## Image Generation (SD 3.5 Medium / FLUX.2 Klein / SDXL)
 
-The diffusion serving pipeline adds GPU-backed image generation endpoints alongside sentiment analysis. Disabled by default; enable via config.
+The diffusion serving pipeline adds GPU-backed image generation endpoints alongside sentiment analysis. Disabled by default; enable via config. Three models are supported: **SD 3.5 Medium** (Stability Community License, 1024² flagship), **FLUX.2 Klein 4B** (Apache 2.0, step-distilled, ~13 GB VRAM), and **SDXL** with multi-slot support for drop-in fine-tunes (Juggernaut XL, Illustrious XL, etc.).
 
 ### Prerequisites
 
@@ -67,34 +67,48 @@ uv sync --no-sources-package torch
 
 ### Configure
 
-Set environment variables or edit `sentimentizer/serve/serve_config.yaml`:
+Configuration lives in two YAML files following the same pattern (dataclass defaults < YAML values < environment variable overrides):
+
+- **`sentimentizer/serve/serve_config.yaml`** — operational settings: which models to enable, API keys, rate limits, model IDs, CPU offload mode.
+- **`sentimentizer/diffusion/diffusion_config.yaml`** — model-internal defaults: denoising steps, guidance scale, max pixels, dimension alignment.
+
+Edit `serve_config.yaml` to enable a model:
 
 ```yaml
 # Enable one or more models
-sd_enabled: true
-flux_enabled: false            # FLUX needs ~22 GB VRAM (L4/A100)
-sd35_enabled: false            # SD 3.5 Medium needs ~5-6 GB VRAM
-default_image_model: "sd"      # used when request omits model field
+sd35_enabled: true               # SD 3.5 Medium (~10 GB VRAM)
+flux2_klein_enabled: false       # FLUX.2 Klein 4B (~13 GB VRAM, Apache 2.0)
+sdxl_models: []                  # Named SDXL slots: ["anime:John6666/noob-sdxl-v10", ...]
+default_image_model: "sd35"      # used when request omits model field
 
 # Auth — required for image routes (/v1/images/*)
 api_keys: ["sk-your-secret-key"]
 
-# Optional: custom model paths
-sd_model_id: "stabilityai/stable-diffusion-2-1"
+# Optional: override model IDs
 sd35_model_id: "stabilityai/stable-diffusion-3.5-medium"
-flux_model_path: "/path/to/flux1-dev-q8_0.gguf"   # GGUF quantized weights
+flux2_klein_model_id: "black-forest-labs/FLUX.2-klein-4B"
+
+# Optional: CPU offload for VRAM-constrained GPUs
+# "" (default, full GPU), "model" (whole-module swap), "sequential" (submodule swap)
+sd35_cpu_offload: ""
+flux2_klein_cpu_offload: ""
 ```
 
 Or via environment variables:
 
 ```bash
-# Enable SD 2.1
-export SENTIMENTIZER_SD_ENABLED=true
-export SENTIMENTIZER_API_KEYS=sk-your-secret-key
-
-# Or enable SD 3.5 Medium
+# Enable SD 3.5 Medium
 export SENTIMENTIZER_SD35_ENABLED=true
 export SENTIMENTIZER_API_KEYS=sk-your-secret-key
+
+# Enable FLUX.2 Klein
+export SENTIMENTIZER_FLUX2_KLEIN_ENABLED=true
+
+# Enable one or more SDXL slots (comma-separated name:model_id list)
+export SENTIMENTIZER_SDXL_MODELS="anime:John6666/noob-sdxl-v10,base:stabilityai/stable-diffusion-xl-base-1.0"
+
+# Optional: cap VRAM with CPU offload (see "Low VRAM" below)
+export SENTIMENTIZER_SD35_CPU_OFFLOAD=sequential
 ```
 
 ### Run
@@ -103,36 +117,54 @@ export SENTIMENTIZER_API_KEYS=sk-your-secret-key
 # Start the Ray Serve deployment (loads model on startup)
 python -m sentimentizer.serve
 
-# SD 2.1 generation (sync, ~2-3s on L4)
-curl -X POST http://localhost:8000/v1/images/generate \
-  -H "Authorization: Bearer sk-your-secret-key" \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "a red apple on a wooden table", "model": "sd", "width": 512, "height": 512}'
-
 # SD 3.5 Medium generation (sync, ~4-6s on L4)
 curl -X POST http://localhost:8000/v1/images/generate \
   -H "Authorization: Bearer sk-your-secret-key" \
   -H "Content-Type: application/json" \
   -d '{"prompt": "a cinematic portrait of an astronaut", "model": "sd35", "width": 1024, "height": 1024}'
 
+# FLUX.2 Klein generation (sync, ~1-3s on a fitting GPU, 4 steps)
+curl -X POST http://localhost:8000/v1/images/generate \
+  -H "Authorization: Bearer sk-your-secret-key" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "a calico cat in a teacup, soft window light", "model": "flux2_klein", "width": 1024, "height": 1024}'
+
+# SDXL slot generation (model name matches an entry from sdxl_models)
+curl -X POST http://localhost:8000/v1/images/generate \
+  -H "Authorization: Bearer sk-your-secret-key" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "a watercolor still life", "model": "anime", "width": 1024, "height": 1024}'
+
 # List available models
 curl http://localhost:8000/v1/images/models \
   -H "Authorization: Bearer sk-your-secret-key"
 
-# Async job mode (for FLUX or long-running requests)
+# Async job mode (for long-running requests)
 curl -X POST http://localhost:8000/v1/images/jobs \
   -H "Authorization: Bearer sk-your-secret-key" \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "a cinematic portrait of an astronaut", "model": "flux"}'
+  -d '{"prompt": "a cinematic portrait of an astronaut", "model": "sd35"}'
 
 # Poll job status
 curl http://localhost:8000/v1/images/jobs/{job_id} \
   -H "Authorization: Bearer sk-your-secret-key"
 ```
 
+### Low VRAM (SD 3.5 CPU offload)
+
+SD 3.5 Medium peak VRAM is ~10 GB at 1024×1024 fp16, which won't fit comfortably on 8–11 GB GPUs (e.g. 2080 Ti, 3060). Enable diffusers' CPU offload via `SENTIMENTIZER_SD35_CPU_OFFLOAD` (or `sd35_cpu_offload` in `serve_config.yaml`):
+
+| Mode | Peak VRAM | Latency vs. baseline | When to use |
+|------|-----------|----------------------|-------------|
+| `""` (default) | ~10 GB | 1.0× | Plenty of VRAM (12 GB+) |
+| `model` | ~5–9 GB | ~1.1–1.3× | Tight but workable (10–12 GB) |
+| `sequential` | ~1–2 GB | ~3–5× | Very tight (8 GB or less, shared GPU) |
+
+The selected mode is logged at warmup as `cpu_offload=<mode>` so you can confirm it took effect.
+
 ### MPS (Apple Silicon) Support
 
-SD 2.1 and SD 3.5 Medium work on MPS devices. FLUX GGUF is CUDA-only; setting `flux_enabled: true` on MPS raises `RuntimeError` at startup.
+SD 3.5 Medium and SDXL run on MPS devices in fp16. FLUX.2 Klein requires recent diffusers MPS support — verify against the current model card before enabling on Apple Silicon.
 
 ### API Endpoints
 
@@ -168,7 +200,7 @@ All models output **3-class logits** `(B, 3)` mapped to: negative (0), neutral (
 Detailed guides and implementation details are available in the specialized documentation files:
 
 - 🚀 **[Model Serving Guide](docs/serving.md)**: Ray Serve application deployment, FastAPI endpoints (sentiment/routing/image generation), and the Go CLI client.
-- 🎨 **[Diffusion Serving Plan](docs/diffusion_serving_plan.md)**: Image generation API design (SD 2.1, FLUX.1-dev, SD 3.5 Medium), middleware (auth, rate limiting, idempotency), and GPU deployment.
+- 🎨 **[Diffusion Serving Plan](docs/diffusion_serving_plan.md)**: Image generation API design (SD 3.5 Medium, FLUX.2 Klein, SDXL slots), middleware (auth, rate limiting, idempotency), and GPU deployment.
 - 🏋️ **[Model Training & Checkpointing Guide](docs/training.md)**: Yelp datasets, single-node/distributed commands, training arguments, sleep prevention, and checkpoint resuming.
 - ⚙️ **[Model Configuration Reference](docs/configuration.md)**: Configuration dataclasses (`RNNConfig`, `EncoderConfig`, etc.), parameter defaults, and consistency checks.
 - 🎛️ **[Hyperparameter Tuning Guide](docs/tuning.md)**: Optuna searches, LangGraph iterative agent tuning (via Ollama GLM 5.1), and validation/retries.
@@ -259,10 +291,11 @@ sentimentizer/
 │   ├── models.py          # Pydantic request/response models for Swagger docs
 │   ├── diffusion_models.py # Pydantic request/response models for image generation (+ Job models)
 │   └── diffusion_app.py    # SD/FLUX/SD35 deployments + ImagesDispatcher routes + job endpoints
-├── diffusion/              # Diffusion model loading + inference
-│   ├── config.py           # DiffusionModelConfig, SD/FLUX/SD35 default configs
-│   ├── job_store.py         # JobStoreLogic + Ray actor for async job metadata
-│   └── predictor.py         # DiffusionPredictor ABC, SDPredictor, FluxPredictor, SD35Predictor
+├── diffusion/                # Diffusion model loading + inference
+│   ├── config.py             # DiffusionModelConfig + load_diffusion_config() (YAML + env-var overrides)
+│   ├── diffusion_config.yaml # SD35 / SDXL / FLUX.2 Klein defaults (steps, guidance, cpu_offload)
+│   ├── job_store.py          # JobStoreLogic + Ray actor for async job metadata
+│   └── predictor.py          # DiffusionPredictor ABC, SD35Predictor, SDXLPredictor, Flux2KleinPredictor
 ├── tokenizer.py           # Text tokenizer with pre-trained support
 ├── trainer.py             # Training logic
 ├── tuner.py               # Ray Tune + Optuna hyperparameter search
