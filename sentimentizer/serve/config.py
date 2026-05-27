@@ -46,7 +46,14 @@ class ServeConfig:
         flux_model_path: Path to FLUX weights (e.g. GGUF file).
         sd35_enabled: Enable SD 3.5 Medium deployment.
         sd35_model_id: HuggingFace model ID for SD 3.5 Medium.
-        default_image_model: Default image model ("sd", "flux", or "sd35").
+        sd35_cpu_offload: Diffusers CPU offload mode for SD 3.5. One of
+            "" (full GPU, default), "model" (whole-module swap), or
+            "sequential" (submodule swap, lowest VRAM, slowest).
+        sdxl_models: Named SDXL slots as "name:model_id" entries, e.g.
+            ["anime:John6666/noob-sdxl-v10", "base:stabilityai/stable-diffusion-xl-base-1.0"].
+            Each slot spawns its own GPU deployment and is addressable by name
+            in image generation requests. Fits on an 11 GB card (~6.5 GB per slot).
+        default_image_model: Default image model ("sd", "flux", "sd35", or any SDXL slot name).
         request_timeout_s: HTTP request timeout in seconds.
         api_keys: Comma-separated list of valid API keys (for image routes).
         rate_limit_per_min: Rate limit per API key per minute.
@@ -71,6 +78,8 @@ class ServeConfig:
     flux_model_path: str = ""
     sd35_enabled: bool = False
     sd35_model_id: str = "stabilityai/stable-diffusion-3.5-medium"
+    sd35_cpu_offload: str = ""
+    sdxl_models: list[str] = field(default_factory=list)
     default_image_model: str = "sd35"
     request_timeout_s: int = 600
     api_keys: list[str] = field(default_factory=list)
@@ -122,6 +131,8 @@ _ENV_OVERRIDES: dict[str, str] = {
     "SENTIMENTIZER_FLUX_MODEL_PATH": "flux_model_path",
     "SENTIMENTIZER_SD35_ENABLED": "sd35_enabled",
     "SENTIMENTIZER_SD35_MODEL_ID": "sd35_model_id",
+    "SENTIMENTIZER_SD35_CPU_OFFLOAD": "sd35_cpu_offload",
+    "SENTIMENTIZER_SDXL_MODELS": "sdxl_models",
     "SENTIMENTIZER_DEFAULT_IMAGE_MODEL": "default_image_model",
     "SENTIMENTIZER_REQUEST_TIMEOUT_S": "request_timeout_s",
     "SENTIMENTIZER_API_KEYS": "api_keys",
@@ -145,6 +156,7 @@ _FIELD_TYPES: dict[str, type] = {
     "sd_enabled": bool,
     "flux_enabled": bool,
     "sd35_enabled": bool,
+    "sdxl_models": list,
     "request_timeout_s": int,
     "api_keys": list,
     "rate_limit_per_min": int,
@@ -152,6 +164,19 @@ _FIELD_TYPES: dict[str, type] = {
     "idempotency_ttl_s": int,
     "job_ttl_s": int,
 }
+
+
+def parse_sdxl_models(entries: list[str]) -> dict[str, str]:
+    """Parse ``["name:model_id", ...]`` into ``{name: model_id}``.
+
+    Entries that don't contain a colon are silently skipped.
+    """
+    result: dict[str, str] = {}
+    for entry in entries:
+        name, sep, model_id = entry.partition(":")
+        if sep and name.strip() and model_id.strip():
+            result[name.strip()] = model_id.strip()
+    return result
 
 
 def _default_config_path() -> Path:

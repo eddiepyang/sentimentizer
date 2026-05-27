@@ -5,6 +5,7 @@ from sentimentizer.diffusion.predictor import (
     FluxPredictor,
     SD35Predictor,
     SDPredictor,
+    SDXLPredictor,
 )
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "JobStore",
     "SD35Predictor",
     "SDPredictor",
+    "SDXLPredictor",
 ]

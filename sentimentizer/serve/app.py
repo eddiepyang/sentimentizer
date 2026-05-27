@@ -90,6 +90,7 @@ from sentimentizer.serve.models import (
 # ---------------------------------------------------------------------------
 # Load configuration (YAML defaults < env var overrides)
 # ---------------------------------------------------------------------------
+from sentimentizer.serve.config import load_serve_config
 
 cfg = load_serve_config()
 
@@ -667,14 +668,22 @@ def main(host: str = "0.0.0.0", port: int = 8000, diffusion: bool = False) -> No
         route_prefix="/",
     )
 
-    start_diffusion = diffusion or cfg.sd_enabled or cfg.flux_enabled or cfg.sd35_enabled
+    start_diffusion = (
+        diffusion
+        or cfg.sd_enabled
+        or cfg.flux_enabled
+        or cfg.sd35_enabled
+        or bool(cfg.sdxl_models)
+    )
     if start_diffusion:
         from sentimentizer.diffusion.job_store import JobStore
+        from sentimentizer.serve.config import parse_sdxl_models
         from sentimentizer.serve.diffusion_app import (
             FluxDeployment,
             ImagesDispatcher,
             SD35Deployment,
             SDDeployment,
+            SDXLDeployment,
         )
 
         JobStore.options(
@@ -687,8 +696,16 @@ def main(host: str = "0.0.0.0", port: int = 8000, diffusion: bool = False) -> No
         flux_handle = FluxDeployment.bind() if cfg.flux_enabled else None
         sd35_handle = SD35Deployment.bind() if cfg.sd35_enabled else None
 
+        sdxl_handles: dict[str, Any] | None = None
+        sdxl_slots = parse_sdxl_models(cfg.sdxl_models)
+        if sdxl_slots:
+            sdxl_handles = {
+                name: SDXLDeployment.options(name=f"sdxl_{name}").bind(model_id)
+                for name, model_id in sdxl_slots.items()
+            }
+
         serve.run(
-            ImagesDispatcher.bind(sd_handle, flux_handle, sd35_handle),
+            ImagesDispatcher.bind(sd_handle, flux_handle, sd35_handle, sdxl_handles),
             name="images",
             route_prefix="/v1/images",
         )

@@ -4,15 +4,17 @@ Default base model is BAAI/bge-base-en-v1.5 (109M params, 768-dim
 embeddings, strong MTEB scores). Switch to mxbai-embed-large-v1
 (335M params, ~1.3GB) only if evaluation fails to meet thresholds.
 
-Config can be loaded from YAML (router/config.yaml) or constructed
-directly via dataclass defaults. CLI flags override YAML values when
-provided.
+Defaults live in ``config.yaml`` next to this module. Loading order
+mirrors ``sentimentizer.serve.config``: dataclass defaults < YAML
+values < environment variable overrides.
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -89,7 +91,26 @@ class RouteLabels:
         return 3
 
 
-def _get_default_config_path() -> Path:
+# Environment-variable overrides. (env_var → (section, field, coerce_fn)).
+# Pattern: SENTIMENTIZER_ROUTER_<FIELD> for training, SENTIMENTIZER_AUGMENT_<FIELD>
+# for augmentation. Type coercion happens at parse time so errors surface early.
+_ENV_OVERRIDES: dict[str, tuple[str, str, type]] = {
+    "SENTIMENTIZER_ROUTER_BASE_MODEL": ("training", "base_model", str),
+    "SENTIMENTIZER_ROUTER_NUM_ITERATIONS": ("training", "num_iterations", int),
+    "SENTIMENTIZER_ROUTER_NUM_EPOCHS": ("training", "num_epochs", int),
+    "SENTIMENTIZER_ROUTER_BATCH_SIZE": ("training", "batch_size", int),
+    "SENTIMENTIZER_ROUTER_MAX_SEQ_LENGTH": ("training", "max_seq_length", int),
+    "SENTIMENTIZER_ROUTER_SEED": ("training", "seed", int),
+    "SENTIMENTIZER_ROUTER_OUTPUT_DIR": ("training", "output_dir", str),
+    "SENTIMENTIZER_AUGMENT_MODEL": ("augmentation", "model", str),
+    "SENTIMENTIZER_AUGMENT_OLLAMA_URL": ("augmentation", "ollama_url", str),
+    "SENTIMENTIZER_AUGMENT_VARIATIONS_PER_SEED": ("augmentation", "variations_per_seed", int),
+    "SENTIMENTIZER_AUGMENT_OUTPUT_PATH": ("augmentation", "output_path", str),
+    "SENTIMENTIZER_AUGMENT_BATCH_SIZE": ("augmentation", "batch_size", int),
+}
+
+
+def _default_config_path() -> Path:
     """Return path to the default config.yaml bundled with the package."""
     return Path(__file__).parent / "config.yaml"
 
@@ -97,11 +118,15 @@ def _get_default_config_path() -> Path:
 def load_router_config(
     path: str | Path | None = None,
 ) -> tuple[RouterConfig, AugmentConfig]:
-    """Load router configuration from a YAML file.
+    """Load router configuration from YAML with environment variable overrides.
+
+    Precedence (highest wins):
+        1. Environment variables (SENTIMENTIZER_ROUTER_*, SENTIMENTIZER_AUGMENT_*)
+        2. YAML config file values
+        3. Dataclass defaults
 
     Args:
-        path: Path to YAML config file. If None, uses the default
-              config.yaml bundled with the package.
+        path: Path to YAML config file. If None, uses the bundled config.yaml.
 
     Returns:
         Tuple of (RouterConfig, AugmentConfig) with all settings populated.
@@ -109,19 +134,31 @@ def load_router_config(
     Raises:
         FileNotFoundError: If the config file doesn't exist.
     """
-    path = _get_default_config_path() if path is None else Path(path)
+    path = _default_config_path() if path is None else Path(path)
 
     if not path.exists():
         raise FileNotFoundError(f"Router config file not found: {path}")
 
     with open(path) as f:
-        raw = yaml.safe_load(f)
+        raw = yaml.safe_load(f) or {}
 
-    training_dict = raw.get("training", {})
-    # Convert output_dir string to Path
-    if "output_dir" in training_dict:
-        training_dict["output_dir"] = Path(training_dict["output_dir"])
+    sections: dict[str, dict[str, Any]] = {
+        "training": dict(raw.get("training", {})),
+        "augmentation": dict(raw.get("augmentation", {})),
+    }
 
-    augmentation_dict = raw.get("augmentation", {})
+    for env_var, (section, field_name, coerce) in _ENV_OVERRIDES.items():
+        env_value = os.environ.get(env_var)
+        if env_value is None:
+            continue
+        try:
+            sections[section][field_name] = coerce(env_value)
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid {env_var}={env_value!r}: expected {coerce.__name__}"
+            ) from exc
 
-    return RouterConfig(**training_dict), AugmentConfig(**augmentation_dict)
+    if "output_dir" in sections["training"]:
+        sections["training"]["output_dir"] = Path(sections["training"]["output_dir"])
+
+    return RouterConfig(**sections["training"]), AugmentConfig(**sections["augmentation"])

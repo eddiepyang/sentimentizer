@@ -20,6 +20,7 @@ from sentimentizer.diffusion.config import (
     FLUX_DEFAULT_CONFIG,
     SD35_DEFAULT_CONFIG,
     SD_DEFAULT_CONFIG,
+    SDXL_DEFAULT_CONFIG,
     DiffusionModelConfig,
 )
 
@@ -211,6 +212,81 @@ class SDPredictor(DiffusionPredictor):
         return result.images[0], used_seed
 
 
+class SDXLPredictor(DiffusionPredictor):
+    """SDXL predictor wrapping diffusers StableDiffusionXLPipeline.
+
+    Fits comfortably within 11 GB VRAM (fp16/bfloat16 ~6.5 GB) and supports
+    drop-in anime fine-tunes (Illustrious XL, NoobAI XL, etc.) via model_id.
+    """
+
+    def __init__(self, cfg: DiffusionModelConfig | None = None) -> None:
+        super().__init__(cfg or SDXL_DEFAULT_CONFIG)
+
+    def warmup(self) -> None:
+        if self._model_loaded:
+            return
+        try:
+            from diffusers import StableDiffusionXLPipeline
+
+            dtype = _resolve_dtype(self.cfg.dtype, self._device)
+            load_kwargs: dict[str, Any] = {
+                "torch_dtype": dtype,
+                "use_safetensors": True,
+                "variant": "fp16",
+            }
+            try:
+                self._pipeline = StableDiffusionXLPipeline.from_pretrained(
+                    self.cfg.model_id, **load_kwargs
+                )
+            except (OSError, FileNotFoundError):
+                logger.warning(
+                    "SDXL fp16 variant not found, retrying without variant",
+                    model_id=self.cfg.model_id,
+                )
+                load_kwargs.pop("variant")
+                self._pipeline = StableDiffusionXLPipeline.from_pretrained(
+                    self.cfg.model_id, **load_kwargs
+                )
+            self._pipeline.to(self._device)
+            self._model_loaded = True
+            logger.info("SDXL model warmed up", model_id=self.cfg.model_id, device=self._device)
+        except Exception as exc:
+            self._model_error = str(exc)
+            logger.exception("SDXL warmup failed")
+
+    def generate(
+        self,
+        prompt: str,
+        negative_prompt: str | None = None,
+        steps: int | None = None,
+        guidance_scale: float | None = None,
+        width: int = 1024,
+        height: int = 1024,
+        seed: int | None = None,
+    ) -> tuple[Any, int]:
+        if not self._model_loaded:
+            raise RuntimeError(f"SDXL model not loaded: {self._model_error}")
+
+        used_seed = self._resolve_seed(seed)
+        generator = torch.Generator(device=_generator_device(self._device)).manual_seed(used_seed)
+
+        call_kwargs: dict[str, Any] = {
+            "prompt": prompt,
+            "num_inference_steps": (steps if steps is not None else self.cfg.default_steps),
+            "guidance_scale": (
+                guidance_scale if guidance_scale is not None else self.cfg.default_guidance
+            ),
+            "width": width,
+            "height": height,
+            "generator": generator,
+        }
+        if negative_prompt:
+            call_kwargs["negative_prompt"] = negative_prompt
+
+        result = self._pipeline(**call_kwargs)
+        return result.images[0], used_seed
+
+
 class FluxPredictor(DiffusionPredictor):
     """FLUX.1-dev predictor wrapping diffusers FluxPipeline with GGUF quantization."""
 
@@ -299,9 +375,24 @@ class SD35Predictor(DiffusionPredictor):
                 self.cfg.model_id,
                 **load_kwargs,
             )
-            self._pipeline.to(self._device)
+            offload = self.cfg.cpu_offload
+            if offload == "sequential":
+                self._pipeline.enable_sequential_cpu_offload()
+            elif offload == "model":
+                self._pipeline.enable_model_cpu_offload()
+            elif offload is None:
+                self._pipeline.to(self._device)
+            else:
+                raise ValueError(
+                    f"Invalid cpu_offload={offload!r}; expected None, 'model', or 'sequential'"
+                )
             self._model_loaded = True
-            logger.info("SD3.5 model warmed up", model_id=self.cfg.model_id, device=self._device)
+            logger.info(
+                "SD3.5 model warmed up",
+                model_id=self.cfg.model_id,
+                device=self._device,
+                cpu_offload=offload,
+            )
         except Exception as exc:
             self._model_error = str(exc)
             logger.exception("SD3.5 warmup failed")

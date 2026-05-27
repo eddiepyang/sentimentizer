@@ -164,7 +164,14 @@ dispatcher can target SD or FLUX through one interface.
 - `sentimentizer/diffusion/config.py`:
   - `DiffusionModelConfig` dataclass: `model_id`, `model_path`, `dtype`, `quantization`,
     plus per-model defaults: `default_steps`, `default_guidance`, `max_pixels`,
-    `dim_alignment` (8 for SD, 16 for FLUX)
+    `dim_alignment` (8 for SD, 16 for FLUX), `cpu_offload` (None / `"model"` / `"sequential"`)
+  - `load_diffusion_config(path=None) -> dict[str, DiffusionModelConfig]` — loads
+    `diffusion/diffusion_config.yaml` with `SENTIMENTIZER_DIFFUSION_<MODEL>_*` env overrides;
+    returns `{"sd", "flux", "sd35", "sdxl"}` slots. Backwards-compatible module-level aliases
+    (`SD_DEFAULT_CONFIG`, `FLUX_DEFAULT_CONFIG`, `SD35_DEFAULT_CONFIG`, `SDXL_DEFAULT_CONFIG`)
+    are eager-loaded at import time.
+- `sentimentizer/diffusion/diffusion_config.yaml` — one top-level section per model holding
+  the inference defaults. Edit here for per-model knobs without touching code.
 - `sentimentizer/diffusion/predictor.py`:
   - `DiffusionPredictor` ABC with `generate()`, `warmup()`, `model_loaded` property,
     `resolve_defaults(req) -> dict` (fills in per-model defaults for unset fields),
@@ -598,12 +605,16 @@ async def images_model_detail(self, name: str = Path(...)) -> dict:
 
 - `sentimentizer/serve/config.py` — add to `ServeConfig`:
   ```python
-  # Diffusion
+  # Diffusion — operational + identity
   sd_enabled: bool = False
   sd_model_id: str = "stabilityai/stable-diffusion-2-1"
   flux_enabled: bool = False
   flux_model_path: str = ""
-  default_image_model: str = "sd"
+  sd35_enabled: bool = False
+  sd35_model_id: str = "stabilityai/stable-diffusion-3.5-medium"
+  sd35_cpu_offload: str = ""              # "", "model", or "sequential"
+  sdxl_models: list[str] = field(default_factory=list)  # ["name:model_id", ...]
+  default_image_model: str = "sd35"
   request_timeout_s: int = 600
 
   # Middleware
@@ -615,10 +626,18 @@ async def images_model_detail(self, name: str = Path(...)) -> dict:
   ```
 - Wire env vars into `_FIELD_TYPES` and `_ENV_OVERRIDES`:
   - `SENTIMENTIZER_API_KEYS` (comma-split list)
-  - `SENTIMENTIZER_SD_ENABLED`, `SENTIMENTIZER_FLUX_ENABLED`
-  - `SENTIMENTIZER_FLUX_MODEL_PATH`, `SENTIMENTIZER_DEFAULT_IMAGE_MODEL`
+  - `SENTIMENTIZER_SD_ENABLED`, `SENTIMENTIZER_FLUX_ENABLED`, `SENTIMENTIZER_SD35_ENABLED`
+  - `SENTIMENTIZER_SD_MODEL_ID`, `SENTIMENTIZER_FLUX_MODEL_PATH`, `SENTIMENTIZER_SD35_MODEL_ID`
+  - `SENTIMENTIZER_SD35_CPU_OFFLOAD` — VRAM cap for 8–11 GB GPUs
+  - `SENTIMENTIZER_SDXL_MODELS` (comma-split `name:model_id` list) — each entry spawns its
+    own SDXL deployment addressable by `name` in the request body
+  - `SENTIMENTIZER_DEFAULT_IMAGE_MODEL`
   - `SENTIMENTIZER_RATE_LIMIT_PER_MIN`, `SENTIMENTIZER_RATE_LIMIT_BURST`
   - `SENTIMENTIZER_IDEMPOTENCY_TTL_S`
+- Diffusion-internal defaults live in `sentimentizer/diffusion/diffusion_config.yaml`,
+  with `SENTIMENTIZER_DIFFUSION_<MODEL>_*` overrides for `default_steps`, `default_guidance`,
+  `max_pixels`. The dispatcher uses `dataclasses.replace()` to layer `ServeConfig`-owned
+  identity/behavior fields (`model_id`, `cpu_offload`) on top.
 - `.env.example` — document new env vars without committing real keys
 - `sentimentizer/serve/serve_config.yaml` — add diffusion defaults gated off
 - `sentimentizer/serve/__init__.py` / `main()`:
@@ -626,10 +645,14 @@ async def images_model_detail(self, name: str = Path(...)) -> dict:
   sd_handle = SDDeployment.bind() if cfg.sd_enabled else None
   flux_handle = FluxDeployment.bind() if cfg.flux_enabled else None
   sd35_handle = SD35Deployment.bind() if cfg.sd35_enabled else None
+  sdxl_handles = {name: SDXLDeployment.bind(model_id=mid)
+                  for name, mid in parse_sdxl_models(cfg.sdxl_models).items()}
 
   deployments = {"sentimentizer": SentimentizerDeployment.bind()}
-  if sd_handle or flux_handle or sd35_handle:
-      deployments["images"] = ImagesDispatcher.bind(sd_handle, flux_handle, sd35_handle)
+  if sd_handle or flux_handle or sd35_handle or sdxl_handles:
+      deployments["images"] = ImagesDispatcher.bind(
+          sd_handle, flux_handle, sd35_handle, sdxl_handles
+      )
   serve.run(deployments)
   ```
 
@@ -919,10 +942,19 @@ uv run pytest tests/ -v --exitfirst --failed-first
 7. **P0.8** Config wiring — ✅ done
 8. **P1.9** Async jobs — ✅ done
 9. **SD 3.5 Medium** — ✅ done (SD35Predictor, SD35Deployment, ServeConfig fields, wiring, tests)
-10. **P1.10** URL storage backend — ~1 day
-11. **P1.11** K8s manifest + GCS mount — ~1 day, infra-side
-12. **P1.12** Observability extensions — ~½ day
-13. Flip enable flags in prod config, monitor
+10. **SD 3.5 CPU offload** — ✅ done (`cpu_offload` field on `DiffusionModelConfig`,
+    `SENTIMENTIZER_SD35_CPU_OFFLOAD` env var, supports `"model"` / `"sequential"` modes
+    for 8–11 GB GPUs)
+11. **SDXL multi-slot** — ✅ done (`SDXLPredictor`, `sdxl_models: list[str]` on ServeConfig,
+    one GPU deployment per slot, addressable by `name` in request body)
+12. **Config consistency refactor** — ✅ done (diffusion/ + router/ now mirror the serve/
+    pattern: dataclass + YAML + env-var overrides via `_ENV_OVERRIDES` map; new
+    `diffusion_config.yaml`, new `SENTIMENTIZER_DIFFUSION_*` and `SENTIMENTIZER_ROUTER_*` /
+    `SENTIMENTIZER_AUGMENT_*` overrides)
+13. **P1.10** URL storage backend — ~1 day
+14. **P1.11** K8s manifest + GCS mount — ~1 day, infra-side
+15. **P1.12** Observability extensions — ~½ day
+16. Flip enable flags in prod config, monitor
 
 ---
 

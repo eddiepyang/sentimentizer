@@ -200,11 +200,15 @@ By default, the server binds to `0.0.0.0:8000`.
 > ```
 > Enable image generation by setting `SENTIMENTIZER_SD_ENABLED=1`, `SENTIMENTIZER_FLUX_ENABLED=1`,
 > and/or `SENTIMENTIZER_SD35_ENABLED=1`, and provide API keys via `SENTIMENTIZER_API_KEYS`. Image routes require authentication;
-> sentiment and router routes remain unauthenticated.
+> sentiment and router routes remain unauthenticated. SDXL slots are enabled via
+> `SENTIMENTIZER_SDXL_MODELS="name1:model_id1,name2:model_id2"` — each entry spawns its own
+> GPU deployment addressable by `name` in the request body. For VRAM-constrained GPUs, set
+> `SENTIMENTIZER_SD35_CPU_OFFLOAD=sequential` (or `model`) to enable diffusers' CPU offload.
+> See [configuration.md](configuration.md#runtime-configuration) for the full env-var reference.
 
-Image generation uses separate GPU-backed Ray Serve deployments (SDDeployment, FluxDeployment, SD35Deployment)
-behind a lightweight CPU dispatcher (ImagesDispatcher). The [diffusion serving plan](diffusion_serving_plan.md)
-has full architectural details.
+Image generation uses separate GPU-backed Ray Serve deployments (SDDeployment, FluxDeployment, SD35Deployment,
+plus one SDXLDeployment per `sdxl_models` slot) behind a lightweight CPU dispatcher (ImagesDispatcher).
+The [diffusion serving plan](diffusion_serving_plan.md) has full architectural details.
 
 #### Synchronous Image Generation
 - **Route**: `POST /v1/images/generate`
@@ -243,7 +247,7 @@ has full architectural details.
   }
   ```
 
-Supported parameters: `prompt` (required), `model` (`"sd"`, `"flux"`, or `"sd35"`), `negative_prompt`,
+Supported parameters: `prompt` (required), `model` (`"sd"`, `"flux"`, `"sd35"`, or any SDXL slot name configured via `SENTIMENTIZER_SDXL_MODELS`), `negative_prompt`,
 `steps`, `guidance_scale`, `width`, `height`, `seed`, `response_format` (`"b64_json"` or `"url"`),
 `output_format` (`"png"`, `"webp"`, `"jpeg"`), `user` (opaque abuse-tracking ID),
 `Idempotency-Key` header (deduplication).

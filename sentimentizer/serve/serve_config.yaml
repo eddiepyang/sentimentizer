@@ -32,6 +32,9 @@ flux_enabled: false
 flux_model_path: ""
 sd35_enabled: false
 sd35_model_id: "stabilityai/stable-diffusion-3.5-medium"
+# Named SDXL slots: each entry is "name:model_id". Supports anime fine-tunes
+# (e.g. "anime:John6666/noob-sdxl-v10") addressable by slot name in requests.
+sdxl_models: []
 default_image_model: "sd35"
 request_timeout_s: 600
 

@@ -1,6 +1,9 @@
-# Model Configuration
+# Configuration Reference
 
-Sentimentizer is designed with modularity in mind. All configurations and hyperparameters are managed as Python dataclasses located in `sentimentizer/config.py`.
+Sentimentizer is designed with modularity in mind. Configuration spans two layers:
+
+- **Training-time model architecture** (this file, below) — Python dataclasses in `sentimentizer/config.py` that define model shape and training hyperparameters.
+- **Runtime configuration** (serve / diffusion / router) — Python dataclass + YAML + env-var overrides in the corresponding subpackages. See the [Runtime Configuration](#runtime-configuration) section.
 
 ---
 
@@ -76,3 +79,110 @@ Sentimentizer validates configuration consistency automatically prior to initial
 - **Binary Classification Check**: If `TokenizerConfig.include_neutral` is `False`, all models' `num_classes` MUST be exactly `2`.
 
 If an inconsistency is detected, a `ValueError` is raised, preventing training from starting with invalid shape mismatches.
+
+---
+
+## Runtime Configuration
+
+Three runtime domains follow the same loading pattern: **dataclass defaults < YAML file < environment variables** (highest priority). Each subpackage owns its own `config.py` + YAML pair and exposes a single `load_*_config()` entry point that returns the populated dataclass(es). Type coercion happens at parse time; invalid env-var values raise `ValueError` with the offending env var name.
+
+### Serve (HTTP + Ray Serve)
+
+| | |
+| :--- | :--- |
+| **Module** | [`sentimentizer/serve/config.py`](../sentimentizer/serve/config.py) |
+| **Dataclass** | `ServeConfig` |
+| **YAML** | [`sentimentizer/serve/serve_config.yaml`](../sentimentizer/serve/serve_config.yaml) |
+| **Loader** | `load_serve_config(path=None) -> ServeConfig` |
+| **Env prefix** | `SENTIMENTIZER_*` |
+
+Owns operational concerns: which models to enable, auth, rate limits, CORS, model IDs, the SD 3.5 CPU offload mode, and the SDXL slot list.
+
+| Env var | Field | Type | Notes |
+| :--- | :--- | :--- | :--- |
+| `SENTIMENTIZER_DEFAULT_MODEL` | `default_model` | str | Sentiment model: `rnn`, `encoder`, `decoder`, `modernbert` |
+| `SENTIMENTIZER_API_KEYS` | `api_keys` | comma-list | Required for `/v1/images/*` |
+| `SENTIMENTIZER_CORS_ORIGINS` | `cors_origins` | comma-list | |
+| `SENTIMENTIZER_SD_ENABLED` | `sd_enabled` | bool | |
+| `SENTIMENTIZER_SD_MODEL_ID` | `sd_model_id` | str | |
+| `SENTIMENTIZER_FLUX_ENABLED` | `flux_enabled` | bool | |
+| `SENTIMENTIZER_FLUX_MODEL_PATH` | `flux_model_path` | str | GGUF path |
+| `SENTIMENTIZER_SD35_ENABLED` | `sd35_enabled` | bool | |
+| `SENTIMENTIZER_SD35_MODEL_ID` | `sd35_model_id` | str | |
+| `SENTIMENTIZER_SD35_CPU_OFFLOAD` | `sd35_cpu_offload` | str | `""`, `"model"`, or `"sequential"` |
+| `SENTIMENTIZER_SDXL_MODELS` | `sdxl_models` | comma-list | Each entry `name:model_id`; spawns one deployment per slot |
+| `SENTIMENTIZER_DEFAULT_IMAGE_MODEL` | `default_image_model` | str | Used when request body omits `model` |
+| `SENTIMENTIZER_RATE_LIMIT_PER_MIN` | `rate_limit_per_min` | int | Per API key |
+| `SENTIMENTIZER_RATE_LIMIT_BURST` | `rate_limit_burst` | int | Token bucket burst |
+| `SENTIMENTIZER_IDEMPOTENCY_TTL_S` | `idempotency_ttl_s` | int | |
+| `SENTIMENTIZER_JOB_TTL_S` | `job_ttl_s` | int | |
+| `SENTIMENTIZER_REQUEST_TIMEOUT_S` | `request_timeout_s` | int | HTTP timeout |
+
+### Diffusion (model internals)
+
+| | |
+| :--- | :--- |
+| **Module** | [`sentimentizer/diffusion/config.py`](../sentimentizer/diffusion/config.py) |
+| **Dataclass** | `DiffusionModelConfig` (one instance per model) |
+| **YAML** | [`sentimentizer/diffusion/diffusion_config.yaml`](../sentimentizer/diffusion/diffusion_config.yaml) |
+| **Loader** | `load_diffusion_config(path=None) -> dict[str, DiffusionModelConfig]` |
+| **Env prefix** | `SENTIMENTIZER_DIFFUSION_<MODEL>_*` |
+
+Owns model-internal defaults: denoising steps, guidance scale, max pixels, dimension alignment, dtype. Model identity (`model_id`, `model_path`, `cpu_offload`) is owned by `ServeConfig` and layered on top via `dataclasses.replace()` in the dispatcher.
+
+The YAML has one section per model — `sd`, `flux`, `sd35`, `sdxl` — each populating a `DiffusionModelConfig`. Backwards-compatible module-level aliases (`SD_DEFAULT_CONFIG`, `FLUX_DEFAULT_CONFIG`, `SD35_DEFAULT_CONFIG`, `SDXL_DEFAULT_CONFIG`) are eager-loaded from the YAML at import time.
+
+| Env var pattern | Field | Type |
+| :--- | :--- | :--- |
+| `SENTIMENTIZER_DIFFUSION_{SD,FLUX,SD35,SDXL}_DEFAULT_STEPS` | `default_steps` | int |
+| `SENTIMENTIZER_DIFFUSION_{SD,FLUX,SD35,SDXL}_DEFAULT_GUIDANCE` | `default_guidance` | float |
+| `SENTIMENTIZER_DIFFUSION_{SD,FLUX,SD35,SDXL}_MAX_PIXELS` | `max_pixels` | int |
+
+### Router (training + augmentation)
+
+| | |
+| :--- | :--- |
+| **Module** | [`sentimentizer/router/config.py`](../sentimentizer/router/config.py) |
+| **Dataclasses** | `RouterConfig`, `AugmentConfig`, `RouteLabels` |
+| **YAML** | [`sentimentizer/router/config.yaml`](../sentimentizer/router/config.yaml) |
+| **Loader** | `load_router_config(path=None) -> tuple[RouterConfig, AugmentConfig]` |
+| **Env prefix** | `SENTIMENTIZER_ROUTER_*` (training), `SENTIMENTIZER_AUGMENT_*` (augmentation) |
+
+| Env var | Field | Section | Type |
+| :--- | :--- | :--- | :--- |
+| `SENTIMENTIZER_ROUTER_BASE_MODEL` | `base_model` | training | str |
+| `SENTIMENTIZER_ROUTER_NUM_ITERATIONS` | `num_iterations` | training | int |
+| `SENTIMENTIZER_ROUTER_NUM_EPOCHS` | `num_epochs` | training | int |
+| `SENTIMENTIZER_ROUTER_BATCH_SIZE` | `batch_size` | training | int |
+| `SENTIMENTIZER_ROUTER_MAX_SEQ_LENGTH` | `max_seq_length` | training | int |
+| `SENTIMENTIZER_ROUTER_SEED` | `seed` | training | int |
+| `SENTIMENTIZER_ROUTER_OUTPUT_DIR` | `output_dir` | training | str (path) |
+| `SENTIMENTIZER_AUGMENT_MODEL` | `model` | augmentation | str |
+| `SENTIMENTIZER_AUGMENT_OLLAMA_URL` | `ollama_url` | augmentation | str |
+| `SENTIMENTIZER_AUGMENT_VARIATIONS_PER_SEED` | `variations_per_seed` | augmentation | int |
+| `SENTIMENTIZER_AUGMENT_OUTPUT_PATH` | `output_path` | augmentation | str |
+| `SENTIMENTIZER_AUGMENT_BATCH_SIZE` | `batch_size` | augmentation | int |
+
+### Loading order in callers
+
+Module-level singletons evaluate the loader once at import time:
+
+```python
+# sentimentizer/serve/app.py
+from sentimentizer.serve.config import load_serve_config
+cfg = load_serve_config()
+```
+
+For diffusion, the dispatcher composes serve-owned overrides on top of the YAML defaults:
+
+```python
+# sentimentizer/serve/diffusion_app.py (SD35Deployment.__init__)
+overrides = {}
+if cfg.sd35_model_id:
+    overrides["model_id"] = cfg.sd35_model_id
+if cfg.sd35_cpu_offload:
+    overrides["cpu_offload"] = cfg.sd35_cpu_offload
+model_cfg = replace(SD35_DEFAULT_CONFIG, **overrides) if overrides else SD35_DEFAULT_CONFIG
+```
+
+This keeps the YAML as the source of truth for model internals while letting operators flip identity/behavior knobs from `.env` without editing checked-in files.

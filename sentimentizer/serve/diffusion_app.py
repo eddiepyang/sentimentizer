@@ -20,6 +20,7 @@ from sentimentizer.diffusion.predictor import (
     FluxPredictor,
     SD35Predictor,
     SDPredictor,
+    SDXLPredictor,
     _b64,
     _encode_pil,
     _generate_id,
@@ -28,6 +29,7 @@ from sentimentizer.serve.app import (
     cfg,  # noqa: E402
     create_fastapi_app,
 )
+from sentimentizer.serve.config import parse_sdxl_models
 from sentimentizer.serve.base import ServiceMetrics, serve
 from sentimentizer.serve.diffusion_models import (
     GenerateRequest,
@@ -130,12 +132,37 @@ class SD35Deployment:
 
         from sentimentizer.diffusion.config import SD35_DEFAULT_CONFIG
 
-        model_cfg = SD35_DEFAULT_CONFIG
+        overrides: dict[str, Any] = {}
         if cfg.sd35_model_id:
-            model_cfg = replace(SD35_DEFAULT_CONFIG, model_id=cfg.sd35_model_id)
+            overrides["model_id"] = cfg.sd35_model_id
+        if cfg.sd35_cpu_offload:
+            overrides["cpu_offload"] = cfg.sd35_cpu_offload
+        model_cfg = replace(SD35_DEFAULT_CONFIG, **overrides) if overrides else SD35_DEFAULT_CONFIG
         self.predictor = SD35Predictor(model_cfg)
         self.predictor.warmup()
         self._metrics = ServiceMetrics(prefix="sd35")
+
+    async def generate(self, **kwargs: Any) -> tuple[Any, int]:
+        return await asyncio.to_thread(self.predictor.generate, **kwargs)
+
+    def info(self) -> dict[str, Any]:
+        return self.predictor.model_info()
+
+
+@serve.deployment(
+    num_replicas=1,
+    max_ongoing_requests=4,
+    ray_actor_options={"num_cpus": 2, "num_gpus": _num_gpus},
+)
+class SDXLDeployment:
+    def __init__(self, model_id: str) -> None:
+        from sentimentizer.diffusion.config import SDXL_DEFAULT_CONFIG
+        from dataclasses import replace
+
+        model_cfg = replace(SDXL_DEFAULT_CONFIG, model_id=model_id) if model_id else SDXL_DEFAULT_CONFIG
+        self.predictor = SDXLPredictor(model_cfg)
+        self.predictor.warmup()
+        self._metrics = ServiceMetrics(prefix="sdxl")
 
     async def generate(self, **kwargs: Any) -> tuple[Any, int]:
         return await asyncio.to_thread(self.predictor.generate, **kwargs)
@@ -158,6 +185,7 @@ class ImagesDispatcher:
         sd: Any = None,
         flux: Any = None,
         sd35: Any = None,
+        sdxl: dict[str, Any] | None = None,
     ) -> None:
         self._handles: dict[str, Any] = {}
         if sd is not None:
@@ -166,6 +194,9 @@ class ImagesDispatcher:
             self._handles["flux"] = flux
         if sd35 is not None:
             self._handles["sd35"] = sd35
+        for name, handle in (sdxl or {}).items():
+            self._handles[name] = handle
+        self._sdxl_names: set[str] = set(sdxl.keys()) if sdxl else set()
         self._idem = IdempotencyCache(ttl_s=cfg.idempotency_ttl_s)
         self._store: Any = None
         self._refs: dict[str, Any] = {}
@@ -203,6 +234,7 @@ class ImagesDispatcher:
             FLUX_DEFAULT_CONFIG,
             SD35_DEFAULT_CONFIG,
             SD_DEFAULT_CONFIG,
+            SDXL_DEFAULT_CONFIG,
         )
 
         defaults_map = {
@@ -211,6 +243,8 @@ class ImagesDispatcher:
             "sd35": SD35_DEFAULT_CONFIG,
         }
         model_cfg = defaults_map.get(model)
+        if model_cfg is None and model in self._sdxl_names:
+            model_cfg = SDXL_DEFAULT_CONFIG
         if model_cfg is None:
             return {}
         return {

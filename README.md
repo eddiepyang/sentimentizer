@@ -67,7 +67,12 @@ uv sync --no-sources-package torch
 
 ### Configure
 
-Set environment variables or edit `sentimentizer/serve/serve_config.yaml`:
+Configuration lives in two YAML files following the same pattern (dataclass defaults < YAML values < environment variable overrides):
+
+- **`sentimentizer/serve/serve_config.yaml`** — operational settings: which models to enable, API keys, rate limits, model IDs, CPU offload mode.
+- **`sentimentizer/diffusion/diffusion_config.yaml`** — model-internal defaults: denoising steps, guidance scale, max pixels, dimension alignment.
+
+Edit `serve_config.yaml` to enable a model:
 
 ```yaml
 # Enable one or more models
@@ -83,6 +88,10 @@ api_keys: ["sk-your-secret-key"]
 sd_model_id: "stabilityai/stable-diffusion-2-1"
 sd35_model_id: "stabilityai/stable-diffusion-3.5-medium"
 flux_model_path: "/path/to/flux1-dev-q8_0.gguf"   # GGUF quantized weights
+
+# Optional: SD 3.5 CPU offload for VRAM-constrained GPUs
+# "" (default, full GPU), "model" (whole-module swap), "sequential" (submodule swap)
+sd35_cpu_offload: ""
 ```
 
 Or via environment variables:
@@ -95,6 +104,9 @@ export SENTIMENTIZER_API_KEYS=sk-your-secret-key
 # Or enable SD 3.5 Medium
 export SENTIMENTIZER_SD35_ENABLED=true
 export SENTIMENTIZER_API_KEYS=sk-your-secret-key
+
+# Optional: cap VRAM with CPU offload (see "Low VRAM" below)
+export SENTIMENTIZER_SD35_CPU_OFFLOAD=sequential
 ```
 
 ### Run
@@ -129,6 +141,18 @@ curl -X POST http://localhost:8000/v1/images/jobs \
 curl http://localhost:8000/v1/images/jobs/{job_id} \
   -H "Authorization: Bearer sk-your-secret-key"
 ```
+
+### Low VRAM (SD 3.5 CPU offload)
+
+SD 3.5 Medium peak VRAM is ~10 GB at 1024×1024 fp16, which won't fit comfortably on 8–11 GB GPUs (e.g. 2080 Ti, 3060). Enable diffusers' CPU offload via `SENTIMENTIZER_SD35_CPU_OFFLOAD` (or `sd35_cpu_offload` in `serve_config.yaml`):
+
+| Mode | Peak VRAM | Latency vs. baseline | When to use |
+|------|-----------|----------------------|-------------|
+| `""` (default) | ~10 GB | 1.0× | Plenty of VRAM (12 GB+) |
+| `model` | ~5–9 GB | ~1.1–1.3× | Tight but workable (10–12 GB) |
+| `sequential` | ~1–2 GB | ~3–5× | Very tight (8 GB or less, shared GPU) |
+
+The selected mode is logged at warmup as `cpu_offload=<mode>` so you can confirm it took effect.
 
 ### MPS (Apple Silicon) Support
 
@@ -259,10 +283,11 @@ sentimentizer/
 │   ├── models.py          # Pydantic request/response models for Swagger docs
 │   ├── diffusion_models.py # Pydantic request/response models for image generation (+ Job models)
 │   └── diffusion_app.py    # SD/FLUX/SD35 deployments + ImagesDispatcher routes + job endpoints
-├── diffusion/              # Diffusion model loading + inference
-│   ├── config.py           # DiffusionModelConfig, SD/FLUX/SD35 default configs
-│   ├── job_store.py         # JobStoreLogic + Ray actor for async job metadata
-│   └── predictor.py         # DiffusionPredictor ABC, SDPredictor, FluxPredictor, SD35Predictor
+├── diffusion/                # Diffusion model loading + inference
+│   ├── config.py             # DiffusionModelConfig + load_diffusion_config() (YAML + env-var overrides)
+│   ├── diffusion_config.yaml # SD / FLUX / SD35 default steps, guidance, dim alignment, cpu_offload
+│   ├── job_store.py          # JobStoreLogic + Ray actor for async job metadata
+│   └── predictor.py          # DiffusionPredictor ABC, SDPredictor, FluxPredictor, SD35Predictor
 ├── tokenizer.py           # Text tokenizer with pre-trained support
 ├── trainer.py             # Training logic
 ├── tuner.py               # Ray Tune + Optuna hyperparameter search

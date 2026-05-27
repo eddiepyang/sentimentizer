@@ -77,6 +77,40 @@ sentimentizer router push --model-path models/router --repo-id your-username/sen
 
 ---
 
+## Environment Variable Overrides
+
+Both `RouterConfig` (training) and `AugmentConfig` (augmentation) support env-var overrides on top of `router/config.yaml`. Loading order (highest priority first):
+
+1. Env var (e.g. `SENTIMENTIZER_ROUTER_NUM_EPOCHS=3`)
+2. `sentimentizer/router/config.yaml` value
+3. Dataclass default
+
+Training (`SENTIMENTIZER_ROUTER_*`):
+
+| Env var | Field | Type |
+| :--- | :--- | :--- |
+| `SENTIMENTIZER_ROUTER_BASE_MODEL` | `base_model` | str |
+| `SENTIMENTIZER_ROUTER_NUM_ITERATIONS` | `num_iterations` | int |
+| `SENTIMENTIZER_ROUTER_NUM_EPOCHS` | `num_epochs` | int |
+| `SENTIMENTIZER_ROUTER_BATCH_SIZE` | `batch_size` | int |
+| `SENTIMENTIZER_ROUTER_MAX_SEQ_LENGTH` | `max_seq_length` | int |
+| `SENTIMENTIZER_ROUTER_SEED` | `seed` | int |
+| `SENTIMENTIZER_ROUTER_OUTPUT_DIR` | `output_dir` | str (path) |
+
+Augmentation (`SENTIMENTIZER_AUGMENT_*`):
+
+| Env var | Field | Type |
+| :--- | :--- | :--- |
+| `SENTIMENTIZER_AUGMENT_MODEL` | `model` | str |
+| `SENTIMENTIZER_AUGMENT_OLLAMA_URL` | `ollama_url` | str |
+| `SENTIMENTIZER_AUGMENT_VARIATIONS_PER_SEED` | `variations_per_seed` | int |
+| `SENTIMENTIZER_AUGMENT_OUTPUT_PATH` | `output_path` | str |
+| `SENTIMENTIZER_AUGMENT_BATCH_SIZE` | `batch_size` | int |
+
+Invalid values raise `ValueError` at load time with the offending env var name. See [configuration.md](configuration.md#runtime-configuration) for the full multi-domain reference.
+
+---
+
 ## Router CLI Options Reference
 
 ### `sentimentizer router augment`
