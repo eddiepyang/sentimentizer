@@ -33,6 +33,20 @@ Endpoints:
     POST /v1/router/batch     -- Route multiple texts
     GET  /v1/router/models    -- Router model metadata
 
+  Image Generation (if enabled):
+    POST /v1/images/generate    -- Generate an image synchronously (SD3.5/FLUX.2/SDXL)
+    POST /v1/images/jobs        -- Create an async image generation job
+    GET  /v1/images/jobs        -- List image generation jobs
+    GET  /v1/images/jobs/{id}   -- Get job status/result
+    DELETE /v1/images/jobs/{id} -- Cancel a queued job
+    GET  /v1/images/models      -- Image model metadata
+    GET  /v1/images/models/{name} -- Single image model metadata
+
+  Reference images:
+    The POST /v1/images/generate and POST /v1/images/jobs endpoints support
+    a `reference_images` field (list of base64 strings, up to 2 images, each <= 512x512 pixels).
+    Supported by FLUX.2 Klein only.
+
   Infrastructure (unversioned):
     GET  /health               -- Backward-compatible alias for /health/ready
     GET  /health/live          -- Liveness probe (always 200)
@@ -57,6 +71,7 @@ from typing import Any
 # Must be set before Ray imports occur — Ray workers that use uv
 # to create a fresh venv will fail with ModuleNotFoundError.
 os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 from collections.abc import Awaitable, Callable
 
@@ -103,16 +118,23 @@ if cfg.api_keys:
 _VERSION = _pkg_version("sentimentizer")
 
 
-MAX_REQUEST_BODY_BYTES = 4 * 1024 * 1024  # 4 MiB defense-in-depth limit
-
-
 class _RequestBodySizeLimitMiddleware(BaseHTTPMiddleware):
-    """Reject requests with body exceeding MAX_REQUEST_BODY_BYTES.
+    """Reject requests with body exceeding max_bytes limit.
 
     Defense-in-depth: the K8s ingress already enforces
     ``proxy-body-size: "1m"``, but this middleware catches requests
     that bypass the ingress (e.g., port-forward, node port).
     """
+
+    def __init__(
+        self,
+        app: Any,
+        default_max_bytes: int = 1 * 1024 * 1024,
+        path_limits: dict[str, int] | None = None,
+    ) -> None:
+        super().__init__(app)
+        self.default_max_bytes = default_max_bytes
+        self.path_limits = path_limits or {}
 
     async def dispatch(
         self,
@@ -134,13 +156,19 @@ class _RequestBodySizeLimitMiddleware(BaseHTTPMiddleware):
                             }
                         },
                     )
-                if length > MAX_REQUEST_BODY_BYTES:
+                max_bytes = self.default_max_bytes
+                for prefix, limit in self.path_limits.items():
+                    if request.url.path.startswith(prefix):
+                        max_bytes = limit
+                        break
+
+                if length > max_bytes:
                     return JSONResponse(
                         status_code=413,
                         content={
                             "error": {
                                 "code": "request_too_large",
-                                "message": f"Request body exceeds {MAX_REQUEST_BODY_BYTES} bytes",
+                                "message": f"Request body exceeds {max_bytes} bytes",
                             }
                         },
                     )
@@ -155,7 +183,11 @@ def create_fastapi_app(title: str, description: str) -> FastAPI:
         description=description,
     )
 
-    app.add_middleware(_RequestBodySizeLimitMiddleware)
+    app.add_middleware(
+        _RequestBodySizeLimitMiddleware,
+        default_max_bytes=1 * 1024 * 1024,
+        path_limits={"/v1/images/": 4 * 1024 * 1024},
+    )
 
     app.add_middleware(
         CORSMiddleware,

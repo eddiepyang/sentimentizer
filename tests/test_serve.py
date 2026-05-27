@@ -267,6 +267,34 @@ class TestPydanticValidation:
         assert any("texts" in str(e.get("loc", [])) for e in errors)
 
 
+class TestGenerateRequestValidation:
+    def test_reference_images_empty_list_coerced_to_none(self) -> None:
+        from sentimentizer.serve.diffusion_models import GenerateRequest
+
+        req = GenerateRequest(prompt="test", reference_images=[])
+        assert req.reference_images is None
+
+    def test_reference_images_valid(self) -> None:
+        from sentimentizer.serve.diffusion_models import GenerateRequest
+
+        req = GenerateRequest(prompt="test", reference_images=["b64_1", "b64_2"])
+        assert req.reference_images == ["b64_1", "b64_2"]
+
+    def test_reference_images_too_many(self) -> None:
+        from sentimentizer.serve.diffusion_models import GenerateRequest
+
+        with pytest.raises(ValidationError) as exc_info:
+            GenerateRequest(prompt="test", reference_images=["b64_1", "b64_2", "b64_3"])
+        assert any(e["type"] == "value_error" for e in exc_info.value.errors())
+
+    def test_reference_images_empty_string(self) -> None:
+        from sentimentizer.serve.diffusion_models import GenerateRequest
+
+        with pytest.raises(ValidationError) as exc_info:
+            GenerateRequest(prompt="test", reference_images=[""])
+        assert any(e["type"] == "value_error" for e in exc_info.value.errors())
+
+
 # ---------------------------------------------------------------------------
 # Test: Prediction response schema (P1#5 additive format)
 # ---------------------------------------------------------------------------

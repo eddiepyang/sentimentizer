@@ -256,6 +256,17 @@ Supported parameters: `prompt` (required), `model` (`"sd35"`, `"flux2_klein"`, o
 Rate-limit headers (`X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`) are
 returned on every response. Exceeding the limit returns `429` with a `Retry-After` header.
 
+#### Reference Images
+
+The `POST /v1/images/generate` and `POST /v1/images/jobs` endpoints support a `reference_images` field (a list of base64 strings) for true reference conditioning.
+
+- **Supported Models**: FLUX.2 Klein only (requests targeting other models return HTTP 400).
+- **Constraints**: Maximum 2 reference images per request. Each image must be ≤ 512×512 pixels after decoding (262,144 pixels). Exceeding these limits results in an auto-rejection.
+- **Resolution Behavior**: Reference images do not need to match the generation resolution. The pipeline encodes them at their native dimensions and concatenates the resulting tokens. Non-square references may be cropped by the pipeline's `resize_mode="crop"`.
+- **Payload Limits**: The body size limit is 4 MiB for `/v1/images/` routes (1 MiB for all other routes). It is highly recommended to use WebP or JPEG format for reference images to stay under the limit.
+- **VRAM Implications**: Reference images increase attention memory quadratically.
+- **Configuration**: `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` is set automatically to reduce VRAM fragmentation.
+
 #### List Image Models
 - **Route**: `GET /v1/images/models`
 - **Auth**: Required

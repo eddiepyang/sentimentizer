@@ -17,10 +17,12 @@ from fastapi import Depends, HTTPException, Query, Request, Response
 
 from sentimentizer import logger
 from sentimentizer.diffusion.predictor import (
+    _REF_MAX_PIXELS,
     Flux2KleinPredictor,
     SD35Predictor,
     SDXLPredictor,
     _b64,
+    _decode_b64_image,
     _encode_pil,
     _generate_id,
 )
@@ -247,6 +249,31 @@ class ImagesDispatcher:
         idempotency_key: str | None = Depends(idempotent),
     ) -> dict[str, Any]:
         model_name = body.model or cfg.default_image_model
+
+        if body.reference_images is not None:
+            if model_name != "flux2_klein":
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "reference_images_unsupported",
+                        "message": "Reference images are only supported by FLUX.2 Klein",
+                    },
+                )
+            try:
+                reference_images = [
+                    _decode_b64_image(b64, _REF_MAX_PIXELS) for b64 in body.reference_images
+                ]
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "invalid_reference_image",
+                        "message": str(exc),
+                    },
+                ) from exc
+        else:
+            reference_images = None
+
         request_id = getattr(request.state, "request_id", "unknown")
         logger.info(
             "Received image generation request",
@@ -304,6 +331,7 @@ class ImagesDispatcher:
             width=body.width,
             height=body.height,
             seed=body.seed,
+            reference_images=reference_images,
         )
         latency = time.perf_counter() - start
 
@@ -337,6 +365,7 @@ class ImagesDispatcher:
             user=body.user,
             key_prefix=api_key[:8] if api_key else None,
             latency_s=latency,
+            reference_images_count=len(body.reference_images) if body.reference_images else 0,
         )
 
         return response
@@ -394,6 +423,31 @@ class ImagesDispatcher:
         idempotency_key: str | None = Depends(idempotent),
     ) -> dict[str, Any]:
         model_name = body.model or cfg.default_image_model
+
+        if body.reference_images is not None:
+            if model_name != "flux2_klein":
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "reference_images_unsupported",
+                        "message": "Reference images are only supported by FLUX.2 Klein",
+                    },
+                )
+            try:
+                reference_images = [
+                    _decode_b64_image(b64, _REF_MAX_PIXELS) for b64 in body.reference_images
+                ]
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "invalid_reference_image",
+                        "message": str(exc),
+                    },
+                ) from exc
+        else:
+            reference_images = None
+
         handle = self._get_handle(model_name)
 
         defaults = self._get_predictor_defaults(model_name)
@@ -445,6 +499,7 @@ class ImagesDispatcher:
             width=body.width,
             height=body.height,
             seed=body.seed,
+            reference_images=reference_images,
         )
 
         job_id = await store.submit.remote(
@@ -470,6 +525,7 @@ class ImagesDispatcher:
             model=model_name,
             user=body.user,
             key_prefix=api_key[:8],
+            reference_images_count=len(body.reference_images) if body.reference_images else 0,
         )
 
         return job_resp

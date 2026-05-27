@@ -8,11 +8,13 @@ called at deployment init so the first real request is fast.
 from __future__ import annotations
 
 import base64
+import gc
 import io
 import secrets
 from abc import ABC, abstractmethod
 from typing import Any
 
+import PIL.Image
 import torch
 
 from sentimentizer import logger
@@ -24,6 +26,28 @@ from sentimentizer.diffusion.config import (
 )
 
 _MAX_SEED = 2**32 - 1
+_REF_MAX_PIXELS = 512 * 512
+
+
+def _decode_b64_image(b64: str, max_pixels: int = _REF_MAX_PIXELS) -> PIL.Image.Image:
+    """Decode a base64 image string (raw or data URL) to PIL RGB.
+
+    Raises ValueError on malformed input or images exceeding max_pixels.
+    """
+    try:
+        if b64.startswith("data:image/") and ";base64," in b64:
+            b64 = b64.split(";base64,", 1)[1]
+        data = base64.b64decode(b64)
+        image = PIL.Image.open(io.BytesIO(data)).convert("RGB")
+    except Exception as exc:
+        raise ValueError(f"malformed base64 image: {exc}") from exc
+
+    if image.width * image.height > max_pixels:
+        raise ValueError(
+            f"reference image exceeds max_pixels={max_pixels} ({image.width}x{image.height})"
+        )
+
+    return image
 
 
 def _resolve_device() -> str:
@@ -102,6 +126,7 @@ class DiffusionPredictor(ABC):
         width: int = 1024,
         height: int = 1024,
         seed: int | None = None,
+        reference_images: list[PIL.Image.Image] | None = None,
     ) -> tuple[Any, int]:
         """Generate an image. Returns (PIL.Image, used_seed)."""
         ...
@@ -196,7 +221,10 @@ class SDXLPredictor(DiffusionPredictor):
         width: int = 1024,
         height: int = 1024,
         seed: int | None = None,
+        reference_images: list[PIL.Image.Image] | None = None,
     ) -> tuple[Any, int]:
+        if reference_images is not None:
+            raise NotImplementedError("reference_images not supported by SDXL")
         if not self._model_loaded:
             raise RuntimeError(f"SDXL model not loaded: {self._model_error}")
 
@@ -269,7 +297,10 @@ class SD35Predictor(DiffusionPredictor):
         width: int = 1024,
         height: int = 1024,
         seed: int | None = None,
+        reference_images: list[PIL.Image.Image] | None = None,
     ) -> tuple[Any, int]:
+        if reference_images is not None:
+            raise NotImplementedError("reference_images not supported by SD3.5")
         if not self._model_loaded:
             raise RuntimeError(f"SD3.5 model not loaded: {self._model_error}")
 
@@ -338,6 +369,7 @@ class Flux2KleinPredictor(DiffusionPredictor):
             if quant is not None and hasattr(self._pipeline, "vae"):
                 self._pipeline.vae.enable_slicing()
                 self._pipeline.vae.enable_tiling()
+                self._pipeline.vae.to(self._device)
 
             self._model_loaded = True
             logger.info(
@@ -409,6 +441,7 @@ class Flux2KleinPredictor(DiffusionPredictor):
         width: int = 1024,
         height: int = 1024,
         seed: int | None = None,
+        reference_images: list[PIL.Image.Image] | None = None,
     ) -> tuple[Any, int]:
         if not self._model_loaded:
             raise RuntimeError(f"FLUX.2 Klein model not loaded: {self._model_error}")
@@ -430,5 +463,12 @@ class Flux2KleinPredictor(DiffusionPredictor):
             "height": height,
             "generator": generator,
         }
-        result = self._pipeline(**call_kwargs)
-        return result.images[0], used_seed
+        if reference_images is not None:
+            call_kwargs["image"] = reference_images
+
+        try:
+            result = self._pipeline(**call_kwargs)
+            return result.images[0], used_seed
+        finally:
+            gc.collect()
+            torch.cuda.empty_cache()

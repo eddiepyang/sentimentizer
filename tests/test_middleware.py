@@ -6,7 +6,7 @@ import os
 import time
 
 import pytest
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.testclient import TestClient
 
 from sentimentizer.serve.middleware import (
@@ -248,3 +248,50 @@ class TestErrorEnvelopeIntegration:
         resp = client.get("/test-dimensions")
         assert resp.status_code == 400
         assert resp.json()["error"]["code"] == "invalid_dimensions"
+
+
+class TestRequestBodySizeLimitMiddleware:
+    def _make_app(self) -> FastAPI:
+
+        from sentimentizer.serve.app import _RequestBodySizeLimitMiddleware
+
+        app = FastAPI()
+        app.add_middleware(
+            _RequestBodySizeLimitMiddleware,
+            default_max_bytes=100,
+            path_limits={"/v1/images/": 200},
+        )
+
+        @app.post("/normal")
+        async def normal(request: Request):
+            body = await request.body()
+            return {"size": len(body)}
+
+        @app.post("/v1/images/generate")
+        async def images(request: Request):
+            body = await request.body()
+            return {"size": len(body)}
+
+        return app
+
+    def test_normal_route_under_limit(self) -> None:
+        client = TestClient(self._make_app())
+        resp = client.post("/normal", content=b"a" * 99)
+        assert resp.status_code == 200
+
+    def test_normal_route_over_limit(self) -> None:
+        client = TestClient(self._make_app())
+        resp = client.post("/normal", content=b"a" * 101)
+        assert resp.status_code == 413
+        assert resp.json()["error"]["code"] == "request_too_large"
+
+    def test_image_route_under_limit(self) -> None:
+        client = TestClient(self._make_app())
+        resp = client.post("/v1/images/generate", content=b"a" * 199)
+        assert resp.status_code == 200
+
+    def test_image_route_over_limit(self) -> None:
+        client = TestClient(self._make_app())
+        resp = client.post("/v1/images/generate", content=b"a" * 201)
+        assert resp.status_code == 413
+        assert resp.json()["error"]["code"] == "request_too_large"

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class GenerateRequest(BaseModel):
@@ -41,6 +41,25 @@ class GenerateRequest(BaseModel):
         max_length=128,
         description="opaque end-user id for abuse tracking",
     )
+    reference_images: list[str] | None = Field(
+        None,
+        description=(
+            "Base64-encoded reference images (raw base64 or data:image/<fmt>;base64,…). "
+            "FLUX.2 Klein only. Up to 2 images, each ≤ 512×512 after decoding (262,144 pixels)."
+        ),
+    )
+
+    @field_validator("reference_images", mode="before")
+    @classmethod
+    def validate_reference_images(cls, v: Any) -> Any:
+        if v == []:
+            return None
+        if v is not None:
+            if not isinstance(v, list) or not all(isinstance(x, str) and x for x in v):
+                raise ValueError("reference_images must be a list of non-empty strings")
+            if len(v) > 2:
+                raise ValueError("at most 2 reference images allowed")
+        return v
 
     model_config = {
         "json_schema_extra": {

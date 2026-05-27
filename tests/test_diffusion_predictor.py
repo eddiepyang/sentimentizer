@@ -100,6 +100,112 @@ class TestB64:
         assert base64.b64decode(encoded) == raw
 
 
+class TestDecodeB64Image:
+    def test_raw_b64(self) -> None:
+        import base64
+        import io
+
+        import PIL.Image
+
+        from sentimentizer.diffusion.predictor import _decode_b64_image
+
+        img = PIL.Image.new("RGB", (64, 64), color="red")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+
+        decoded = _decode_b64_image(b64, max_pixels=64 * 64)
+        assert decoded.mode == "RGB"
+        assert decoded.size == (64, 64)
+
+    def test_data_url(self) -> None:
+        import base64
+        import io
+
+        import PIL.Image
+
+        from sentimentizer.diffusion.predictor import _decode_b64_image
+
+        img = PIL.Image.new("RGB", (64, 64), color="red")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        b64 = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+
+        decoded = _decode_b64_image(b64, max_pixels=64 * 64)
+        assert decoded.mode == "RGB"
+        assert decoded.size == (64, 64)
+
+    def test_rgba_to_rgb(self) -> None:
+        import base64
+        import io
+
+        import PIL.Image
+
+        from sentimentizer.diffusion.predictor import _decode_b64_image
+
+        img = PIL.Image.new("RGBA", (64, 64), color=(255, 0, 0, 128))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+
+        decoded = _decode_b64_image(b64, max_pixels=64 * 64)
+        assert decoded.mode == "RGB"
+
+    def test_malformed_b64(self) -> None:
+        from sentimentizer.diffusion.predictor import _decode_b64_image
+
+        with pytest.raises(ValueError, match="malformed base64"):
+            _decode_b64_image("not-base64", max_pixels=64 * 64)
+
+    def test_exceeds_max_pixels(self) -> None:
+        import base64
+        import io
+
+        import PIL.Image
+
+        from sentimentizer.diffusion.predictor import _decode_b64_image
+
+        img = PIL.Image.new("RGB", (128, 128), color="red")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+
+        with pytest.raises(ValueError, match="exceeds max_pixels="):
+            _decode_b64_image(b64, max_pixels=64 * 64)
+
+    def test_exact_max_pixels(self) -> None:
+        import base64
+        import io
+
+        import PIL.Image
+
+        from sentimentizer.diffusion.predictor import _decode_b64_image
+
+        img = PIL.Image.new("RGB", (64, 64), color="red")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+
+        decoded = _decode_b64_image(b64, max_pixels=64 * 64)
+        assert decoded.size == (64, 64)
+
+    def test_non_square(self) -> None:
+        import base64
+        import io
+
+        import PIL.Image
+
+        from sentimentizer.diffusion.predictor import _decode_b64_image
+
+        img = PIL.Image.new("RGB", (128, 32), color="red")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+
+        decoded = _decode_b64_image(b64, max_pixels=64 * 64)
+        assert decoded.size == (128, 32)
+
+
 class TestDiffusionModelConfig:
     def test_sd35_defaults(self) -> None:
         assert SD35_DEFAULT_CONFIG.default_steps == 40
@@ -246,3 +352,19 @@ class TestSeedResolution:
             p._resolve_seed(-1)
         with pytest.raises(ValueError):
             p._resolve_seed(2**32)
+
+
+class TestReferenceImagesPredictorSupport:
+    def test_sdxl_not_implemented(self) -> None:
+        from unittest.mock import MagicMock
+
+        p = SDXLPredictor()
+        with pytest.raises(NotImplementedError):
+            p.generate("test prompt", reference_images=[MagicMock()])
+
+    def test_sd35_not_implemented(self) -> None:
+        from unittest.mock import MagicMock
+
+        p = SD35Predictor()
+        with pytest.raises(NotImplementedError):
+            p.generate("test prompt", reference_images=[MagicMock()])
