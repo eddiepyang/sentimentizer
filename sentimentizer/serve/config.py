@@ -40,10 +40,16 @@ class ServeConfig:
         classify_batch_size: Maximum requests collected per /v1/router/predict batch.
         classify_batch_wait_s: Seconds to wait before processing a partial router batch.
         cors_origins: Allowed CORS origins (comma-separated for env var).
-        sd_enabled: Enable Stable Diffusion 2.1 deployment.
-        sd_model_id: HuggingFace model ID for SD.
-        flux_enabled: Enable FLUX.1-dev deployment.
-        flux_model_path: Path to FLUX weights (e.g. GGUF file).
+        flux2_klein_enabled: Enable FLUX.2 Klein 4B deployment (Apache 2.0,
+            step-distilled, ~13 GB VRAM at native placement).
+        flux2_klein_model_id: HuggingFace model ID for FLUX.2 Klein.
+        flux2_klein_cpu_offload: Diffusers CPU offload mode for FLUX.2 Klein.
+            One of "" (full GPU, default), "model", or "sequential".
+        flux2_klein_quantization: bitsandbytes quantization for the FLUX.2
+            transformer + Qwen3 text encoder. One of "" (off, default),
+            "nf4" (4-bit NF4, ~5 GB peak — fits 11 GB cards), or "int8"
+            (8-bit, ~9 GB peak). Requires the `bitsandbytes` package.
+            Pair with cpu_offload="model" on 11 GB cards.
         sd35_enabled: Enable SD 3.5 Medium deployment.
         sd35_model_id: HuggingFace model ID for SD 3.5 Medium.
         sd35_cpu_offload: Diffusers CPU offload mode for SD 3.5. One of
@@ -72,10 +78,10 @@ class ServeConfig:
     classify_batch_size: int = 32
     classify_batch_wait_s: float = 0.05
     cors_origins: list[str] = field(default_factory=lambda: ["*"])
-    sd_enabled: bool = False
-    sd_model_id: str = "stabilityai/stable-diffusion-2-1"
-    flux_enabled: bool = False
-    flux_model_path: str = ""
+    flux2_klein_enabled: bool = False
+    flux2_klein_model_id: str = "black-forest-labs/FLUX.2-klein-4B"
+    flux2_klein_cpu_offload: str = ""
+    flux2_klein_quantization: str = ""
     sd35_enabled: bool = False
     sd35_model_id: str = "stabilityai/stable-diffusion-3.5-medium"
     sd35_cpu_offload: str = ""
@@ -125,10 +131,10 @@ _ENV_OVERRIDES: dict[str, str] = {
     "SENTIMENTIZER_CLASSIFY_BATCH_SIZE": "classify_batch_size",
     "SENTIMENTIZER_CLASSIFY_BATCH_WAIT_S": "classify_batch_wait_s",
     "SENTIMENTIZER_CORS_ORIGINS": "cors_origins",
-    "SENTIMENTIZER_SD_ENABLED": "sd_enabled",
-    "SENTIMENTIZER_SD_MODEL_ID": "sd_model_id",
-    "SENTIMENTIZER_FLUX_ENABLED": "flux_enabled",
-    "SENTIMENTIZER_FLUX_MODEL_PATH": "flux_model_path",
+    "SENTIMENTIZER_FLUX2_KLEIN_ENABLED": "flux2_klein_enabled",
+    "SENTIMENTIZER_FLUX2_KLEIN_MODEL_ID": "flux2_klein_model_id",
+    "SENTIMENTIZER_FLUX2_KLEIN_CPU_OFFLOAD": "flux2_klein_cpu_offload",
+    "SENTIMENTIZER_FLUX2_KLEIN_QUANTIZATION": "flux2_klein_quantization",
     "SENTIMENTIZER_SD35_ENABLED": "sd35_enabled",
     "SENTIMENTIZER_SD35_MODEL_ID": "sd35_model_id",
     "SENTIMENTIZER_SD35_CPU_OFFLOAD": "sd35_cpu_offload",
@@ -153,8 +159,7 @@ _FIELD_TYPES: dict[str, type] = {
     "classify_batch_size": int,
     "classify_batch_wait_s": float,
     "cors_origins": list,
-    "sd_enabled": bool,
-    "flux_enabled": bool,
+    "flux2_klein_enabled": bool,
     "sd35_enabled": bool,
     "sdxl_models": list,
     "request_timeout_s": int,

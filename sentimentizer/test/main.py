@@ -23,11 +23,7 @@ import orjson
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response
 
 from sentimentizer import logger
-from sentimentizer.diffusion.config import (
-    FLUX_DEFAULT_CONFIG,
-    SD35_DEFAULT_CONFIG,
-    SD_DEFAULT_CONFIG,
-)
+from sentimentizer.diffusion.config import SD35_DEFAULT_CONFIG
 from sentimentizer.diffusion.job_store import JobStoreLogic
 from sentimentizer.diffusion.predictor import (
     SD35Predictor,
@@ -101,8 +97,6 @@ class ImagesDispatcher:
 
     def _get_predictor_defaults(self, model: str) -> dict[str, Any]:
         defaults_map = {
-            "sd": SD_DEFAULT_CONFIG,
-            "flux": FLUX_DEFAULT_CONFIG,
             "sd35": SD35_DEFAULT_CONFIG,
         }
         model_cfg = defaults_map.get(model)

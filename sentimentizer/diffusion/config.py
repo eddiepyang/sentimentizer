@@ -2,9 +2,8 @@
 
 Defaults live in ``diffusion_config.yaml`` next to this module and are
 loaded by ``load_diffusion_config()``. Module-level constants
-(``SD_DEFAULT_CONFIG``, ``FLUX_DEFAULT_CONFIG``, ``SD35_DEFAULT_CONFIG``)
-are eager-loaded aliases preserved for callers that imported them
-before the YAML refactor.
+(``SD35_DEFAULT_CONFIG``, ``SDXL_DEFAULT_CONFIG``, ``FLUX2_KLEIN_DEFAULT_CONFIG``)
+are eager-loaded aliases for the supported models.
 
 Operational overrides (which models to enable, API keys, rate limits,
 model_id / cpu_offload) live in ``sentimentizer.serve.config`` and are
@@ -55,18 +54,15 @@ class DiffusionModelConfig:
 # have a higher-priority override in ServeConfig are listed here; identity
 # fields (model_id / model_path / cpu_offload) are owned by ServeConfig.
 _ENV_OVERRIDES: dict[str, tuple[str, str]] = {
-    "SENTIMENTIZER_DIFFUSION_SD_DEFAULT_STEPS": ("sd", "default_steps"),
-    "SENTIMENTIZER_DIFFUSION_SD_DEFAULT_GUIDANCE": ("sd", "default_guidance"),
-    "SENTIMENTIZER_DIFFUSION_SD_MAX_PIXELS": ("sd", "max_pixels"),
-    "SENTIMENTIZER_DIFFUSION_FLUX_DEFAULT_STEPS": ("flux", "default_steps"),
-    "SENTIMENTIZER_DIFFUSION_FLUX_DEFAULT_GUIDANCE": ("flux", "default_guidance"),
-    "SENTIMENTIZER_DIFFUSION_FLUX_MAX_PIXELS": ("flux", "max_pixels"),
     "SENTIMENTIZER_DIFFUSION_SD35_DEFAULT_STEPS": ("sd35", "default_steps"),
     "SENTIMENTIZER_DIFFUSION_SD35_DEFAULT_GUIDANCE": ("sd35", "default_guidance"),
     "SENTIMENTIZER_DIFFUSION_SD35_MAX_PIXELS": ("sd35", "max_pixels"),
     "SENTIMENTIZER_DIFFUSION_SDXL_DEFAULT_STEPS": ("sdxl", "default_steps"),
     "SENTIMENTIZER_DIFFUSION_SDXL_DEFAULT_GUIDANCE": ("sdxl", "default_guidance"),
     "SENTIMENTIZER_DIFFUSION_SDXL_MAX_PIXELS": ("sdxl", "max_pixels"),
+    "SENTIMENTIZER_DIFFUSION_FLUX2_KLEIN_DEFAULT_STEPS": ("flux2_klein", "default_steps"),
+    "SENTIMENTIZER_DIFFUSION_FLUX2_KLEIN_DEFAULT_GUIDANCE": ("flux2_klein", "default_guidance"),
+    "SENTIMENTIZER_DIFFUSION_FLUX2_KLEIN_MAX_PIXELS": ("flux2_klein", "max_pixels"),
 }
 
 # With `from __future__ import annotations` above, dataclass field
@@ -116,7 +112,7 @@ def load_diffusion_config(
             raw = yaml.safe_load(f) or {}
 
     per_model: dict[str, dict[str, Any]] = {
-        name: dict(raw.get(name, {})) for name in ("sd", "flux", "sd35", "sdxl")
+        name: dict(raw.get(name, {})) for name in ("sd35", "sdxl", "flux2_klein")
     }
 
     for env_var, (model_name, field_name) in _ENV_OVERRIDES.items():
@@ -134,7 +130,6 @@ def load_diffusion_config(
 
 
 _DEFAULTS = load_diffusion_config()
-SD_DEFAULT_CONFIG = _DEFAULTS["sd"]
-FLUX_DEFAULT_CONFIG = _DEFAULTS["flux"]
 SD35_DEFAULT_CONFIG = _DEFAULTS["sd35"]
 SDXL_DEFAULT_CONFIG = _DEFAULTS["sdxl"]
+FLUX2_KLEIN_DEFAULT_CONFIG = _DEFAULTS["flux2_klein"]

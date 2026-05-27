@@ -1,18 +1,19 @@
-"""Tests for diffusion predictor module (CPU-only, using tiny-SD model)."""
+"""Tests for diffusion predictor module (CPU-only)."""
 
 from __future__ import annotations
 
 import pytest
 
 from sentimentizer.diffusion.config import (
-    FLUX_DEFAULT_CONFIG,
-    SD_DEFAULT_CONFIG,
+    FLUX2_KLEIN_DEFAULT_CONFIG,
+    SD35_DEFAULT_CONFIG,
+    SDXL_DEFAULT_CONFIG,
     DiffusionModelConfig,
 )
 from sentimentizer.diffusion.predictor import (
-    FluxPredictor,
+    Flux2KleinPredictor,
     SD35Predictor,
-    SDPredictor,
+    SDXLPredictor,
     _b64,
     _encode_pil,
     _generate_id,
@@ -100,93 +101,25 @@ class TestB64:
 
 
 class TestDiffusionModelConfig:
-    def test_sd_defaults(self) -> None:
-        assert SD_DEFAULT_CONFIG.default_steps == 30
-        assert SD_DEFAULT_CONFIG.default_guidance == 7.5
-        assert SD_DEFAULT_CONFIG.dim_alignment == 8
+    def test_sd35_defaults(self) -> None:
+        assert SD35_DEFAULT_CONFIG.default_steps == 40
+        assert SD35_DEFAULT_CONFIG.default_guidance == 4.5
+        assert SD35_DEFAULT_CONFIG.dim_alignment == 16
 
-    def test_flux_defaults(self) -> None:
-        assert FLUX_DEFAULT_CONFIG.default_steps == 28
-        assert FLUX_DEFAULT_CONFIG.default_guidance == 3.5
-        assert FLUX_DEFAULT_CONFIG.dim_alignment == 16
+    def test_sdxl_defaults(self) -> None:
+        assert SDXL_DEFAULT_CONFIG.default_steps == 25
+        assert SDXL_DEFAULT_CONFIG.default_guidance == 5.0
+        assert SDXL_DEFAULT_CONFIG.dim_alignment == 8
+
+    def test_flux2_klein_defaults(self) -> None:
+        assert FLUX2_KLEIN_DEFAULT_CONFIG.default_steps == 4
+        assert FLUX2_KLEIN_DEFAULT_CONFIG.default_guidance == 0.0
+        assert FLUX2_KLEIN_DEFAULT_CONFIG.dim_alignment == 16
 
     def test_frozen(self) -> None:
         cfg = DiffusionModelConfig()
         with pytest.raises(AttributeError):
             cfg.default_steps = 99  # type: ignore[misc]
-
-
-class TestSDPredictorLifecycle:
-    def test_init_not_loaded(self) -> None:
-        p = SDPredictor()
-        assert not p.model_loaded
-        assert p.model_error is None
-
-    def test_resolve_defaults_with_values(self) -> None:
-        from types import SimpleNamespace
-
-        p = SDPredictor()
-        req = SimpleNamespace(
-            prompt="test",
-            negative_prompt=None,
-            steps=None,
-            guidance_scale=None,
-            width=512,
-            height=512,
-            seed=42,
-            output_format="png",
-            response_format="b64_json",
-        )
-        resolved = p.resolve_defaults(req)
-        assert resolved["steps"] == 30
-        assert resolved["guidance_scale"] == 7.5
-        assert resolved["seed"] == 42
-
-    def test_resolve_defaults_explicit(self) -> None:
-        from types import SimpleNamespace
-
-        p = SDPredictor()
-        req = SimpleNamespace(
-            prompt="test",
-            negative_prompt="blurry",
-            steps=20,
-            guidance_scale=5.0,
-            width=768,
-            height=768,
-            seed=None,
-            output_format="webp",
-            response_format="url",
-        )
-        resolved = p.resolve_defaults(req)
-        assert resolved["steps"] == 20
-        assert resolved["guidance_scale"] == 5.0
-        assert resolved["negative_prompt"] == "blurry"
-
-    def test_model_info_not_loaded(self) -> None:
-        p = SDPredictor()
-        info = p.model_info()
-        assert info["status"] == "not_loaded"
-        assert info["default_steps"] == 30
-
-    def test_generate_raises_if_not_loaded(self) -> None:
-        p = SDPredictor()
-        with pytest.raises(RuntimeError, match="not loaded"):
-            p.generate("test prompt")
-
-
-class TestFluxPredictorDefaults:
-    def test_init_not_loaded(self) -> None:
-        p = FluxPredictor()
-        assert not p.model_loaded
-        assert p.model_error is None
-
-    def test_flux_default_guidance(self) -> None:
-        assert FluxPredictor().cfg.default_guidance == 3.5
-
-    def test_generate_raises_if_not_loaded(self) -> None:
-        p = FluxPredictor()
-        with pytest.raises(RuntimeError, match="not loaded"):
-            p.generate("test prompt")
 
 
 class TestSD35PredictorDefaults:
@@ -213,18 +146,102 @@ class TestSD35PredictorDefaults:
             p.generate("test prompt")
 
 
+class TestFlux2KleinPredictorDefaults:
+    def test_init_not_loaded(self) -> None:
+        p = Flux2KleinPredictor()
+        assert not p.model_loaded
+        assert p.model_error is None
+
+    def test_default_steps(self) -> None:
+        assert Flux2KleinPredictor().cfg.default_steps == 4
+
+    def test_default_guidance_unguided(self) -> None:
+        assert Flux2KleinPredictor().cfg.default_guidance == 0.0
+
+    def test_default_model_id(self) -> None:
+        assert Flux2KleinPredictor().cfg.model_id == "black-forest-labs/FLUX.2-klein-4B"
+
+    def test_dim_alignment(self) -> None:
+        assert Flux2KleinPredictor().cfg.dim_alignment == 16
+
+    def test_generate_raises_if_not_loaded(self) -> None:
+        p = Flux2KleinPredictor()
+        with pytest.raises(RuntimeError, match="not loaded"):
+            p.generate("test prompt")
+
+
+class TestSDXLPredictorDefaults:
+    def test_init_not_loaded(self) -> None:
+        p = SDXLPredictor()
+        assert not p.model_loaded
+        assert p.model_error is None
+
+    def test_generate_raises_if_not_loaded(self) -> None:
+        p = SDXLPredictor()
+        with pytest.raises(RuntimeError, match="not loaded"):
+            p.generate("test prompt")
+
+
+class TestResolveDefaults:
+    def test_resolve_defaults_with_unset_request_fields(self) -> None:
+        from types import SimpleNamespace
+
+        p = SD35Predictor()
+        req = SimpleNamespace(
+            prompt="test",
+            negative_prompt=None,
+            steps=None,
+            guidance_scale=None,
+            width=1024,
+            height=1024,
+            seed=42,
+            output_format="png",
+            response_format="b64_json",
+        )
+        resolved = p.resolve_defaults(req)
+        assert resolved["steps"] == 40
+        assert resolved["guidance_scale"] == 4.5
+        assert resolved["seed"] == 42
+
+    def test_resolve_defaults_with_explicit_request_fields(self) -> None:
+        from types import SimpleNamespace
+
+        p = SD35Predictor()
+        req = SimpleNamespace(
+            prompt="test",
+            negative_prompt="blurry",
+            steps=20,
+            guidance_scale=5.0,
+            width=768,
+            height=768,
+            seed=None,
+            output_format="webp",
+            response_format="url",
+        )
+        resolved = p.resolve_defaults(req)
+        assert resolved["steps"] == 20
+        assert resolved["guidance_scale"] == 5.0
+        assert resolved["negative_prompt"] == "blurry"
+
+    def test_model_info_not_loaded(self) -> None:
+        p = SD35Predictor()
+        info = p.model_info()
+        assert info["status"] == "not_loaded"
+        assert info["default_steps"] == 40
+
+
 class TestSeedResolution:
     def test_explicit_seed(self) -> None:
-        p = SDPredictor()
+        p = SD35Predictor()
         assert p._resolve_seed(42) == 42
 
     def test_random_seed(self) -> None:
-        p = SDPredictor()
+        p = SD35Predictor()
         s = p._resolve_seed(None)
         assert 0 <= s <= 2**32 - 1
 
     def test_invalid_seed(self) -> None:
-        p = SDPredictor()
+        p = SD35Predictor()
         with pytest.raises(ValueError):
             p._resolve_seed(-1)
         with pytest.raises(ValueError):

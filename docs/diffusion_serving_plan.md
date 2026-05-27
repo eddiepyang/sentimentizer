@@ -1,4 +1,14 @@
-# Diffusion Serving (SD + FLUX + SD 3.5 Medium) — Implementation Plan
+# Diffusion Serving — Implementation Plan
+
+> **Historical note.** This document captures the original implementation plan, including
+> SD 2.1 (small, fast) and FLUX.1-dev Q8 GGUF (large, slow). Both were later removed in
+> favor of **FLUX.2 Klein 4B** (Apache 2.0, step-distilled). The currently shipped models
+> are **SD 3.5 Medium**, **FLUX.2 Klein 4B**, and **SDXL** (multi-slot). Code references
+> to `SDDeployment`, `FluxDeployment`, `SDPredictor`, `FluxPredictor`, `SD_DEFAULT_CONFIG`,
+> `FLUX_DEFAULT_CONFIG`, `cfg.sd_enabled`, `cfg.flux_enabled`, and `cfg.flux_model_path`
+> below describe how those were implemented at the time and **no longer exist in the
+> codebase**. The dispatcher, middleware, async-job, and config-loader sections still
+> describe current behavior.
 
 Add image generation endpoints to the existing Ray Serve app at `sentimentizer/serve/app.py`,
 supporting Stable Diffusion 2.1 (small, fast), FLUX.1-dev Q8 (large, slow), and SD 3.5 Medium
@@ -951,10 +961,16 @@ uv run pytest tests/ -v --exitfirst --failed-first
     pattern: dataclass + YAML + env-var overrides via `_ENV_OVERRIDES` map; new
     `diffusion_config.yaml`, new `SENTIMENTIZER_DIFFUSION_*` and `SENTIMENTIZER_ROUTER_*` /
     `SENTIMENTIZER_AUGMENT_*` overrides)
-13. **P1.10** URL storage backend — ~1 day
-14. **P1.11** K8s manifest + GCS mount — ~1 day, infra-side
-15. **P1.12** Observability extensions — ~½ day
-16. Flip enable flags in prod config, monitor
+13. **FLUX.2 Klein 4B** — ✅ done (`Flux2KleinPredictor`, `Flux2KleinDeployment`,
+    `flux2_klein_enabled`/`flux2_klein_model_id`/`flux2_klein_cpu_offload` on ServeConfig,
+    diffusers 0.38.0+ for `Flux2KleinPipeline`)
+14. **SD 2.1 + FLUX.1-dev removal** — ✅ done (replaced by FLUX.2 Klein; `SDPredictor`,
+    `FluxPredictor`, `SDDeployment`, `FluxDeployment`, `SD_DEFAULT_CONFIG`,
+    `FLUX_DEFAULT_CONFIG`, and the `sd`/`flux` `ServeConfig` fields all deleted)
+15. **P1.10** URL storage backend — ~1 day
+16. **P1.11** K8s manifest + GCS mount — ~1 day, infra-side
+17. **P1.12** Observability extensions — ~½ day
+18. Flip enable flags in prod config, monitor
 
 ---
 

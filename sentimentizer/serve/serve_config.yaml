@@ -26,12 +26,17 @@ cors_origins:
   - "*"
 
 # Diffusion serving (image generation) — disabled by default
-sd_enabled: false
-sd_model_id: "stabilityai/stable-diffusion-2-1"
-flux_enabled: false
-flux_model_path: ""
+flux2_klein_enabled: false
+flux2_klein_model_id: "black-forest-labs/FLUX.2-klein-4B"
+flux2_klein_cpu_offload: ""        # "", "model", or "sequential"
+# bitsandbytes quantization for FLUX.2 transformer + Qwen3 text encoder.
+# "" off, "nf4" 4-bit (~5 GB peak — fits 11 GB cards like 2080 Ti),
+# "int8" 8-bit (~9 GB peak). Requires `bitsandbytes`. Pair with
+# flux2_klein_cpu_offload: "model" on 11 GB cards.
+flux2_klein_quantization: ""
 sd35_enabled: false
 sd35_model_id: "stabilityai/stable-diffusion-3.5-medium"
+sd35_cpu_offload: ""               # "", "model", or "sequential"
 # Named SDXL slots: each entry is "name:model_id". Supports anime fine-tunes
 # (e.g. "anime:John6666/noob-sdxl-v10") addressable by slot name in requests.
 sdxl_models: []

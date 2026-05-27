@@ -17,9 +17,10 @@ if __name__ == "__main__":
         "--diffusion",
         action="store_true",
         default=False,
-        help="Enable image generation (SD/FLUX/SD35) endpoints. "
+        help="Enable image generation (SD3.5/FLUX.2 Klein/SDXL) endpoints. "
         "Requires GPU hardware and model weights. "
-        "Can also be enabled via config (sd_enabled, flux_enabled, sd35_enabled).",
+        "Can also be enabled via config (flux2_klein_enabled, sd35_enabled, "
+        "sdxl_models).",
     )
     args = parser.parse_args()
 

@@ -103,13 +103,12 @@ Owns operational concerns: which models to enable, auth, rate limits, CORS, mode
 | `SENTIMENTIZER_DEFAULT_MODEL` | `default_model` | str | Sentiment model: `rnn`, `encoder`, `decoder`, `modernbert` |
 | `SENTIMENTIZER_API_KEYS` | `api_keys` | comma-list | Required for `/v1/images/*` |
 | `SENTIMENTIZER_CORS_ORIGINS` | `cors_origins` | comma-list | |
-| `SENTIMENTIZER_SD_ENABLED` | `sd_enabled` | bool | |
-| `SENTIMENTIZER_SD_MODEL_ID` | `sd_model_id` | str | |
-| `SENTIMENTIZER_FLUX_ENABLED` | `flux_enabled` | bool | |
-| `SENTIMENTIZER_FLUX_MODEL_PATH` | `flux_model_path` | str | GGUF path |
 | `SENTIMENTIZER_SD35_ENABLED` | `sd35_enabled` | bool | |
 | `SENTIMENTIZER_SD35_MODEL_ID` | `sd35_model_id` | str | |
 | `SENTIMENTIZER_SD35_CPU_OFFLOAD` | `sd35_cpu_offload` | str | `""`, `"model"`, or `"sequential"` |
+| `SENTIMENTIZER_FLUX2_KLEIN_ENABLED` | `flux2_klein_enabled` | bool | |
+| `SENTIMENTIZER_FLUX2_KLEIN_MODEL_ID` | `flux2_klein_model_id` | str | |
+| `SENTIMENTIZER_FLUX2_KLEIN_CPU_OFFLOAD` | `flux2_klein_cpu_offload` | str | `""`, `"model"`, or `"sequential"` |
 | `SENTIMENTIZER_SDXL_MODELS` | `sdxl_models` | comma-list | Each entry `name:model_id`; spawns one deployment per slot |
 | `SENTIMENTIZER_DEFAULT_IMAGE_MODEL` | `default_image_model` | str | Used when request body omits `model` |
 | `SENTIMENTIZER_RATE_LIMIT_PER_MIN` | `rate_limit_per_min` | int | Per API key |
@@ -130,13 +129,13 @@ Owns operational concerns: which models to enable, auth, rate limits, CORS, mode
 
 Owns model-internal defaults: denoising steps, guidance scale, max pixels, dimension alignment, dtype. Model identity (`model_id`, `model_path`, `cpu_offload`) is owned by `ServeConfig` and layered on top via `dataclasses.replace()` in the dispatcher.
 
-The YAML has one section per model — `sd`, `flux`, `sd35`, `sdxl` — each populating a `DiffusionModelConfig`. Backwards-compatible module-level aliases (`SD_DEFAULT_CONFIG`, `FLUX_DEFAULT_CONFIG`, `SD35_DEFAULT_CONFIG`, `SDXL_DEFAULT_CONFIG`) are eager-loaded from the YAML at import time.
+The YAML has one section per model — `sd35`, `sdxl`, `flux2_klein` — each populating a `DiffusionModelConfig`. Module-level aliases (`SD35_DEFAULT_CONFIG`, `SDXL_DEFAULT_CONFIG`, `FLUX2_KLEIN_DEFAULT_CONFIG`) are eager-loaded from the YAML at import time.
 
 | Env var pattern | Field | Type |
 | :--- | :--- | :--- |
-| `SENTIMENTIZER_DIFFUSION_{SD,FLUX,SD35,SDXL}_DEFAULT_STEPS` | `default_steps` | int |
-| `SENTIMENTIZER_DIFFUSION_{SD,FLUX,SD35,SDXL}_DEFAULT_GUIDANCE` | `default_guidance` | float |
-| `SENTIMENTIZER_DIFFUSION_{SD,FLUX,SD35,SDXL}_MAX_PIXELS` | `max_pixels` | int |
+| `SENTIMENTIZER_DIFFUSION_{SD35,SDXL,FLUX2_KLEIN}_DEFAULT_STEPS` | `default_steps` | int |
+| `SENTIMENTIZER_DIFFUSION_{SD35,SDXL,FLUX2_KLEIN}_DEFAULT_GUIDANCE` | `default_guidance` | float |
+| `SENTIMENTIZER_DIFFUSION_{SD35,SDXL,FLUX2_KLEIN}_MAX_PIXELS` | `max_pixels` | int |
 
 ### Router (training + augmentation)
 

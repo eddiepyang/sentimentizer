@@ -71,7 +71,7 @@ from starlette.responses import Response as StarletteResponse
 from sentimentizer import logger
 from sentimentizer.predictor import _MODEL_CONFIGS, SentimentPredictor
 from sentimentizer.serve.base import ServiceMetrics, serve
-from sentimentizer.serve.config import load_serve_config
+from sentimentizer.serve.config import load_serve_config, parse_sdxl_models
 from sentimentizer.serve.models import (
     BatchRequest,
     BatchResponse,
@@ -90,7 +90,6 @@ from sentimentizer.serve.models import (
 # ---------------------------------------------------------------------------
 # Load configuration (YAML defaults < env var overrides)
 # ---------------------------------------------------------------------------
-from sentimentizer.serve.config import load_serve_config
 
 cfg = load_serve_config()
 
@@ -606,11 +605,13 @@ class SentimentizerDeployment:
             "router_loaded": self.predictor.router_loaded,
             "router_error": self.predictor.router_error,
         }
-        if cfg.sd_enabled or cfg.flux_enabled or cfg.sd35_enabled:
+        if cfg.flux2_klein_enabled or cfg.sd35_enabled or bool(cfg.sdxl_models):
             body["image_models"] = {
-                "sd": "enabled" if cfg.sd_enabled else "disabled",
-                "flux": "enabled" if cfg.flux_enabled else "disabled",
+                "flux2_klein": "enabled" if cfg.flux2_klein_enabled else "disabled",
                 "sd35": "enabled" if cfg.sd35_enabled else "disabled",
+                "sdxl": (
+                    list(parse_sdxl_models(cfg.sdxl_models).keys()) if cfg.sdxl_models else []
+                ),
             }
         if not self.predictor.model_loaded:
             return JSONResponse(status_code=503, content=body)
@@ -631,9 +632,9 @@ def main(host: str = "0.0.0.0", port: int = 8000, diffusion: bool = False) -> No
         diffusion: If True, start the image generation (diffusion) deployment
             alongside sentiment. This requires GPU hardware and model weights.
             When False (default), only sentiment + router endpoints are served.
-            Diffusion can also be enabled via config: set ``sd_enabled``,
-            ``flux_enabled``, or ``sd35_enabled`` in ``serve_config.yaml`` or
-            their corresponding env vars.
+            Diffusion can also be enabled via config: set
+            ``flux2_klein_enabled``, ``sd35_enabled``, or ``sdxl_models`` in
+            ``serve_config.yaml`` or their corresponding env vars.
 
     Workers use the current Python executable directly (no isolated venv),
     which avoids the ``ModuleNotFoundError: No module named 'ray'`` issue
@@ -669,20 +670,14 @@ def main(host: str = "0.0.0.0", port: int = 8000, diffusion: bool = False) -> No
     )
 
     start_diffusion = (
-        diffusion
-        or cfg.sd_enabled
-        or cfg.flux_enabled
-        or cfg.sd35_enabled
-        or bool(cfg.sdxl_models)
+        diffusion or cfg.flux2_klein_enabled or cfg.sd35_enabled or bool(cfg.sdxl_models)
     )
     if start_diffusion:
         from sentimentizer.diffusion.job_store import JobStore
-        from sentimentizer.serve.config import parse_sdxl_models
         from sentimentizer.serve.diffusion_app import (
-            FluxDeployment,
+            Flux2KleinDeployment,
             ImagesDispatcher,
             SD35Deployment,
-            SDDeployment,
             SDXLDeployment,
         )
 
@@ -692,8 +687,7 @@ def main(host: str = "0.0.0.0", port: int = 8000, diffusion: bool = False) -> No
             get_if_exists=True,
         ).remote(ttl_s=cfg.job_ttl_s)
 
-        sd_handle = SDDeployment.bind() if cfg.sd_enabled else None
-        flux_handle = FluxDeployment.bind() if cfg.flux_enabled else None
+        flux2_klein_handle = Flux2KleinDeployment.bind() if cfg.flux2_klein_enabled else None
         sd35_handle = SD35Deployment.bind() if cfg.sd35_enabled else None
 
         sdxl_handles: dict[str, Any] | None = None
@@ -705,7 +699,7 @@ def main(host: str = "0.0.0.0", port: int = 8000, diffusion: bool = False) -> No
             }
 
         serve.run(
-            ImagesDispatcher.bind(sd_handle, flux_handle, sd35_handle, sdxl_handles),
+            ImagesDispatcher.bind(flux2_klein_handle, sd35_handle, sdxl_handles),
             name="images",
             route_prefix="/v1/images",
         )

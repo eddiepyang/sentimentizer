@@ -1,33 +1,12 @@
 # Diffusion model defaults.
-# Each top-level key (sd / flux / sd35) maps to a DiffusionModelConfig.
-# Loaded by sentimentizer.diffusion.config.load_diffusion_config().
+# Each top-level key (sd35 / sdxl / flux2_klein) maps to a
+# DiffusionModelConfig. Loaded by sentimentizer.diffusion.config.load_diffusion_config().
 #
 # Operational overrides (which models to enable, API keys, rate limits)
 # live in sentimentizer/serve/serve_config.yaml. Model-identity and
 # behavior overrides (model_id, model_path, cpu_offload) come from
 # ServeConfig env vars (SENTIMENTIZER_SD35_MODEL_ID, etc.) and are
 # applied on top of these defaults in the dispatcher.
-
-sd:
-  model_id: "stabilityai/stable-diffusion-2-1"
-  dtype: "bfloat16"
-  quantization: null
-  default_steps: 30
-  default_guidance: 7.5
-  max_pixels: 1048576
-  dim_alignment: 8
-  cpu_offload: null
-
-flux:
-  model_id: "black-forest-labs/FLUX.1-dev"
-  model_path: ""
-  dtype: "bfloat16"
-  quantization: "Q8_0"
-  default_steps: 28
-  default_guidance: 3.5
-  max_pixels: 1048576
-  dim_alignment: 16
-  cpu_offload: null
 
 sd35:
   model_id: "stabilityai/stable-diffusion-3.5-medium"
@@ -47,4 +26,21 @@ sdxl:
   default_guidance: 5.0
   max_pixels: 1048576
   dim_alignment: 8
+  cpu_offload: null
+
+# FLUX.2 Klein 4B — step-distilled, Apache-2.0, ~13 GB VRAM at native placement.
+# Klein is unguided (default_guidance=0). Verify the exact HuggingFace repo
+# slug before first run.
+#
+# `quantization` accepts null (off), "nf4" (4-bit, fits ~5 GB — recommended
+# for 11 GB cards), or "int8" (8-bit, ~9 GB). Quantization requires the
+# `bitsandbytes` package and applies to the transformer + Qwen3 text encoder.
+flux2_klein:
+  model_id: "black-forest-labs/FLUX.2-klein-4B"
+  dtype: "bfloat16"
+  quantization: null
+  default_steps: 4
+  default_guidance: 0.0
+  max_pixels: 1048576
+  dim_alignment: 16
   cpu_offload: null
