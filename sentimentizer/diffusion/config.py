@@ -15,9 +15,11 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
+
+from sentimentizer.diffusion.mlx_compat import MFLUX_AVAILABLE, is_mlx_device
 
 
 @dataclass(frozen=True)
@@ -36,6 +38,7 @@ class DiffusionModelConfig:
         cpu_offload: Diffusers CPU offload mode. One of None (full GPU),
             "model" (whole-module swap, modest VRAM win), or "sequential"
             (submodule swap, biggest VRAM win, slowest).
+        backend: Backend to use ("diffusers", "mlx", or "auto").
     """
 
     model_id: str = ""
@@ -47,6 +50,33 @@ class DiffusionModelConfig:
     max_pixels: int = 1048576
     dim_alignment: int = 8
     cpu_offload: str | None = None
+    backend: Literal["diffusers", "mlx", "auto"] = "auto"
+
+
+BACKEND_REGISTRY: dict[str, list[str]] = {
+    "sdxl": ["diffusers"],
+    "sd35": ["diffusers"],
+    "flux2_klein": ["diffusers"] + (["mlx"] if MFLUX_AVAILABLE else []),
+}
+
+
+def resolve_backend(model_key: str, backend: str = "auto") -> str:
+    """Resolve 'auto' to a concrete backend based on model and device.
+
+    For SDXL and SD3.5, always returns 'diffusers' (no MLX implementation).
+    For FLUX.2 Klein, returns 'mlx' on Apple Silicon when mflux is installed,
+    otherwise 'diffusers'.
+    """
+    available = BACKEND_REGISTRY.get(model_key, ["diffusers"])
+    if backend != "auto":
+        if backend not in available:
+            raise ValueError(
+                f"backend={backend!r} not available for {model_key}. " f"Available: {available}"
+            )
+        return backend
+    if "mlx" in available and is_mlx_device():
+        return "mlx"
+    return "diffusers"
 
 
 # Per-model env-var overrides for model-internal defaults. Pattern:

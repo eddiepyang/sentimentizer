@@ -75,9 +75,15 @@ class JobStoreLogic:
             return None
         return _rec_to_response(rec).model_dump()
 
+    def get_status(self, job_id: str) -> str | None:
+        rec = self._jobs.get(job_id)
+        return rec.status if rec is not None else None
+
     def set_succeeded(self, job_id: str, result: dict[str, Any]) -> bool:
         rec = self._jobs.get(job_id)
         if rec is None:
+            return False
+        if rec.status in ("succeeded", "failed", "canceled"):
             return False
         now = int(time.time())
         rec.status = "succeeded"
@@ -88,6 +94,8 @@ class JobStoreLogic:
     def set_failed(self, job_id: str, error_code: str, error_message: str) -> bool:
         rec = self._jobs.get(job_id)
         if rec is None:
+            return False
+        if rec.status in ("succeeded", "failed", "canceled"):
             return False
         now = int(time.time())
         rec.status = "failed"
@@ -140,12 +148,18 @@ class JobStoreLogic:
 
         return {"jobs": page, "next_page_token": next_token}
 
-    def reap_expired(self) -> int:
+    def reap_expired(self, stale_processing_s: int = 3600) -> int:
         now = int(time.time())
         expired: list[str] = []
         for jid, rec in self._jobs.items():
             if rec.terminal_at is not None and now - rec.terminal_at > self._ttl_s:
                 expired.append(jid)
+            elif rec.status == "processing" and now - rec.created > stale_processing_s:
+                # Poll task was lost (e.g. dispatcher replica restart); mark as failed
+                # so the job doesn't stay stuck in "processing" indefinitely.
+                rec.status = "failed"
+                rec.error = {"code": "stale_job", "message": "job timed out"}
+                rec.terminal_at = now
         for jid in expired:
             rec = self._jobs.pop(jid)
             key_jobs = self._by_key.get(rec.api_key_prefix, [])
@@ -177,6 +191,9 @@ class JobStore:
 
     def submit(self, model: str, user: str | None, api_key: str) -> str:
         return self._logic.submit(model, user, api_key)
+
+    def get_status(self, job_id: str) -> str | None:
+        return self._logic.get_status(job_id)
 
     def get(self, job_id: str, api_key: str) -> dict[str, Any] | None:
         return self._logic.get(job_id, api_key)

@@ -12,7 +12,7 @@ import gc
 import io
 import secrets
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 import PIL.Image
 import torch
@@ -24,6 +24,7 @@ from sentimentizer.diffusion.config import (
     SDXL_DEFAULT_CONFIG,
     DiffusionModelConfig,
 )
+from sentimentizer.diffusion.mlx_compat import MFLUX_AVAILABLE
 
 _MAX_SEED = 2**32 - 1
 _REF_MAX_PIXELS = 512 * 512
@@ -160,6 +161,7 @@ class DiffusionPredictor(ABC):
             "default_steps": self.cfg.default_steps,
             "default_guidance": self.cfg.default_guidance,
             "quantization": self.cfg.quantization,
+            "backend": "diffusers",
         }
 
     def _resolve_seed(self, seed: int | None) -> int:
@@ -472,3 +474,105 @@ class Flux2KleinPredictor(DiffusionPredictor):
         finally:
             gc.collect()
             torch.cuda.empty_cache()
+
+
+@runtime_checkable
+class DiffusionPredictorProtocol(Protocol):
+    """Structural interface for diffusion predictors (torch or MLX).
+
+    Both DiffusionPredictor subclasses and MLXFlux2KleinPredictor satisfy
+    this protocol. The factory returns this type so callers get accurate
+    autocomplete and type checking regardless of backend.
+    """
+
+    @property
+    def model_loaded(self) -> bool: ...
+
+    @property
+    def model_error(self) -> str | None: ...
+
+    def warmup(self) -> None: ...
+
+    def generate(
+        self,
+        prompt: str,
+        negative_prompt: str | None = None,
+        steps: int | None = None,
+        guidance_scale: float | None = None,
+        width: int = 1024,
+        height: int = 1024,
+        seed: int | None = None,
+        reference_images: list[PIL.Image.Image] | None = None,
+    ) -> tuple[Any, int]: ...
+
+    def resolve_defaults(self, request: Any) -> dict[str, Any]: ...
+
+    def model_info(self) -> dict[str, Any]: ...
+
+
+_PREDICTOR_REGISTRY: dict[str, dict[str, type]] = {
+    "sdxl": {"diffusers": SDXLPredictor},
+    "sd35": {"diffusers": SD35Predictor},
+    "flux2_klein": {"diffusers": Flux2KleinPredictor},
+}
+
+if MFLUX_AVAILABLE:
+    from sentimentizer.diffusion.mlx_predictor import MLXFlux2KleinPredictor
+
+    _PREDICTOR_REGISTRY["flux2_klein"]["mlx"] = MLXFlux2KleinPredictor
+
+
+def create_predictor(
+    model_key: str,
+    cfg: DiffusionModelConfig | None = None,
+) -> DiffusionPredictorProtocol:
+    """Create the appropriate predictor based on config backend and availability.
+
+    Args:
+        model_key: One of "sdxl", "sd35", "flux2_klein".
+        cfg: Optional DiffusionModelConfig. Uses model defaults if None.
+
+    Returns:
+        A predictor instance satisfying DiffusionPredictorProtocol.
+        Concretely: a DiffusionPredictor subclass for backend="diffusers",
+        or MLXFlux2KleinPredictor for backend="mlx".
+
+    Raises:
+        ValueError: If the requested backend is not available for the model.
+        ImportError: If MLX backend is requested but mflux is not installed.
+    """
+    from sentimentizer.diffusion.config import resolve_backend
+
+    defaults = {
+        "sdxl": SDXL_DEFAULT_CONFIG,
+        "sd35": SD35_DEFAULT_CONFIG,
+        "flux2_klein": FLUX2_KLEIN_DEFAULT_CONFIG,
+    }
+    if cfg is None:
+        cfg = defaults[model_key]
+
+    backend = resolve_backend(model_key, cfg.backend)
+    available = _PREDICTOR_REGISTRY.get(model_key, {})
+
+    if backend not in available:
+        raise ValueError(
+            f"backend={backend!r} not available for {model_key}. "
+            f"Available: {list(available.keys())}"
+        )
+
+    predictor_cls = available[backend]
+
+    if backend == "mlx":
+        if cfg.cpu_offload:
+            logger.warning(
+                "cpu_offload=%r is not supported by the MLX backend; "
+                "MLX uses unified memory. Ignoring.",
+                cfg.cpu_offload,
+            )
+        if cfg.dtype not in ("bfloat16", "float16", ""):
+            logger.warning(
+                "dtype=%r — MLX manages precision internally. Ignoring.",
+                cfg.dtype,
+            )
+
+    return predictor_cls(cfg)

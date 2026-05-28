@@ -109,6 +109,8 @@ Owns operational concerns: which models to enable, auth, rate limits, CORS, mode
 | `SENTIMENTIZER_FLUX2_KLEIN_ENABLED` | `flux2_klein_enabled` | bool | |
 | `SENTIMENTIZER_FLUX2_KLEIN_MODEL_ID` | `flux2_klein_model_id` | str | |
 | `SENTIMENTIZER_FLUX2_KLEIN_CPU_OFFLOAD` | `flux2_klein_cpu_offload` | str | `""`, `"model"`, or `"sequential"` |
+| `SENTIMENTIZER_FLUX2_KLEIN_QUANTIZATION` | `flux2_klein_quantization` | str | `""`, `"nf4"`, or `"int8"` (quantization config for diffusers) |
+| `SENTIMENTIZER_DIFFUSION_FLUX2_KLEIN_BACKEND` | `flux2_klein_backend` | str | `"auto"`, `"diffusers"`, or `"mlx"` (inference backend) |
 | `SENTIMENTIZER_SDXL_MODELS` | `sdxl_models` | comma-list | Each entry `name:model_id`; spawns one deployment per slot |
 | `SENTIMENTIZER_DEFAULT_IMAGE_MODEL` | `default_image_model` | str | Used when request body omits `model` |
 | `SENTIMENTIZER_RATE_LIMIT_PER_MIN` | `rate_limit_per_min` | int | Per API key |

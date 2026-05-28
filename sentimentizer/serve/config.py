@@ -82,6 +82,7 @@ class ServeConfig:
     flux2_klein_model_id: str = "black-forest-labs/FLUX.2-klein-4B"
     flux2_klein_cpu_offload: str = ""
     flux2_klein_quantization: str = ""
+    flux2_klein_backend: str = "auto"
     sd35_enabled: bool = False
     sd35_model_id: str = "stabilityai/stable-diffusion-3.5-medium"
     sd35_cpu_offload: str = ""
@@ -115,6 +116,24 @@ class ServeConfig:
                 raise ValueError(f"{name} must be > 0, got {val}")
 
 
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+_FALSY = frozenset({"0", "false", "no", "off", ""})
+
+
+def _parse_bool(value: str) -> bool:
+    """Parse a string to boolean, accepting common truthy/falsy values.
+
+    Raises ValueError for unrecognized strings (e.g. "maybe").
+    This avoids the Python footgun where ``bool("false")`` is ``True``.
+    """
+    lower = value.lower().strip()
+    if lower in _TRUTHY:
+        return True
+    if lower in _FALSY:
+        return False
+    raise ValueError(f"Cannot interpret {value!r} as boolean")
+
+
 def _parse_list(value: str) -> list[str]:
     """Parse a comma-separated string into a list of stripped strings."""
     return [item.strip() for item in value.split(",") if item.strip()]
@@ -135,6 +154,7 @@ _ENV_OVERRIDES: dict[str, str] = {
     "SENTIMENTIZER_FLUX2_KLEIN_MODEL_ID": "flux2_klein_model_id",
     "SENTIMENTIZER_FLUX2_KLEIN_CPU_OFFLOAD": "flux2_klein_cpu_offload",
     "SENTIMENTIZER_FLUX2_KLEIN_QUANTIZATION": "flux2_klein_quantization",
+    "SENTIMENTIZER_DIFFUSION_FLUX2_KLEIN_BACKEND": "flux2_klein_backend",
     "SENTIMENTIZER_SD35_ENABLED": "sd35_enabled",
     "SENTIMENTIZER_SD35_MODEL_ID": "sd35_model_id",
     "SENTIMENTIZER_SD35_CPU_OFFLOAD": "sd35_cpu_offload",
@@ -151,7 +171,7 @@ _ENV_OVERRIDES: dict[str, str] = {
 
 # Type coercion for non-string fields
 # list[str] fields use _parse_list for comma-separated env var parsing
-_FIELD_TYPES: dict[str, type] = {
+_FIELD_TYPES: dict[str, type | callable] = {
     "max_batch_size": int,
     "max_text_length": int,
     "predict_batch_size": int,
@@ -159,8 +179,8 @@ _FIELD_TYPES: dict[str, type] = {
     "classify_batch_size": int,
     "classify_batch_wait_s": float,
     "cors_origins": list,
-    "flux2_klein_enabled": bool,
-    "sd35_enabled": bool,
+    "flux2_klein_enabled": _parse_bool,
+    "sd35_enabled": _parse_bool,
     "sdxl_models": list,
     "request_timeout_s": int,
     "api_keys": list,
@@ -236,3 +256,7 @@ def load_serve_config(path: str | Path | None = None) -> ServeConfig:
                     ) from None
 
     return ServeConfig(**values)
+
+
+# Global singleton instance loaded once at import time
+cfg = load_serve_config()

@@ -13,14 +13,19 @@ if __name__ == "__main__":
         "Must be set before module imports, so it's promoted to "
         "SENTIMENTIZER_SERVE_CONFIG.",
     )
+    env_diffusion = os.environ.get("SENTIMENTIZER_DIFFUSION_ENABLED", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
     parser.add_argument(
         "--diffusion",
         action="store_true",
-        default=False,
+        default=env_diffusion,
         help="Enable image generation (SD3.5/FLUX.2 Klein/SDXL) endpoints. "
         "Requires GPU hardware and model weights. "
         "Can also be enabled via config (flux2_klein_enabled, sd35_enabled, "
-        "sdxl_models).",
+        "sdxl_models) or via SENTIMENTIZER_DIFFUSION_ENABLED env var.",
     )
     args = parser.parse_args()
 

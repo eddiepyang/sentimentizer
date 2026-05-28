@@ -194,17 +194,22 @@ By default, the server binds to `0.0.0.0:8000`.
 ### Image Generation Endpoints
 
 > [!NOTE]
-> Image generation requires the `diffusion` extra and a GPU. You can install it using:
+> Image generation requires the `diffusion` extra and a GPU. On Apple Silicon Macs, you can also install the `mlx-diffusion` extra for hardware-accelerated generation using the MLX backend:
 > ```bash
+> # For standard PyTorch diffusers (CUDA/MPS/CPU):
 > uv sync --extra ray --extra diffusion
+> 
+> # For MLX acceleration on Apple Silicon (FLUX.2 Klein only):
+> uv sync --extra ray --extra diffusion --extra mlx-diffusion
 > ```
 > Enable image generation by setting `SENTIMENTIZER_SD35_ENABLED=1` and/or
 > `SENTIMENTIZER_FLUX2_KLEIN_ENABLED=1`, and provide API keys via `SENTIMENTIZER_API_KEYS`.
 > Image routes require authentication; sentiment and router routes remain unauthenticated.
 > SDXL slots are enabled via `SENTIMENTIZER_SDXL_MODELS="name1:model_id1,name2:model_id2"`
 > — each entry spawns its own GPU deployment addressable by `name` in the request body.
-> For VRAM-constrained GPUs, set `SENTIMENTIZER_SD35_CPU_OFFLOAD=sequential` (or `model`)
+> For VRAM-constrained GPUs on the standard diffusers backend, set `SENTIMENTIZER_SD35_CPU_OFFLOAD=sequential` (or `model`)
 > or the same for `FLUX2_KLEIN` to enable diffusers' CPU offload.
+> For Apple Silicon Macs using the MLX backend (via `mflux`), the CPU offload and dtype options are ignored because MLX uses unified memory and manages precision internally.
 > See [configuration.md](configuration.md#runtime-configuration) for the full env-var reference.
 
 Image generation uses separate GPU-backed Ray Serve deployments (SD35Deployment, Flux2KleinDeployment,
@@ -260,7 +265,7 @@ returned on every response. Exceeding the limit returns `429` with a `Retry-Afte
 
 The `POST /v1/images/generate` and `POST /v1/images/jobs` endpoints support a `reference_images` field (a list of base64 strings) for true reference conditioning.
 
-- **Supported Models**: FLUX.2 Klein only (requests targeting other models return HTTP 400).
+- **Supported Models & Backends**: FLUX.2 Klein only, using `backend="diffusers"` (PyTorch). Requests targeting other models or using `backend="mlx"` will return a `400` error with code `reference_images_unsupported_backend`.
 - **Constraints**: Maximum 2 reference images per request. Each image must be ≤ 512×512 pixels after decoding (262,144 pixels). Exceeding these limits results in an auto-rejection.
 - **Resolution Behavior**: Reference images do not need to match the generation resolution. The pipeline encodes them at their native dimensions and concatenates the resulting tokens. Non-square references may be cropped by the pipeline's `resize_mode="crop"`.
 - **Payload Limits**: The body size limit is 4 MiB for `/v1/images/` routes (1 MiB for all other routes). It is highly recommended to use WebP or JPEG format for reference images to stay under the limit.
@@ -291,7 +296,7 @@ The `POST /v1/images/generate` and `POST /v1/images/jobs` endpoints support a `r
 
 #### Liveness Probe
 - **Route**: `GET /health/live`
-- **Purpose**: Returns `200 OK` (e.g. `{"status": "alive", "uptime_s": 12.3}`) to confirm that the server process is running.
+- **Purpose**: Returns `200 OK` (e.g. `{"status": "live", "uptime_s": 12.3}`) to confirm that the server process is running.
 - **Command**:
   ```bash
   curl http://localhost:8000/health/live

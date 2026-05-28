@@ -78,7 +78,6 @@ from collections.abc import Awaitable, Callable
 from fastapi import FastAPI, HTTPException, Path, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from ray.serve.config import HTTPOptions
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import Response as StarletteResponse
@@ -86,7 +85,7 @@ from starlette.responses import Response as StarletteResponse
 from sentimentizer import logger
 from sentimentizer.predictor import _MODEL_CONFIGS, SentimentPredictor
 from sentimentizer.serve.base import ServiceMetrics, serve
-from sentimentizer.serve.config import load_serve_config, parse_sdxl_models
+from sentimentizer.serve.config import cfg, parse_sdxl_models
 from sentimentizer.serve.models import (
     BatchRequest,
     BatchResponse,
@@ -105,8 +104,6 @@ from sentimentizer.serve.models import (
 # ---------------------------------------------------------------------------
 # Load configuration (YAML defaults < env var overrides)
 # ---------------------------------------------------------------------------
-
-cfg = load_serve_config()
 
 if cfg.api_keys:
     os.environ.setdefault("SENTIMENTIZER_API_KEYS", ",".join(cfg.api_keys))
@@ -142,6 +139,12 @@ class _RequestBodySizeLimitMiddleware(BaseHTTPMiddleware):
         call_next: Callable[[StarletteRequest], Awaitable[StarletteResponse]],
     ) -> StarletteResponse:
         if request.method in ("POST", "PUT", "PATCH"):
+            max_bytes = self.default_max_bytes
+            for prefix, limit in self.path_limits.items():
+                if request.url.path.startswith(prefix):
+                    max_bytes = limit
+                    break
+
             content_length = request.headers.get("content-length")
             if content_length:
                 try:
@@ -156,11 +159,6 @@ class _RequestBodySizeLimitMiddleware(BaseHTTPMiddleware):
                             }
                         },
                     )
-                max_bytes = self.default_max_bytes
-                for prefix, limit in self.path_limits.items():
-                    if request.url.path.startswith(prefix):
-                        max_bytes = limit
-                        break
 
                 if length > max_bytes:
                     return JSONResponse(
@@ -172,10 +170,71 @@ class _RequestBodySizeLimitMiddleware(BaseHTTPMiddleware):
                             }
                         },
                     )
+            else:
+                # No Content-Length (e.g. Transfer-Encoding: chunked).
+                # Buffer and verify size before passing request downstream.
+                original_receive = request._receive
+                bytes_received = 0
+                chunks = []
+                is_too_large = False
+
+                while True:
+                    try:
+                        message = await original_receive()
+                    except Exception:
+                        # Client disconnected or read error
+                        break
+
+                    if message["type"] == "http.request":
+                        body = message.get("body", b"")
+                        bytes_received += len(body)
+                        chunks.append(body)
+                        if bytes_received > max_bytes:
+                            is_too_large = True
+                            break
+                        if not message.get("more_body", False):
+                            break
+                    elif message["type"] == "http.disconnect":
+                        break
+                    else:
+                        break
+
+                if is_too_large:
+                    return JSONResponse(
+                        status_code=413,
+                        content={
+                            "error": {
+                                "code": "request_too_large",
+                                "message": f"Request body exceeds {max_bytes} bytes",
+                            }
+                        },
+                    )
+
+                # Reconstruct receive so downstream can read the cached body
+                full_body = b"".join(chunks)
+                received_all = False
+
+                async def cached_receive() -> dict[str, Any]:
+                    nonlocal received_all
+                    if received_all:
+                        return {"type": "http.disconnect"}
+                    received_all = True
+                    return {
+                        "type": "http.request",
+                        "body": full_body,
+                        "more_body": False,
+                    }
+
+                request._receive = cached_receive
+
         return await call_next(request)
 
 
-def create_fastapi_app(title: str, description: str) -> FastAPI:
+def create_fastapi_app(
+    title: str,
+    description: str,
+    path_limits: dict[str, int] | None = None,
+) -> FastAPI:
     """Factory to create a FastAPI app with standard middleware and exception handlers."""
     app = FastAPI(
         title=title,
@@ -186,7 +245,7 @@ def create_fastapi_app(title: str, description: str) -> FastAPI:
     app.add_middleware(
         _RequestBodySizeLimitMiddleware,
         default_max_bytes=1 * 1024 * 1024,
-        path_limits={"/v1/images/": 4 * 1024 * 1024},
+        path_limits=path_limits,
     )
 
     app.add_middleware(
@@ -231,6 +290,22 @@ def create_fastapi_app(title: str, description: str) -> FastAPI:
     return app
 
 
+def _status_code_to_error_code(status_code: int) -> str:
+    """Map common HTTP status codes to machine-readable error codes."""
+    mapping = {
+        400: "bad_request",
+        401: "invalid_api_key",
+        403: "forbidden",
+        404: "not_found",
+        409: "idempotency_key_conflict",
+        413: "request_too_large",
+        422: "validation_error",
+        429: "rate_limit_exceeded",
+        503: "service_unavailable",
+    }
+    return mapping.get(status_code, f"error_{status_code}")
+
+
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
     """Wrap HTTPException in the standard error envelope."""
     detail = exc.detail
@@ -253,22 +328,6 @@ app = create_fastapi_app(
     title="Sentimentizer",
     description="Sentiment analysis and review routing API",
 )
-
-
-def _status_code_to_error_code(status_code: int) -> str:
-    """Map common HTTP status codes to machine-readable error codes."""
-    mapping = {
-        400: "bad_request",
-        401: "invalid_api_key",
-        403: "forbidden",
-        404: "not_found",
-        409: "idempotency_key_conflict",
-        413: "request_too_large",
-        422: "validation_error",
-        429: "rate_limit_exceeded",
-        503: "service_unavailable",
-    }
-    return mapping.get(status_code, f"error_{status_code}")
 
 
 # ---------------------------------------------------------------------------
@@ -321,6 +380,7 @@ class SentimentizerDeployment:
         except Exception as exc:
             self._load_error = str(exc)
             logger.exception("Failed to load models on startup")
+            raise
 
     def _require_ready(self) -> None:
         if not self._ready or self.predictor is None:
@@ -348,23 +408,18 @@ class SentimentizerDeployment:
         return self.predictor.model_name
 
     @staticmethod
-    def _format_prediction(
-        prediction: dict[str, Any],
-    ) -> dict[str, Any]:
+    def _format_prediction(prediction: dict[str, Any]) -> dict[str, Any]:
         """Format a prediction dict for the API response.
 
         Extracts label, score, token_count, and model from the
-        predictor's output dict. token_count is always present in
-        predictor output (predict_batch always includes it), so
-        this field is never None.
+        predictor's output dict.
         """
-        result: dict[str, Any] = {
-            "label": prediction["label"],
-            "score": prediction["score"],
-            "model": prediction["model"],
-            "token_count": prediction["token_count"],
+        return {
+            "label": prediction.get("label", "unknown"),
+            "score": prediction.get("score", 0.0),
+            "model": prediction.get("model", "unknown"),
+            "token_count": prediction.get("token_count", 0),
         }
-        return result
 
     # ------------------------------------------------------------------
     # Auto-batched endpoints (serve.batch collects individual calls)
@@ -401,7 +456,7 @@ class SentimentizerDeployment:
         """
         texts = [inp["text"] for inp in inputs]
         results = await asyncio.to_thread(self.predictor.classify_batch, texts)
-        return [r["prediction"] for r in results]
+        return results
 
     # ------------------------------------------------------------------
     # Sentiment handlers (v1/sentiment prefix)
@@ -539,7 +594,7 @@ class SentimentizerDeployment:
 
         start = time.perf_counter()
         try:
-            prediction = await self.classify_route({"text": body.text})
+            raw_result = await self.classify_route({"text": body.text})
         except Exception:
             latency = time.perf_counter() - start
             self._router_metrics.record_request(latency, error=True)
@@ -547,6 +602,7 @@ class SentimentizerDeployment:
         latency = time.perf_counter() - start
 
         self._router_metrics.record_request(latency)
+        prediction = raw_result.get("prediction", {})
         request_id = getattr(request.state, "request_id", "unknown")
         logger.info(
             "router prediction completed",
@@ -607,7 +663,7 @@ class SentimentizerDeployment:
     async def health_live(self) -> dict[str, Any]:
         """GET /health/live -- liveness probe (always returns 200)."""
         return {
-            "status": "alive",
+            "status": "live",
             "uptime_s": round(time.time() - self._started_at, 1),
         }
 
@@ -674,6 +730,8 @@ def main(host: str = "0.0.0.0", port: int = 8000, diffusion: bool = False) -> No
     """
     import sys
 
+    from ray.serve.config import HTTPOptions
+
     # RAY_ENABLE_UV_RUN_RUNTIME_ENV is already set at module level (line 51).
     os.environ.setdefault("RAY_ENABLE_RUNTIME_ENV_HOOK", "1")
     os.environ.setdefault("RAY_OVERRIDE_RUNTIME_ENV_DEFAULT_EXCLUDES", "")
@@ -736,14 +794,25 @@ def main(host: str = "0.0.0.0", port: int = 8000, diffusion: bool = False) -> No
             route_prefix="/v1/images",
         )
 
+    import signal
+    import threading
+
+    shutdown_event = threading.Event()
+
+    def handle_signal(signum: int, frame: Any) -> None:
+        try:
+            signame = signal.Signals(signum).name
+        except ValueError:
+            signame = f"signal {signum}"
+        logger.info("received_shutdown_signal", signal=signame)
+        shutdown_event.set()
+
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+
     logger.info("Sentimentizer Serve running", host=host, port=port)
 
-    try:
-        import threading
-
-        shutdown_event = threading.Event()
-        shutdown_event.wait()
-    except KeyboardInterrupt:
-        logger.info("Shutting down Serve")
-        serve.shutdown()
-        ray.shutdown()
+    shutdown_event.wait()
+    logger.info("Shutting down Serve")
+    serve.shutdown()
+    ray.shutdown()

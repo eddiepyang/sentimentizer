@@ -345,3 +345,15 @@ Grafana only reads provisioned dashboard files on **startup**, so a restart is r
 - **setfit/transformers compatibility**: `setfit 1.1.x` imports `default_logdir` from `transformers.training_args`, which was removed in `transformers 5.x`. The `sentimentizer/compat.py` module includes a monkey-patch shim that injects `default_logdir` if missing. This must be imported BEFORE `import setfit`. The shim is applied automatically by `sentimentizer/router/__init__.py` and `sentimentizer/router/train_router.py`.
 - **setfit/config_setfit.json 404**: Sentence-transformer models like `BAAI/bge-base-en-v1.5` don't have `config_setfit.json` on HuggingFace Hub. `huggingface_hub>=1.0` raises a hard 404 error. The `_load_setfit_model()` function in `train_router.py` catches this and falls back to loading via `SentenceTransformer(model_id)` then wrapping with `SetFitModel(model_body=...)`.
 - **setfit model_head is None**: When loading a sentence-transformer model as a SetFit backbone (no `config_setfit.json`), `SetFitModel(model_body=...)` does NOT auto-create a classification head. `_load_setfit_model()` creates a `LogisticRegression(max_iter=1000, solver="lbfgs")` head explicitly and sets `model.labels` to the route category names (`["dietary", "service", "general"]`).
+
+### MLX Diffusion Backend
+
+- **MLX is optional**: `pip install sentimentizer[mlx-diffusion]` adds `mflux` for Apple Silicon acceleration. Without it, all diffusion models use `diffusers` (PyTorch).
+- **`backend` config**: `DiffusionModelConfig.backend` controls which inference backend to use: `"auto"` (MLX on Apple Silicon, diffusers otherwise), `"diffusers"` (always PyTorch), or `"mlx"` (always MLX, raises ImportError if mflux not installed).
+- **Only FLUX.2 Klein has an MLX backend**: SDXL and SD3.5 have no MLX implementation. `BACKEND_REGISTRY` defines available backends per model. Setting `backend="mlx"` for sd35 or sdxl raises `ValueError`.
+- **`MLXFlux2KleinPredictor` does NOT extend `DiffusionPredictor`**: The base class calls `torch.backends.mps.is_available()` in `__init__` and uses `torch.Generator` for seed resolution. The MLX predictor replicates the interface as a standalone class to avoid any `torch` dependency in the MLX path. Both predictor families satisfy the `DiffusionPredictorProtocol` (structural typing), so `create_predictor()` is typed against the protocol — callers get accurate autocomplete and `mypy` catches interface drift regardless of backend.
+- **`model_info()` always includes `"backend"` field**: Both the base `DiffusionPredictor.model_info()` (`"diffusers"`) and `MLXFlux2KleinPredictor.model_info()` (`"mlx"`) emit this key so dashboards can filter on backend without dropping requests.
+- **`cpu_offload` and `dtype` are diffusers-only**: MLX predictor ignores these config fields and logs warnings if they're set.
+- **Quantization mapping**: Config `"nf4"`/`"int4"`/`"4bit"` → mflux `quantize=4`; `"int8"`/`"8bit"` → `quantize=8`; `None` → no quantization. No bitsandbytes needed.
+- **`reference_images` not yet supported for MLX backend**: Raises `NotImplementedError`. Use `backend="diffusers"` for reference image support.
+
