@@ -316,9 +316,7 @@ class ImagesDispatcher:
             "dim_alignment": model_cfg.dim_alignment,
         }
 
-    async def _prepare_request(
-        self, body: GenerateRequest, model_name: str
-    ) -> _PreparedRequest:
+    async def _prepare_request(self, body: GenerateRequest, model_name: str) -> _PreparedRequest:
         """Validate and resolve all request parameters shared by generate and create_job."""
         handle = self._get_handle(model_name)
         reference_images = _validate_reference_images(body, model_name)
@@ -332,7 +330,7 @@ class ImagesDispatcher:
                         "code": "reference_images_unsupported_backend",
                         "message": (
                             "reference_images require backend='diffusers'; "
-                            f"current FLUX.2 Klein backend is 'mlx'. "
+                            "current FLUX.2 Klein backend is 'mlx'. "
                             "Set SENTIMENTIZER_DIFFUSION_FLUX2_KLEIN_BACKEND=diffusers."
                         ),
                     },
@@ -341,9 +339,7 @@ class ImagesDispatcher:
         defaults = self._get_predictor_defaults(model_name)
         steps = body.steps if body.steps is not None else defaults["default_steps"]
         guidance_scale = (
-            body.guidance_scale
-            if body.guidance_scale is not None
-            else defaults["default_guidance"]
+            body.guidance_scale if body.guidance_scale is not None else defaults["default_guidance"]
         )
         max_pixels = defaults["max_pixels"]
         dim_alignment = defaults["dim_alignment"]
