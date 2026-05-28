@@ -16,7 +16,7 @@ class GenerateRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=2000)
     model: str | None = Field(
         None,
-        description="sd | flux; default: cfg.default_image_model",
+        description="flux2_klein, sd35, or sdxl_<slot>; default: cfg.default_image_model",
     )
     negative_prompt: str | None = Field(None, max_length=2000)
     steps: int | None = Field(None, ge=1, le=100, description="default depends on model")
@@ -66,7 +66,7 @@ class GenerateRequest(BaseModel):
             "examples": [
                 {
                     "prompt": "a red apple on a wooden table",
-                    "model": "sd",
+                    "model": "sd35",
                     "width": 1024,
                     "height": 1024,
                     "output_format": "png",
@@ -74,7 +74,7 @@ class GenerateRequest(BaseModel):
                 {
                     "prompt": "a cinematic portrait of an astronaut",
                     "negative_prompt": "blurry, low quality",
-                    "model": "flux",
+                    "model": "flux2_klein",
                     "steps": 28,
                     "guidance_scale": 3.5,
                     "width": 1024,
@@ -109,7 +109,7 @@ class GenerateResponse(BaseModel):
                 {
                     "id": "img_ABCDEFGHIJKL",
                     "created": 1700000000,
-                    "model": "sd",
+                    "model": "sd35",
                     "image_b64": "...",
                     "image_url": None,
                     "format": "png",
@@ -136,19 +136,21 @@ class ImageModelInfo(BaseModel):
     default_steps: int
     default_guidance: float
     quantization: str | None = None
+    backend: str = "diffusers"
 
     model_config = {
         "json_schema_extra": {
             "examples": [
                 {
-                    "name": "sd",
+                    "name": "flux2_klein",
                     "status": "loaded",
                     "max_width": 1024,
                     "max_height": 1024,
                     "max_pixels": 1048576,
-                    "default_steps": 30,
-                    "default_guidance": 7.5,
+                    "default_steps": 4,
+                    "default_guidance": 0.0,
                     "quantization": None,
+                    "backend": "diffusers",
                 }
             ]
         }
@@ -164,17 +166,18 @@ class ImageModelsResponse(BaseModel):
             "examples": [
                 {
                     "models": {
-                        "sd": {
-                            "name": "sd",
+                        "flux2_klein": {
+                            "name": "flux2_klein",
                             "status": "loaded",
                             "max_width": 1024,
                             "max_height": 1024,
                             "max_pixels": 1048576,
-                            "default_steps": 30,
-                            "default_guidance": 7.5,
+                            "default_steps": 4,
+                            "default_guidance": 0.0,
+                            "backend": "diffusers",
                         }
                     },
-                    "default": "sd",
+                    "default": "flux2_klein",
                 }
             ]
         }
@@ -189,15 +192,16 @@ class ImageModelDetailResponse(BaseModel):
         "json_schema_extra": {
             "examples": [
                 {
-                    "model": "sd",
+                    "model": "flux2_klein",
                     "info": {
-                        "name": "sd",
+                        "name": "flux2_klein",
                         "status": "loaded",
                         "max_width": 1024,
                         "max_height": 1024,
                         "max_pixels": 1048576,
-                        "default_steps": 30,
-                        "default_guidance": 7.5,
+                        "default_steps": 4,
+                        "default_guidance": 0.0,
+                        "backend": "diffusers",
                     },
                 }
             ]
@@ -223,7 +227,7 @@ class JobResponse(BaseModel):
                     "status": "queued",
                     "created": 1700000000,
                     "updated": 1700000000,
-                    "model": "flux",
+                    "model": "flux2_klein",
                     "user": None,
                 }
             ]
@@ -245,7 +249,7 @@ class JobListResponse(BaseModel):
                             "status": "processing",
                             "created": 1700000000,
                             "updated": 1700000000,
-                            "model": "flux",
+                            "model": "flux2_klein",
                         }
                     ],
                     "next_page_token": None,

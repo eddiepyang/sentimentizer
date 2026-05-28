@@ -17,6 +17,7 @@ sd35:
   max_pixels: 1048576
   dim_alignment: 16
   cpu_offload: null
+  backend: "diffusers"
 
 sdxl:
   model_id: "RunDiffusion/Juggernaut-XL-v9"
@@ -27,6 +28,7 @@ sdxl:
   max_pixels: 1048576
   dim_alignment: 8
   cpu_offload: null
+  backend: "diffusers"
 
 # FLUX.2 Klein 4B — step-distilled, Apache-2.0, ~13 GB VRAM at native placement.
 # Klein is unguided (default_guidance=0). Verify the exact HuggingFace repo
@@ -44,3 +46,4 @@ flux2_klein:
   max_pixels: 1048576
   dim_alignment: 16
   cpu_offload: null
+  backend: "auto"

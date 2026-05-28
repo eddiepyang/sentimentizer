@@ -22,8 +22,11 @@ uv add "sentimentizer[ray]"
 # Install with image generation (Stable Diffusion / FLUX)
 uv add "sentimentizer[diffusion]"
 
-# Install both
-uv add "sentimentizer[ray,diffusion]"
+# Install with hardware-accelerated image generation on Apple Silicon (via mflux)
+uv add "sentimentizer[mlx-diffusion]"
+
+# Install all features
+uv add "sentimentizer[ray,diffusion,mlx-diffusion]"
 ```
 
 ---
@@ -53,15 +56,18 @@ Models output **3-class probabilities** (negative, neutral, positive) that sum t
 
 ## Image Generation (SD 3.5 Medium / FLUX.2 Klein / SDXL)
 
-The diffusion serving pipeline adds GPU-backed image generation endpoints alongside sentiment analysis. Disabled by default; enable via config. Three models are supported: **SD 3.5 Medium** (Stability Community License, 1024² flagship), **FLUX.2 Klein 4B** (Apache 2.0, step-distilled, ~13 GB VRAM), and **SDXL** with multi-slot support for drop-in fine-tunes (Juggernaut XL, Illustrious XL, etc.).
+The diffusion serving pipeline adds GPU-backed image generation endpoints alongside sentiment analysis. Disabled by default; enable via config. Three models are supported: **SD 3.5 Medium** (Stability Community License, 1024² flagship), **FLUX.2 Klein 4B** (Apache 2.0, step-distilled, ~13 GB VRAM), and **SDXL** with multi-slot support for drop-in fine-tunes (Juggernaut XL, Illustrious XL, etc.). On Apple Silicon Macs, the FLUX.2 Klein model can be hardware-accelerated using the native MLX framework (via `mflux`), which yields a **4-5x speedup** (~3.7s per image).
 
 ### Prerequisites
 
 ```bash
-# Install with diffusion support (includes diffusers, transformers, accelerate, safetensors)
+# Install with standard PyTorch diffusers support:
 uv sync --extra diffusion
 
-# For GPU: install CUDA-enabled PyTorch
+# For MLX acceleration on Apple Silicon (FLUX.2 Klein only):
+uv sync --extra diffusion --extra mlx-diffusion
+
+# For CUDA GPU: install CUDA-enabled PyTorch
 uv sync --no-sources-package torch
 ```
 
@@ -92,6 +98,10 @@ flux2_klein_model_id: "black-forest-labs/FLUX.2-klein-4B"
 # "" (default, full GPU), "model" (whole-module swap), "sequential" (submodule swap)
 sd35_cpu_offload: ""
 flux2_klein_cpu_offload: ""
+
+# Optional: backend to use for FLUX.2 Klein
+# "auto" (default, MLX on Apple Silicon, diffusers otherwise), "diffusers", or "mlx"
+flux2_klein_backend: "auto"
 ```
 
 Or via environment variables:
@@ -109,6 +119,9 @@ export SENTIMENTIZER_SDXL_MODELS="anime:John6666/noob-sdxl-v10,base:stabilityai/
 
 # Optional: cap VRAM with CPU offload (see "Low VRAM" below)
 export SENTIMENTIZER_SD35_CPU_OFFLOAD=sequential
+
+# Optional: backend to use for FLUX.2 Klein ("auto", "diffusers", or "mlx")
+export SENTIMENTIZER_DIFFUSION_FLUX2_KLEIN_BACKEND=auto
 ```
 
 ### Run
@@ -164,7 +177,8 @@ The selected mode is logged at warmup as `cpu_offload=<mode>` so you can confirm
 
 ### MPS (Apple Silicon) Support
 
-SD 3.5 Medium and SDXL run on MPS devices in fp16. FLUX.2 Klein requires recent diffusers MPS support — verify against the current model card before enabling on Apple Silicon.
+- **SD 3.5 Medium and SDXL**: Run on MPS devices in fp16 using `diffusers`.
+- **FLUX.2 Klein**: Can run on MPS via `diffusers` (slow: ~18-20s per image) or via **MLX** (fast: **~3.7s steady-state** with a ~5s cold start on M3 Ultra). Install with `uv sync --extra mlx-diffusion` and set `flux2_klein_backend: "auto"` or `"mlx"`. CPU offloading and dtype parameters are ignored by the MLX backend because MLX manages precision and uses unified system memory.
 
 ### API Endpoints
 
@@ -231,8 +245,8 @@ uv sync --extra dev --extra ray
 # Install with diffusion (image generation) support
 uv sync --extra diffusion
 
-# Full development install
-uv sync --extra dev --extra ray --extra diffusion
+# Full development install with MLX support
+uv sync --extra dev --extra ray --extra diffusion --extra mlx-diffusion
 ```
 
 ### Local CUDA / GPU development
@@ -295,7 +309,9 @@ sentimentizer/
 │   ├── config.py             # DiffusionModelConfig + load_diffusion_config() (YAML + env-var overrides)
 │   ├── diffusion_config.yaml # SD35 / SDXL / FLUX.2 Klein defaults (steps, guidance, cpu_offload)
 │   ├── job_store.py          # JobStoreLogic + Ray actor for async job metadata
-│   └── predictor.py          # DiffusionPredictor ABC, SD35Predictor, SDXLPredictor, Flux2KleinPredictor
+│   ├── mlx_compat.py         # MFLUX_AVAILABLE and is_mlx_device() guards
+│   ├── mlx_predictor.py      # MLXFlux2KleinPredictor implementation (no torch dependency)
+│   └── predictor.py          # DiffusionPredictor ABC, SD35Predictor, SDXLPredictor, Flux2KleinPredictor, create_predictor()
 ├── tokenizer.py           # Text tokenizer with pre-trained support
 ├── trainer.py             # Training logic
 ├── tuner.py               # Ray Tune + Optuna hyperparameter search

@@ -34,6 +34,7 @@ flux2_klein_cpu_offload: ""        # "", "model", or "sequential"
 # "int8" 8-bit (~9 GB peak). Requires `bitsandbytes`. Pair with
 # flux2_klein_cpu_offload: "model" on 11 GB cards.
 flux2_klein_quantization: ""
+flux2_klein_backend: "auto"    # "auto", "diffusers", or "mlx"
 sd35_enabled: false
 sd35_model_id: "stabilityai/stable-diffusion-3.5-medium"
 sd35_cpu_offload: ""               # "", "model", or "sequential"

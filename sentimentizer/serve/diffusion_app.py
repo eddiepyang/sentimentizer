@@ -9,28 +9,32 @@ FastAPI app from ``sentimentizer/serve/app.py``.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import time
+from dataclasses import dataclass
 from typing import Any
 
+import orjson
 import torch
 from fastapi import Depends, HTTPException, Query, Request, Response
 
 from sentimentizer import logger
-from sentimentizer.diffusion.predictor import (
+from sentimentizer.diffusion.config import (
+    FLUX2_KLEIN_DEFAULT_CONFIG,
+    SD35_DEFAULT_CONFIG,
+    SDXL_DEFAULT_CONFIG,
+)
+from sentimentizer.diffusion.image_utils import (
     _REF_MAX_PIXELS,
-    Flux2KleinPredictor,
-    SD35Predictor,
-    SDXLPredictor,
-    _b64,
-    _decode_b64_image,
-    _encode_pil,
-    _generate_id,
+    b64_encode,
+    decode_b64_image,
+    encode_pil,
+    generate_id,
 )
-from sentimentizer.serve.app import (
-    cfg,  # noqa: E402
-    create_fastapi_app,
-)
+from sentimentizer.diffusion.predictor import create_predictor
+from sentimentizer.serve.app import create_fastapi_app
 from sentimentizer.serve.base import ServiceMetrics, serve
+from sentimentizer.serve.config import cfg
 from sentimentizer.serve.diffusion_models import (
     GenerateRequest,
     GenerateResponse,
@@ -48,26 +52,66 @@ from sentimentizer.serve.middleware import (
 )
 
 
-def _body_hash(body: Any) -> str:
-    import hashlib
-
-    import orjson
-
-    if hasattr(body, "model_dump"):
-        data = body.model_dump(mode="python")
-    elif hasattr(body, "dict"):
-        data = body.dict()
-    else:
-        data = body
-    raw = orjson.dumps(data, option=orjson.OPT_SORT_KEYS)
+def _body_hash(body: GenerateRequest) -> str:
+    raw = orjson.dumps(body.model_dump(mode="python"), option=orjson.OPT_SORT_KEYS)
     return hashlib.sha256(raw).hexdigest()[:32]
 
 
 _num_gpus = 1 if torch.cuda.is_available() else 0
 
+_PREDICTOR_DEFAULTS: dict[str, Any] = {
+    "flux2_klein": FLUX2_KLEIN_DEFAULT_CONFIG,
+    "sd35": SD35_DEFAULT_CONFIG,
+    "sdxl": SDXL_DEFAULT_CONFIG,
+}
+
+
+def _validate_reference_images(
+    body: GenerateRequest,
+    model_name: str,
+) -> list[Any] | None:
+    """Decode and validate reference_images from the request body.
+
+    Returns the decoded PIL image list, or None if no reference images.
+    Raises HTTPException on validation failure.
+    """
+    if body.reference_images is None:
+        return None
+    if model_name != "flux2_klein":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "reference_images_unsupported",
+                "message": "Reference images are only supported by FLUX.2 Klein",
+            },
+        )
+    try:
+        return [decode_b64_image(b64, _REF_MAX_PIXELS) for b64 in body.reference_images]
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "invalid_reference_image",
+                "message": str(exc),
+            },
+        ) from exc
+
+
+@dataclass
+class _PreparedRequest:
+    model_name: str
+    handle: Any
+    reference_images: list[Any] | None
+    steps: int
+    guidance_scale: float
+    max_pixels: int
+    dim_alignment: int
+
+
 images_app = create_fastapi_app(
     title="Sentimentizer Images",
-    description="Image generation API (SD 3.5 Medium / FLUX.2 Klein / SDXL)",
+    description="Image generation API (FLUX.2 Klein / SD 3.5 Medium / SDXL)",
+    path_limits={"/": 4 * 1024 * 1024},
 )
 
 
@@ -75,6 +119,7 @@ images_app = create_fastapi_app(
     num_replicas=1,
     max_ongoing_requests=4,
     ray_actor_options={"num_cpus": 2, "num_gpus": _num_gpus},
+    health_check_timeout_s=600,
 )
 class Flux2KleinDeployment:
     def __init__(self) -> None:
@@ -89,17 +134,28 @@ class Flux2KleinDeployment:
             overrides["cpu_offload"] = cfg.flux2_klein_cpu_offload
         if cfg.flux2_klein_quantization:
             overrides["quantization"] = cfg.flux2_klein_quantization
+        if cfg.flux2_klein_backend:
+            overrides["backend"] = cfg.flux2_klein_backend
         model_cfg = (
             replace(FLUX2_KLEIN_DEFAULT_CONFIG, **overrides)
             if overrides
             else FLUX2_KLEIN_DEFAULT_CONFIG
         )
-        self.predictor = Flux2KleinPredictor(model_cfg)
+        self.predictor = create_predictor("flux2_klein", model_cfg)
         self.predictor.warmup()
         self._metrics = ServiceMetrics(prefix="flux2_klein")
 
     async def generate(self, **kwargs: Any) -> tuple[Any, int]:
-        return await asyncio.to_thread(self.predictor.generate, **kwargs)
+        start = time.perf_counter()
+        try:
+            res = await asyncio.to_thread(self.predictor.generate, **kwargs)
+        except Exception:
+            latency = time.perf_counter() - start
+            self._metrics.record_request(latency, error=True)
+            raise
+        latency = time.perf_counter() - start
+        self._metrics.record_request(latency)
+        return res
 
     def info(self) -> dict[str, Any]:
         return self.predictor.model_info()
@@ -109,6 +165,7 @@ class Flux2KleinDeployment:
     num_replicas=1,
     max_ongoing_requests=4,
     ray_actor_options={"num_cpus": 2, "num_gpus": _num_gpus},
+    health_check_timeout_s=600,
 )
 class SD35Deployment:
     def __init__(self) -> None:
@@ -122,12 +179,21 @@ class SD35Deployment:
         if cfg.sd35_cpu_offload:
             overrides["cpu_offload"] = cfg.sd35_cpu_offload
         model_cfg = replace(SD35_DEFAULT_CONFIG, **overrides) if overrides else SD35_DEFAULT_CONFIG
-        self.predictor = SD35Predictor(model_cfg)
+        self.predictor = create_predictor("sd35", model_cfg)
         self.predictor.warmup()
         self._metrics = ServiceMetrics(prefix="sd35")
 
     async def generate(self, **kwargs: Any) -> tuple[Any, int]:
-        return await asyncio.to_thread(self.predictor.generate, **kwargs)
+        start = time.perf_counter()
+        try:
+            res = await asyncio.to_thread(self.predictor.generate, **kwargs)
+        except Exception:
+            latency = time.perf_counter() - start
+            self._metrics.record_request(latency, error=True)
+            raise
+        latency = time.perf_counter() - start
+        self._metrics.record_request(latency)
+        return res
 
     def info(self) -> dict[str, Any]:
         return self.predictor.model_info()
@@ -137,6 +203,7 @@ class SD35Deployment:
     num_replicas=1,
     max_ongoing_requests=4,
     ray_actor_options={"num_cpus": 2, "num_gpus": _num_gpus},
+    health_check_timeout_s=600,
 )
 class SDXLDeployment:
     def __init__(self, model_id: str) -> None:
@@ -147,12 +214,21 @@ class SDXLDeployment:
         model_cfg = (
             replace(SDXL_DEFAULT_CONFIG, model_id=model_id) if model_id else SDXL_DEFAULT_CONFIG
         )
-        self.predictor = SDXLPredictor(model_cfg)
+        self.predictor = create_predictor("sdxl", model_cfg)
         self.predictor.warmup()
         self._metrics = ServiceMetrics(prefix="sdxl")
 
     async def generate(self, **kwargs: Any) -> tuple[Any, int]:
-        return await asyncio.to_thread(self.predictor.generate, **kwargs)
+        start = time.perf_counter()
+        try:
+            res = await asyncio.to_thread(self.predictor.generate, **kwargs)
+        except Exception:
+            latency = time.perf_counter() - start
+            self._metrics.record_request(latency, error=True)
+            raise
+        latency = time.perf_counter() - start
+        self._metrics.record_request(latency)
+        return res
 
     def info(self) -> dict[str, Any]:
         return self.predictor.model_info()
@@ -184,6 +260,8 @@ class ImagesDispatcher:
         self._idem = IdempotencyCache(ttl_s=cfg.idempotency_ttl_s)
         self._store: Any = None
         self._refs: dict[str, Any] = {}
+        self._poll_tasks: set[asyncio.Task] = set()
+        self._backend_by_model: dict[str, str] = {}
 
     def _get_handle(self, model: str) -> Any:
         if model not in self._handles:
@@ -196,6 +274,12 @@ class ImagesDispatcher:
                 },
             )
         return self._handles[model]
+
+    async def _get_backend(self, model: str) -> str:
+        if model not in self._backend_by_model:
+            info = await self._handles[model].info.remote()
+            self._backend_by_model[model] = info.get("backend", "diffusers")
+        return self._backend_by_model[model]
 
     def _get_store(self) -> Any:
         import ray
@@ -214,27 +298,81 @@ class ImagesDispatcher:
         return self._store
 
     def _get_predictor_defaults(self, model: str) -> dict[str, Any]:
-        from sentimentizer.diffusion.config import (
-            FLUX2_KLEIN_DEFAULT_CONFIG,
-            SD35_DEFAULT_CONFIG,
-            SDXL_DEFAULT_CONFIG,
-        )
-
-        defaults_map = {
-            "flux2_klein": FLUX2_KLEIN_DEFAULT_CONFIG,
-            "sd35": SD35_DEFAULT_CONFIG,
-        }
-        model_cfg = defaults_map.get(model)
+        model_cfg = _PREDICTOR_DEFAULTS.get(model)
         if model_cfg is None and model in self._sdxl_names:
             model_cfg = SDXL_DEFAULT_CONFIG
         if model_cfg is None:
-            return {}
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "model_unavailable",
+                    "message": f"No default config for model '{model}'",
+                },
+            )
         return {
             "default_steps": model_cfg.default_steps,
             "default_guidance": model_cfg.default_guidance,
             "max_pixels": model_cfg.max_pixels,
             "dim_alignment": model_cfg.dim_alignment,
         }
+
+    async def _prepare_request(self, body: GenerateRequest, model_name: str) -> _PreparedRequest:
+        """Validate and resolve all request parameters shared by generate and create_job."""
+        handle = self._get_handle(model_name)
+        reference_images = _validate_reference_images(body, model_name)
+
+        if body.reference_images is not None and reference_images is not None:
+            backend = await self._get_backend(model_name)
+            if backend == "mlx":
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "reference_images_unsupported_backend",
+                        "message": (
+                            "reference_images require backend='diffusers'; "
+                            "current FLUX.2 Klein backend is 'mlx'. "
+                            "Set SENTIMENTIZER_DIFFUSION_FLUX2_KLEIN_BACKEND=diffusers."
+                        ),
+                    },
+                )
+
+        defaults = self._get_predictor_defaults(model_name)
+        steps = body.steps if body.steps is not None else defaults["default_steps"]
+        guidance_scale = (
+            body.guidance_scale if body.guidance_scale is not None else defaults["default_guidance"]
+        )
+        max_pixels = defaults["max_pixels"]
+        dim_alignment = defaults["dim_alignment"]
+
+        w_h = body.width * body.height
+        if w_h > max_pixels:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "invalid_dimensions",
+                    "message": f"width×height ({w_h}) exceeds model max ({max_pixels})",
+                },
+            )
+        if body.width % dim_alignment or body.height % dim_alignment:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "invalid_dimensions",
+                    "message": f"{model_name} requires dimensions aligned to {dim_alignment}px",
+                },
+            )
+
+        check_prompt_safety(body.prompt)
+
+        return _PreparedRequest(
+            model_name=model_name,
+            handle=handle,
+            reference_images=reference_images,
+            steps=steps,
+            guidance_scale=guidance_scale,
+            max_pixels=max_pixels,
+            dim_alignment=dim_alignment,
+        )
 
     @images_app.post(
         "/generate",
@@ -250,29 +388,13 @@ class ImagesDispatcher:
     ) -> dict[str, Any]:
         model_name = body.model or cfg.default_image_model
 
-        if body.reference_images is not None:
-            if model_name != "flux2_klein":
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "code": "reference_images_unsupported",
-                        "message": "Reference images are only supported by FLUX.2 Klein",
-                    },
-                )
-            try:
-                reference_images = [
-                    _decode_b64_image(b64, _REF_MAX_PIXELS) for b64 in body.reference_images
-                ]
-            except ValueError as exc:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "code": "invalid_reference_image",
-                        "message": str(exc),
-                    },
-                ) from exc
-        else:
-            reference_images = None
+        if idempotency_key and api_key:
+            self._idem.check_conflict(api_key, idempotency_key, _body_hash(body))
+            cached = self._idem.get(api_key, idempotency_key)
+            if cached is not None:
+                return cached
+
+        req = await self._prepare_request(body, model_name)
 
         request_id = getattr(request.state, "request_id", "unknown")
         logger.info(
@@ -282,65 +404,26 @@ class ImagesDispatcher:
             height=body.height,
             request_id=request_id,
         )
-        handle = self._get_handle(model_name)
-
-        defaults = self._get_predictor_defaults(model_name)
-        steps = body.steps if body.steps is not None else defaults.get("default_steps", 30)
-        guidance_scale = (
-            body.guidance_scale
-            if body.guidance_scale is not None
-            else defaults.get("default_guidance", 7.5)
-        )
-        max_pixels = defaults.get("max_pixels", 1048576)
-        dim_alignment = defaults.get("dim_alignment", 8)
-
-        w_h = body.width * body.height
-        if w_h > max_pixels:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "code": "invalid_dimensions",
-                    "message": (f"width×height ({w_h}) exceeds " f"model max ({max_pixels})"),
-                },
-            )
-        if body.width % dim_alignment or body.height % dim_alignment:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "code": "invalid_dimensions",
-                    "message": (
-                        f"{model_name} requires dimensions " f"aligned to {dim_alignment}px"
-                    ),
-                },
-            )
-
-        check_prompt_safety(body.prompt)
-
-        if idempotency_key and api_key:
-            self._idem.check_conflict(api_key, idempotency_key, _body_hash(body))
-            cached = self._idem.get(api_key, idempotency_key)
-            if cached is not None:
-                return cached
 
         start = time.perf_counter()
-        image, used_seed = await handle.generate.remote(
+        image, used_seed = await req.handle.generate.remote(
             prompt=body.prompt,
             negative_prompt=body.negative_prompt,
-            steps=steps,
-            guidance_scale=guidance_scale,
+            steps=req.steps,
+            guidance_scale=req.guidance_scale,
             width=body.width,
             height=body.height,
             seed=body.seed,
-            reference_images=reference_images,
+            reference_images=req.reference_images,
         )
         latency = time.perf_counter() - start
 
-        img_bytes = _encode_pil(image, format=body.output_format)
-        image_b64 = _b64(img_bytes) if body.response_format == "b64_json" else None
+        img_bytes = encode_pil(image, format=body.output_format)
+        image_b64 = b64_encode(img_bytes) if body.response_format == "b64_json" else None
         image_url = None
 
         response = {
-            "id": _generate_id(),
+            "id": generate_id(),
             "created": int(time.time()),
             "model": model_name,
             "image_b64": image_b64,
@@ -349,8 +432,8 @@ class ImagesDispatcher:
             "width": body.width,
             "height": body.height,
             "seed": used_seed,
-            "steps": steps,
-            "guidance_scale": guidance_scale,
+            "steps": req.steps,
+            "guidance_scale": req.guidance_scale,
             "negative_prompt": body.negative_prompt,
             "latency_s": round(latency, 4),
         }
@@ -424,82 +507,26 @@ class ImagesDispatcher:
     ) -> dict[str, Any]:
         model_name = body.model or cfg.default_image_model
 
-        if body.reference_images is not None:
-            if model_name != "flux2_klein":
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "code": "reference_images_unsupported",
-                        "message": "Reference images are only supported by FLUX.2 Klein",
-                    },
-                )
-            try:
-                reference_images = [
-                    _decode_b64_image(b64, _REF_MAX_PIXELS) for b64 in body.reference_images
-                ]
-            except ValueError as exc:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "code": "invalid_reference_image",
-                        "message": str(exc),
-                    },
-                ) from exc
-        else:
-            reference_images = None
-
-        handle = self._get_handle(model_name)
-
-        defaults = self._get_predictor_defaults(model_name)
-        steps = body.steps if body.steps is not None else defaults.get("default_steps", 30)
-        guidance_scale = (
-            body.guidance_scale
-            if body.guidance_scale is not None
-            else defaults.get("default_guidance", 7.5)
-        )
-        max_pixels = defaults.get("max_pixels", 1048576)
-        dim_alignment = defaults.get("dim_alignment", 8)
-
-        w_h = body.width * body.height
-        if w_h > max_pixels:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "code": "invalid_dimensions",
-                    "message": (f"width\u00d7height ({w_h}) exceeds " f"model max ({max_pixels})"),
-                },
-            )
-        if body.width % dim_alignment or body.height % dim_alignment:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "code": "invalid_dimensions",
-                    "message": (
-                        f"{model_name} requires dimensions " f"aligned to {dim_alignment}px"
-                    ),
-                },
-            )
-
-        check_prompt_safety(body.prompt)
-
-        store = self._get_store()
-
         if idempotency_key and api_key:
             self._idem.check_conflict(api_key, idempotency_key, _body_hash(body))
             cached = self._idem.get(api_key, idempotency_key)
             if cached is not None:
-                response.headers["Location"] = f"/v1/images/jobs/{cached['job_id']}"
+                prefix = request.scope.get("root_path", "/v1/images")
+                response.headers["Location"] = f"{prefix}/jobs/{cached['job_id']}"
                 return cached
 
-        ref = handle.generate.remote(
+        req = await self._prepare_request(body, model_name)
+        store = self._get_store()
+
+        ref = req.handle.generate.remote(
             prompt=body.prompt,
             negative_prompt=body.negative_prompt,
-            steps=steps,
-            guidance_scale=guidance_scale,
+            steps=req.steps,
+            guidance_scale=req.guidance_scale,
             width=body.width,
             height=body.height,
             seed=body.seed,
-            reference_images=reference_images,
+            reference_images=req.reference_images,
         )
 
         job_id = await store.submit.remote(
@@ -514,7 +541,8 @@ class ImagesDispatcher:
 
         job_resp = await store.get.remote(job_id, api_key)
 
-        response.headers["Location"] = f"/v1/images/jobs/{job_id}"
+        prefix = request.scope.get("root_path", "/v1/images")
+        response.headers["Location"] = f"{prefix}/jobs/{job_id}"
 
         if idempotency_key and api_key:
             self._idem.put(api_key, idempotency_key, job_resp, _body_hash(body))
@@ -525,6 +553,7 @@ class ImagesDispatcher:
             model=model_name,
             user=body.user,
             key_prefix=api_key[:8],
+            request_id=getattr(request.state, "request_id", "unknown"),
             reference_images_count=len(body.reference_images) if body.reference_images else 0,
         )
 
@@ -544,15 +573,20 @@ class ImagesDispatcher:
                 result = await ref
                 await store.set_succeeded.remote(job_id, result)
             except ray.exceptions.TaskCancelledError:
-                pass
+                # Normal path: cancel_job already set status to "canceled" before
+                # calling ray.cancel(). For unexpected cancellation (preemption, OOM),
+                # mark as failed so the job doesn't stay in "processing" indefinitely.
+                status = await store.get_status.remote(job_id)
+                if status not in ("canceled", "succeeded", "failed"):
+                    await store.set_failed.remote(job_id, "task_cancelled", "task was cancelled")
             except Exception as exc:
                 await store.set_failed.remote(job_id, "generation_failed", str(exc))
             finally:
                 self._refs.pop(job_id, None)
 
-        import asyncio
-
-        asyncio.create_task(_poll())
+        task = asyncio.create_task(_poll())
+        self._poll_tasks.add(task)
+        task.add_done_callback(self._poll_tasks.discard)
 
     @images_app.get(
         "/jobs/{job_id}",

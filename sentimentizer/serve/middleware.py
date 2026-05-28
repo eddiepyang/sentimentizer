@@ -18,8 +18,23 @@ from fastapi import Depends, Header, HTTPException, Request, Response
 from sentimentizer import logger
 from sentimentizer.safety import is_safe
 
+_valid_keys_cache: frozenset[str] | None = None
 
-def require_api_key(authorization: str = Header(...)) -> str:
+
+def _load_valid_keys() -> frozenset[str]:
+    """Load valid API keys from the ServeConfig (written to env at startup).
+
+    Cached on first call; refresh by setting the module-global
+    ``_valid_keys_cache`` back to ``None``.
+    """
+    global _valid_keys_cache
+    if _valid_keys_cache is None:
+        valid_keys_str = os.environ.get("SENTIMENTIZER_API_KEYS", "")
+        _valid_keys_cache = frozenset(k.strip() for k in valid_keys_str.split(",") if k.strip())
+    return _valid_keys_cache
+
+
+def require_api_key(authorization: str | None = Header(default=None)) -> str:
     """FastAPI dependency: validate Bearer token against SENTIMENTIZER_API_KEYS.
 
     Returns the validated API key string for downstream use.
@@ -41,8 +56,7 @@ def require_api_key(authorization: str = Header(...)) -> str:
         )
 
     token = parts[1].strip()
-    valid_keys_str = os.environ.get("SENTIMENTIZER_API_KEYS", "")
-    valid_keys = [k.strip() for k in valid_keys_str.split(",") if k.strip()]
+    valid_keys = _load_valid_keys()
 
     if token not in valid_keys:
         raise HTTPException(
@@ -50,7 +64,7 @@ def require_api_key(authorization: str = Header(...)) -> str:
             detail={"code": "invalid_api_key", "message": "Invalid API key"},
         )
 
-    logger.info("api_key_authenticated", key_prefix=token[:8])
+    logger.debug("api_key_authenticated", key_prefix=token[:8])
     return token
 
 
@@ -80,6 +94,10 @@ class RateLimiter:
             bucket = _TokenBucket(self._rpm, self._burst)
             self._buckets[key] = bucket
 
+        # Evict stale buckets periodically (amortized O(1))
+        if len(self._buckets) > 100:
+            self._evict_stale(now)
+
         allowed = bucket.consume(now)
         reset_at = int(bucket.reset_at(now))
 
@@ -107,6 +125,17 @@ class RateLimiter:
             remaining=bucket.remaining(now),
             reset_at=int(bucket.reset_at(now)),
         )
+
+    def _evict_stale(self, now: float) -> None:
+        """Drop buckets whose last refill was more than 2x their full-refill window."""
+        max_age = max(120, 2 * self._burst * 60 // max(self._rpm, 1))
+        stale_keys = [
+            k
+            for k, b in self._buckets.items()
+            if b._last_refill and (now - b._last_refill) > max_age
+        ]
+        for k in stale_keys:
+            del self._buckets[k]
 
 
 class _TokenBucket:
@@ -151,7 +180,21 @@ class _TokenBucket:
         return max(1, int(wait) + 1)
 
 
-_limiter = RateLimiter()
+_limiter: RateLimiter | None = None
+
+
+def _get_limiter() -> RateLimiter:
+    """Get or initialize the global RateLimiter lazily from ServeConfig."""
+    global _limiter
+    if _limiter is None:
+        from sentimentizer.serve.config import load_serve_config
+
+        cfg = load_serve_config()
+        _limiter = RateLimiter(
+            requests_per_min=cfg.rate_limit_per_min,
+            burst=cfg.rate_limit_burst,
+        )
+    return _limiter
 
 
 def rate_limit(
@@ -160,7 +203,8 @@ def rate_limit(
     api_key: str = Depends(require_api_key),
 ) -> None:
     """FastAPI dependency: enforce per-key rate limit and inject headers."""
-    state = _limiter.check(api_key)
+    limiter = _get_limiter()
+    state = limiter.check(api_key)
     response.headers["X-RateLimit-Limit"] = str(state.limit)
     response.headers["X-RateLimit-Remaining"] = str(state.remaining)
     response.headers["X-RateLimit-Reset"] = str(state.reset_at)
@@ -191,6 +235,9 @@ class IdempotencyCache:
     def put(self, api_key: str, key: str, body: Any, request_body_hash: str = "") -> None:
         cache_key = (api_key, key)
         self._cache[cache_key] = (body, request_body_hash, time.time() + self._ttl_s)
+        # Evict expired entries periodically (amortized O(1))
+        if len(self._cache) > 100:
+            self.reap()
 
     def check_conflict(self, api_key: str, key: str, request_body_hash: str) -> None:
         cache_key = (api_key, key)
