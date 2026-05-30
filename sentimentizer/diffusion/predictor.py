@@ -472,8 +472,13 @@ class Flux2KleinPredictor(DiffusionPredictor):
             result = self._pipeline(**call_kwargs)
             return result.images[0], used_seed
         finally:
-            gc.collect()
-            torch.cuda.empty_cache()
+            # Clearing the CUDA allocator cache only helps under CPU offload
+            # (model or sequential), where module weights shuttle between CPU
+            # and GPU and the cache fragments. When the model is resident on the
+            # GPU, this just forces costly re-allocation on the next generation.
+            if self.cfg.cpu_offload:
+                gc.collect()
+                torch.cuda.empty_cache()
 
 
 @runtime_checkable

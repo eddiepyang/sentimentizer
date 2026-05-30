@@ -5,10 +5,9 @@ on:
     types: [published]
   push:
     branches:
-      - master
+      - main
     paths:
       - 'pyproject.toml'
-  workflow_dispatch:
 
 permissions:
   id-token: write
@@ -25,7 +24,7 @@ jobs:
           fetch-depth: 2
       - id: check
         run: |
-          if [ "${{ github.event_name }}" = "release" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "${{ github.event_name }}" = "release" ]; then
             echo "should_publish=true" >> "$GITHUB_OUTPUT"
           else
             if ! git show HEAD~1:pyproject.toml >/dev/null 2>&1; then
@@ -47,6 +46,8 @@ jobs:
   lint:
     needs: check-version
     if: needs.check-version.outputs.should_publish == 'true'
+    needs: check-version
+    if: needs.check-version.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -62,6 +63,8 @@ jobs:
       - run: uv run black --check .
 
   test:
+    needs: [check-version, lint]
+    if: needs.check-version.outputs.should_publish == 'true'
     needs: [check-version, lint]
     if: needs.check-version.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
@@ -89,7 +92,7 @@ jobs:
     needs: [check-version, test]
     if: |
       needs.check-version.outputs.should_publish == 'true' &&
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'release' && github.event.release.target_commitish == 'master'))
+      (github.event_name == 'push' || (github.event_name == 'release' && github.event.release.target_commitish == 'main'))
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
