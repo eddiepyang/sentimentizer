@@ -791,7 +791,6 @@ def main(host: str = "0.0.0.0", port: int = 8000, diffusion: bool = False) -> No
         )
 
     import signal
-    import threading
 
     shutdown_event = threading.Event()
 
