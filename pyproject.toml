@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sentimentizer"
-version = "0.320.0"
+version = "0.330.0"
 description = "smole language models"
 readme = "README.md"
 authors = [{ name = "Edward Yang", email = "edwardpyang@gmail.com" }]
@@ -49,6 +49,15 @@ ray = [
     "ray[train]>=2.55.1,<2.56.0",
     "ray[tune]>=2.55.1,<2.56.0",
     "optuna>=4.8.0",
+]
+diffusion = [
+    "diffusers>=0.38.0",
+    "accelerate>=1.8.0",
+    "pillow>=12.0.0",
+    "torchvision>=0.15.0",
+]
+mlx-diffusion = [
+    "mflux>=0.17.0",
 ]
 router = [
     "sentence-transformers>=4.0.0",
@@ -125,3 +134,8 @@ filterwarnings = [
     "ignore:.*use_polars.*:DeprecationWarning",
     "ignore:.*use_arrow_tensor_v2.*:DeprecationWarning"
 ]
+
+[tool.uv]
+# diffusers 0.38.0 transitively requires safetensors>=0.8.0rc0 — opt the
+# project into pre-releases so uv sync doesn't require --prerelease=allow.
+prerelease = "allow"

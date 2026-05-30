@@ -33,6 +33,20 @@ Endpoints:
     POST /v1/router/batch     -- Route multiple texts
     GET  /v1/router/models    -- Router model metadata
 
+  Image Generation (if enabled):
+    POST /v1/images/generate    -- Generate an image synchronously (SD3.5/FLUX.2/SDXL)
+    POST /v1/images/jobs        -- Create an async image generation job
+    GET  /v1/images/jobs        -- List image generation jobs
+    GET  /v1/images/jobs/{id}   -- Get job status/result
+    DELETE /v1/images/jobs/{id} -- Cancel a queued job
+    GET  /v1/images/models      -- Image model metadata
+    GET  /v1/images/models/{name} -- Single image model metadata
+
+  Reference images:
+    The POST /v1/images/generate and POST /v1/images/jobs endpoints support
+    a `reference_images` field (list of base64 strings, up to 2 images, each <= 512x512 pixels).
+    Supported by FLUX.2 Klein only.
+
   Infrastructure (unversioned):
     GET  /health               -- Backward-compatible alias for /health/ready
     GET  /health/live          -- Liveness probe (always 200)
@@ -58,6 +72,7 @@ from typing import Any
 # Must be set before Ray imports occur — Ray workers that use uv
 # to create a fresh venv will fail with ModuleNotFoundError.
 os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 from collections.abc import Awaitable, Callable
 
@@ -71,7 +86,7 @@ from starlette.responses import Response as StarletteResponse
 from sentimentizer import logger
 from sentimentizer.predictor import _MODEL_CONFIGS, SentimentPredictor
 from sentimentizer.serve.base import ServiceMetrics, serve
-from sentimentizer.serve.config import load_serve_config
+from sentimentizer.serve.config import cfg, parse_sdxl_models
 from sentimentizer.serve.models import (
     BatchRequest,
     BatchResponse,
@@ -91,7 +106,8 @@ from sentimentizer.serve.models import (
 # Load configuration (YAML defaults < env var overrides)
 # ---------------------------------------------------------------------------
 
-cfg = load_serve_config()
+if cfg.api_keys:
+    os.environ.setdefault("SENTIMENTIZER_API_KEYS", ",".join(cfg.api_keys))
 
 # ---------------------------------------------------------------------------
 # FastAPI app (module-level for @serve.ingress)
@@ -99,37 +115,24 @@ cfg = load_serve_config()
 
 _VERSION = _pkg_version("sentimentizer")
 
-app = FastAPI(
-    title="Sentimentizer",
-    version=_VERSION,
-    description="Sentiment analysis and review routing API",
-)
-
-# ---------------------------------------------------------------------------
-# Middleware registration
-# ---------------------------------------------------------------------------
-# Order matters! Starlette processes middleware in LIFO order:
-#   - Last added = outermost (first request in, last response out)
-# Required order (outermost first):
-#   1. CORS — must be outermost to handle preflight OPTIONS before auth
-#   2. Request-ID — adds trace IDs to all requests including CORS preflight
-#   3. Body size limit — reject oversized payloads early
-#
-# NOTE: @app.exception_handler(Exception) only catches errors from route
-# handlers, not from middleware. A bug in _RequestBodySizeLimitMiddleware
-# will bypass the error envelope and leak a raw Starlette 500.
-# ---------------------------------------------------------------------------
-
-MAX_REQUEST_BODY_BYTES = 1 * 1024 * 1024  # 1 MiB defense-in-depth limit
-
 
 class _RequestBodySizeLimitMiddleware(BaseHTTPMiddleware):
-    """Reject requests with body exceeding MAX_REQUEST_BODY_BYTES.
+    """Reject requests with body exceeding max_bytes limit.
 
     Defense-in-depth: the K8s ingress already enforces
     ``proxy-body-size: "1m"``, but this middleware catches requests
     that bypass the ingress (e.g., port-forward, node port).
     """
+
+    def __init__(
+        self,
+        app: Any,
+        default_max_bytes: int = 1 * 1024 * 1024,
+        path_limits: dict[str, int] | None = None,
+    ) -> None:
+        super().__init__(app)
+        self.default_max_bytes = default_max_bytes
+        self.path_limits = path_limits or {}
 
     async def dispatch(
         self,
@@ -137,6 +140,12 @@ class _RequestBodySizeLimitMiddleware(BaseHTTPMiddleware):
         call_next: Callable[[StarletteRequest], Awaitable[StarletteResponse]],
     ) -> StarletteResponse:
         if request.method in ("POST", "PUT", "PATCH"):
+            max_bytes = self.default_max_bytes
+            for prefix, limit in self.path_limits.items():
+                if request.url.path.startswith(prefix):
+                    max_bytes = limit
+                    break
+
             content_length = request.headers.get("content-length")
             if content_length:
                 try:
@@ -151,89 +160,155 @@ class _RequestBodySizeLimitMiddleware(BaseHTTPMiddleware):
                             }
                         },
                     )
-                # NOTE: This only checks the Content-Length header. Chunked
-                # transfer encoding requests have no Content-Length and will
-                # pass through unchecked — this is acceptable as a
-                # defense-in-depth measure behind an ingress that enforces
-                # proxy-body-size.
-                if length > MAX_REQUEST_BODY_BYTES:
+
+                if length > max_bytes:
                     return JSONResponse(
                         status_code=413,
                         content={
                             "error": {
                                 "code": "request_too_large",
-                                "message": f"Request body exceeds {MAX_REQUEST_BODY_BYTES} bytes",
+                                "message": f"Request body exceeds {max_bytes} bytes",
                             }
                         },
                     )
+            else:
+                # No Content-Length (e.g. Transfer-Encoding: chunked).
+                # Buffer and verify size before passing request downstream.
+                original_receive = request._receive
+                bytes_received = 0
+                chunks = []
+                is_too_large = False
+
+                while True:
+                    try:
+                        message = await original_receive()
+                    except Exception:
+                        # Client disconnected or read error
+                        break
+
+                    if message["type"] == "http.request":
+                        body = message.get("body", b"")
+                        bytes_received += len(body)
+                        chunks.append(body)
+                        if bytes_received > max_bytes:
+                            is_too_large = True
+                            break
+                        if not message.get("more_body", False):
+                            break
+                    elif message["type"] == "http.disconnect":
+                        break
+                    else:
+                        break
+
+                if is_too_large:
+                    return JSONResponse(
+                        status_code=413,
+                        content={
+                            "error": {
+                                "code": "request_too_large",
+                                "message": f"Request body exceeds {max_bytes} bytes",
+                            }
+                        },
+                    )
+
+                # Reconstruct receive so downstream can read the cached body
+                full_body = b"".join(chunks)
+                received_all = False
+
+                async def cached_receive() -> dict[str, Any]:
+                    nonlocal received_all
+                    if received_all:
+                        return {"type": "http.disconnect"}
+                    received_all = True
+                    return {
+                        "type": "http.request",
+                        "body": full_body,
+                        "more_body": False,
+                    }
+
+                request._receive = cached_receive
+
         return await call_next(request)
 
 
-app.add_middleware(_RequestBodySizeLimitMiddleware)
-
-# CORS added second so it ends up middle layer (request-ID innermost if
-# it were also added via add_middleware, but request-ID uses @app.middleware
-# which is always outermost of the add_middleware stack — see below).
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=cfg.cors_origins,
-    allow_credentials="*" not in cfg.cors_origins,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["X-Request-Id"],
-)
-
-
-# @app.middleware("http") is added on top of the add_middleware stack, making
-# it the outermost middleware — but we want request-ID to be #2 (after CORS).
-# Since @app.middleware always wraps around add_middleware middlewares, request-ID
-# ends up outermost. With only two add_middleware calls (body-size, CORS), the
-# actual order is: request-ID → CORS → body-size → route handler. This is
-# acceptable: request-ID tags all requests, CORS handles preflight next, and
-# body-size rejects oversized payloads before they reach the route handler.
-@app.middleware("http")
-async def request_id_middleware(
-    request: StarletteRequest,
-    call_next: Callable[[StarletteRequest], Awaitable[StarletteResponse]],
-) -> StarletteResponse:
-    """Add X-Request-Id to every request/response for distributed tracing."""
-    request_id = request.headers.get("X-Request-Id") or str(uuid.uuid4())
-    request.state.request_id = request_id
-    response = await call_next(request)
-    response.headers["X-Request-Id"] = request_id
-    return response
-
-
-@app.exception_handler(Exception)
-async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    """Centralized handler for all unhandled exceptions.
-
-    Logs the full traceback and returns a generic 500 response
-    without leaking internal details. Uses the standard error envelope.
-    """
-    request_id = getattr(request.state, "request_id", "unknown")
-    logger.exception("unhandled error in request", request_id=request_id)
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": {
-                "code": "internal_error",
-                "message": "Internal server error",
-                "request_id": request_id,
-            }
-        },
+def create_fastapi_app(
+    title: str,
+    description: str,
+    path_limits: dict[str, int] | None = None,
+) -> FastAPI:
+    """Factory to create a FastAPI app with standard middleware and exception handlers."""
+    app = FastAPI(
+        title=title,
+        version=_VERSION,
+        description=description,
     )
 
+    app.add_middleware(
+        _RequestBodySizeLimitMiddleware,
+        default_max_bytes=1 * 1024 * 1024,
+        path_limits=path_limits,
+    )
 
-@app.exception_handler(HTTPException)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cfg.cors_origins,
+        allow_credentials="*" not in cfg.cors_origins,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["X-Request-Id"],
+    )
+
+    @app.middleware("http")
+    async def request_id_middleware(
+        request: StarletteRequest,
+        call_next: Callable[[StarletteRequest], Awaitable[StarletteResponse]],
+    ) -> StarletteResponse:
+        """Add X-Request-Id to every request/response for distributed tracing."""
+        request_id = request.headers.get("X-Request-Id") or str(uuid.uuid4())
+        request.state.request_id = request_id
+        response = await call_next(request)
+        response.headers["X-Request-Id"] = request_id
+        return response
+
+    @app.exception_handler(Exception)
+    async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        """Centralized handler for all unhandled exceptions."""
+        request_id = getattr(request.state, "request_id", "unknown")
+        logger.exception("unhandled error in request", request_id=request_id)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "code": "internal_error",
+                    "message": "Internal server error",
+                    "request_id": request_id,
+                }
+            },
+        )
+
+    app.add_exception_handler(HTTPException, http_exception_handler)
+
+    return app
+
+
+def _status_code_to_error_code(status_code: int) -> str:
+    """Map common HTTP status codes to machine-readable error codes."""
+    mapping = {
+        400: "bad_request",
+        401: "invalid_api_key",
+        403: "forbidden",
+        404: "not_found",
+        409: "idempotency_key_conflict",
+        413: "request_too_large",
+        422: "validation_error",
+        429: "rate_limit_exceeded",
+        503: "service_unavailable",
+    }
+    return mapping.get(status_code, f"error_{status_code}")
+
+
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
-    """Wrap HTTPException in the standard error envelope.
-
-    Converts FastAPI/Starlette's default ``{"detail": "..."}`` format
-    into the structured ``{"error": {"code": ..., "message": ...}}``
-    envelope. Validation errors (422) from Pydantic are left as-is
-    since they already have structured ``detail`` arrays.
-    """
+    """Wrap HTTPException in the standard error envelope."""
     detail = exc.detail
     if isinstance(detail, str):
         error_code = _status_code_to_error_code(exc.status_code)
@@ -250,16 +325,10 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
     return JSONResponse(status_code=exc.status_code, content=content)
 
 
-def _status_code_to_error_code(status_code: int) -> str:
-    """Map common HTTP status codes to machine-readable error codes."""
-    mapping = {
-        400: "bad_request",
-        404: "not_found",
-        413: "request_too_large",
-        422: "validation_error",
-        503: "service_unavailable",
-    }
-    return mapping.get(status_code, f"error_{status_code}")
+app = create_fastapi_app(
+    title="Sentimentizer",
+    description="Sentiment analysis and review routing API",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -286,14 +355,35 @@ class SentimentizerDeployment:
 
     def __init__(self) -> None:
         self._started_at = time.time()
+        self._ready = False
+        self._load_error: str | None = None
         self._sentiment_metrics = ServiceMetrics(prefix="sentimentizer")
         self._router_metrics = ServiceMetrics(prefix="router")
+        self.predictor: SentimentPredictor | None = None
 
-        # --- Predictor handles model loading, inference, and tokenization ---
-        self.predictor = SentimentPredictor(
-            model_name=cfg.default_model,
-            router_model_path=cfg.router_model_path,
-        )
+        try:
+            self.predictor = SentimentPredictor(
+                model_name=cfg.default_model,
+                router_model_path=cfg.router_model_path,
+            )
+            self._ready = True
+            logger.info(
+                "Sentimentizer ready",
+                model=self.predictor.model_name,
+                model_loaded=self.predictor.model_loaded,
+                router_loaded=self.predictor.router_loaded,
+            )
+        except Exception as exc:
+            self._load_error = str(exc)
+            logger.exception("Failed to load models on startup")
+            raise
+
+    def _require_ready(self) -> None:
+        if not self._ready or self.predictor is None:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Service not ready: {self._load_error or 'models not loaded'}",
+            )
 
     def _validate_model(self, model_name: str | None) -> str:
         """Validate requested model matches loaded model.
@@ -314,23 +404,18 @@ class SentimentizerDeployment:
         return self.predictor.model_name
 
     @staticmethod
-    def _format_prediction(
-        prediction: dict[str, Any],
-    ) -> dict[str, Any]:
+    def _format_prediction(prediction: dict[str, Any]) -> dict[str, Any]:
         """Format a prediction dict for the API response.
 
         Extracts label, score, token_count, and model from the
-        predictor's output dict. token_count is always present in
-        predictor output (predict_batch always includes it), so
-        this field is never None.
+        predictor's output dict.
         """
-        result: dict[str, Any] = {
-            "label": prediction["label"],
-            "score": prediction["score"],
-            "model": prediction["model"],
-            "token_count": prediction["token_count"],
+        return {
+            "label": prediction.get("label", "unknown"),
+            "score": prediction.get("score", 0.0),
+            "model": prediction.get("model", "unknown"),
+            "token_count": prediction.get("token_count", 0),
         }
-        return result
 
     # ------------------------------------------------------------------
     # Auto-batched endpoints (serve.batch collects individual calls)
@@ -367,7 +452,7 @@ class SentimentizerDeployment:
         """
         texts = [inp["text"] for inp in inputs]
         results = await asyncio.to_thread(self.predictor.classify_batch, texts)
-        return [r["prediction"] for r in results]
+        return results
 
     # ------------------------------------------------------------------
     # Sentiment handlers (v1/sentiment prefix)
@@ -378,6 +463,7 @@ class SentimentizerDeployment:
     @app.post("/v1/predict", response_model=PredictResponse, deprecated=True)
     async def predict(self, body: PredictRequest, request: Request) -> dict[str, Any]:
         """POST /v1/sentiment/predict -- single text sentiment analysis (auto-batched)."""
+        self._require_ready()
         if not self.predictor.model_loaded:
             raise HTTPException(
                 status_code=503,
@@ -413,6 +499,7 @@ class SentimentizerDeployment:
     @app.post("/v1/batch", response_model=BatchResponse, deprecated=True)
     async def batch(self, body: BatchRequest, request: Request) -> dict[str, Any]:
         """POST /v1/sentiment/batch -- batch sentiment analysis (explicit forward pass)."""
+        self._require_ready()
         if not self.predictor.model_loaded:
             raise HTTPException(
                 status_code=503,
@@ -453,6 +540,7 @@ class SentimentizerDeployment:
     @app.post("/v1/tokenize", response_model=TokenizeResponse, deprecated=True)
     async def tokenize(self, body: TokenizeRequest) -> dict[str, Any]:
         """POST /v1/sentiment/tokenize -- standalone tokenization without inference."""
+        self._require_ready()
         result = await asyncio.to_thread(self.predictor.tokenize, body.text)
         return result
 
@@ -460,6 +548,7 @@ class SentimentizerDeployment:
     @app.get("/v1/models", response_model=ModelsResponse, deprecated=True)
     async def models(self) -> dict[str, Any]:
         """GET /v1/sentiment/models -- sentiment model metadata (all models)."""
+        self._require_ready()
         models_info = self.predictor.get_sentiment_model_info()
         return {"models": models_info, "default": self.predictor.model_name}
 
@@ -470,6 +559,7 @@ class SentimentizerDeployment:
         model_name: str = Path(..., description="Model name: rnn, encoder, or decoder"),
     ) -> dict[str, Any]:
         """GET /v1/sentiment/models/{model_name} -- single model metadata."""
+        self._require_ready()
         if model_name not in _MODEL_CONFIGS:
             raise HTTPException(
                 status_code=400,
@@ -491,6 +581,7 @@ class SentimentizerDeployment:
     @app.post("/v1/router/predict", response_model=RouterPredictResponse)
     async def router_predict(self, body: PredictRequest, request: Request) -> dict[str, Any]:
         """POST /v1/router/predict -- classify a single text (auto-batched)."""
+        self._require_ready()
         if not self.predictor.router_loaded:
             raise HTTPException(
                 status_code=503,
@@ -499,7 +590,7 @@ class SentimentizerDeployment:
 
         start = time.perf_counter()
         try:
-            prediction = await self.classify_route({"text": body.text})
+            raw_result = await self.classify_route({"text": body.text})
         except Exception:
             latency = time.perf_counter() - start
             self._router_metrics.record_request(latency, error=True)
@@ -507,6 +598,7 @@ class SentimentizerDeployment:
         latency = time.perf_counter() - start
 
         self._router_metrics.record_request(latency)
+        prediction = raw_result.get("prediction", {})
         request_id = getattr(request.state, "request_id", "unknown")
         logger.info(
             "router prediction completed",
@@ -523,6 +615,7 @@ class SentimentizerDeployment:
     @app.post("/v1/router/batch", response_model=RouterBatchResponse)
     async def router_batch(self, body: BatchRequest, request: Request) -> dict[str, Any]:
         """POST /v1/router/batch -- classify multiple texts into routes."""
+        self._require_ready()
         if not self.predictor.router_loaded:
             raise HTTPException(
                 status_code=503,
@@ -555,6 +648,7 @@ class SentimentizerDeployment:
     @app.get("/v1/router/models", response_model=RouterModelsResponse)
     async def router_models(self) -> dict[str, Any]:
         """GET /v1/router/models -- router model metadata."""
+        self._require_ready()
         return self.predictor.get_router_model_info()
 
     # ------------------------------------------------------------------
@@ -565,7 +659,7 @@ class SentimentizerDeployment:
     async def health_live(self) -> dict[str, Any]:
         """GET /health/live -- liveness probe (always returns 200)."""
         return {
-            "status": "alive",
+            "status": "live",
             "uptime_s": round(time.time() - self._started_at, 1),
         }
 
@@ -577,6 +671,15 @@ class SentimentizerDeployment:
         The 503 path returns a raw JSONResponse that bypasses schema anyway,
         so explicit response_model would give a false guarantee.
         """
+        if not self._ready or self.predictor is None:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "not_ready",
+                    "uptime_s": round(time.time() - self._started_at, 1),
+                    "error": self._load_error or "models not loaded",
+                },
+            )
         body = {
             "status": "ready" if self.predictor.model_loaded else "not_ready",
             "device": self.predictor.device,
@@ -586,6 +689,14 @@ class SentimentizerDeployment:
             "router_loaded": self.predictor.router_loaded,
             "router_error": self.predictor.router_error,
         }
+        if cfg.flux2_klein_enabled or cfg.sd35_enabled or bool(cfg.sdxl_models):
+            body["image_models"] = {
+                "flux2_klein": "enabled" if cfg.flux2_klein_enabled else "disabled",
+                "sd35": "enabled" if cfg.sd35_enabled else "disabled",
+                "sdxl": (
+                    list(parse_sdxl_models(cfg.sdxl_models).keys()) if cfg.sdxl_models else []
+                ),
+            }
         if not self.predictor.model_loaded:
             return JSONResponse(status_code=503, content=body)
         return body
@@ -596,17 +707,26 @@ class SentimentizerDeployment:
         return await self.health_ready()
 
 
-deployment = SentimentizerDeployment.bind()
-
-
-def main(host: str = "0.0.0.0", port: int = 8000) -> None:
+def main(host: str = "0.0.0.0", port: int = 8000, diffusion: bool = False) -> None:
     """Start the Sentimentizer Serve application programmatically.
+
+    Args:
+        host: Bind address (default ``0.0.0.0``).
+        port: Bind port (default ``8000``).
+        diffusion: If True, start the image generation (diffusion) deployment
+            alongside sentiment. This requires GPU hardware and model weights.
+            When False (default), only sentiment + router endpoints are served.
+            Diffusion can also be enabled via config: set
+            ``flux2_klein_enabled``, ``sd35_enabled``, or ``sdxl_models`` in
+            ``serve_config.yaml`` or their corresponding env vars.
 
     Workers use the current Python executable directly (no isolated venv),
     which avoids the ``ModuleNotFoundError: No module named 'ray'`` issue
     where Ray's worker spawn creates a fresh venv that lacks ``ray``.
     """
     import sys
+
+    from ray.serve.config import HTTPOptions
 
     # RAY_ENABLE_UV_RUN_RUNTIME_ENV is already set at module level (line 51).
     os.environ.setdefault("RAY_ENABLE_RUNTIME_ENV_HOOK", "1")
@@ -621,16 +741,74 @@ def main(host: str = "0.0.0.0", port: int = 8000) -> None:
             "py_executable": sys.executable,
         },
     )
-    serve.start(http_options={"host": host, "port": port})
-    # TODO: Modern Ray Serve supports serve.run(target, host=host, port=port)
-    # which combines start+run. Migrate when dropping support for older APIs.
-    serve.run(deployment)
+    serve.start(
+        http_options=HTTPOptions(
+            host=host,
+            port=port,
+            request_timeout_s=cfg.request_timeout_s,
+        )
+    )
+
+    serve.run(
+        SentimentizerDeployment.bind(),
+        name="sentimentizer",
+        route_prefix="/",
+    )
+
+    start_diffusion = (
+        diffusion or cfg.flux2_klein_enabled or cfg.sd35_enabled or bool(cfg.sdxl_models)
+    )
+    if start_diffusion:
+        from sentimentizer.diffusion.job_store import JobStore
+        from sentimentizer.serve.diffusion_app import (
+            Flux2KleinDeployment,
+            ImagesDispatcher,
+            SD35Deployment,
+            SDXLDeployment,
+        )
+
+        JobStore.options(
+            name="diffusion_job_store",
+            lifetime="detached",
+            get_if_exists=True,
+        ).remote(ttl_s=cfg.job_ttl_s)
+
+        flux2_klein_handle = Flux2KleinDeployment.bind() if cfg.flux2_klein_enabled else None
+        sd35_handle = SD35Deployment.bind() if cfg.sd35_enabled else None
+
+        sdxl_handles: dict[str, Any] | None = None
+        sdxl_slots = parse_sdxl_models(cfg.sdxl_models)
+        if sdxl_slots:
+            sdxl_handles = {
+                name: SDXLDeployment.options(name=f"sdxl_{name}").bind(model_id)
+                for name, model_id in sdxl_slots.items()
+            }
+
+        serve.run(
+            ImagesDispatcher.bind(flux2_klein_handle, sd35_handle, sdxl_handles),
+            name="images",
+            route_prefix="/v1/images",
+        )
+
+    import signal
+    import threading
+
+    shutdown_event = threading.Event()
+
+    def handle_signal(signum: int, frame: Any) -> None:
+        try:
+            signame = signal.Signals(signum).name
+        except ValueError:
+            signame = f"signal {signum}"
+        logger.info("received_shutdown_signal", signal=signame)
+        shutdown_event.set()
+
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+
     logger.info("Sentimentizer Serve running", host=host, port=port)
 
-    try:
-        shutdown_event = threading.Event()
-        shutdown_event.wait()
-    except KeyboardInterrupt:
-        logger.info("Shutting down Serve")
-        serve.shutdown()
-        ray.shutdown()
+    shutdown_event.wait()
+    logger.info("Shutting down Serve")
+    serve.shutdown()
+    ray.shutdown()

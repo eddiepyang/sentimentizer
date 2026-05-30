@@ -10,7 +10,7 @@ on:
       - 'pyproject.toml'
 
 permissions:
-  id-token: write  # Required for Trusted Publishing (OIDC)
+  id-token: write
   contents: read
 
 jobs:
@@ -46,12 +46,18 @@ jobs:
   lint:
     needs: check-version
     if: needs.check-version.outputs.should_publish == 'true'
+    needs: check-version
+    if: needs.check-version.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
+      - name: set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - run: uv sync --extra dev
       - run: uv run ruff check .
       - run: uv run black --check .
@@ -59,16 +65,25 @@ jobs:
   test:
     needs: [check-version, lint]
     if: needs.check-version.outputs.should_publish == 'true'
+    needs: [check-version, lint]
+    if: needs.check-version.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
     env:
       TZ: UTC
       RAY_DISABLE_IMPORT_WARNING: 1
+      RAY_ENABLE_UV_RUN_RUNTIME_ENV: "0"
+      RAY_DEFAULT_OBJECT_STORE_MEMORY_PROPORTION: "0.5"
+      RAY_TQDM: "0"
     steps:
       - uses: actions/checkout@v4
+      - name: set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
-      - run: uv sync --extra dev,ray,onnx,router
+      - run: uv sync --extra dev,diffusion,ray,onnx,router
       - run: |
           uv run pytest --exitfirst --verbose --failed-first \
             --cov=sentimentizer --cov-report=term-missing --cov-report=html
@@ -85,6 +100,10 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+      - name: set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true

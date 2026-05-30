@@ -17,6 +17,7 @@
 *.jsonl
 *.pt
 *.safetensors
+*.png
 PKG-INFO
 
 /.ipynb_checkpoints/*

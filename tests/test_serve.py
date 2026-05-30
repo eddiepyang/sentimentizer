@@ -76,16 +76,19 @@ def _mock_predictor(**overrides):
     return p
 
 
-def _mock_deployment(predictor=None):
+def _mock_deployment(predictor=None, ready=True, load_error=None):
     """Build a mock ``self`` with the same attrs as SentimentizerDeployment."""
     from sentimentizer.serve.config import ServeConfig
 
     dep = MagicMock()
     dep.cfg = ServeConfig()
     dep._started_at = time.time()
+    dep._ready = ready
+    dep._load_error = load_error
     dep._sentiment_metrics = ServiceMetrics(prefix="sentimentizer")
     dep._router_metrics = ServiceMetrics(prefix="router")
     dep.predictor = predictor or _mock_predictor()
+    dep._require_ready = lambda: _SentimentizerDeployment._require_ready(dep)
 
     async def _predict_sentiment(inputs):
         if isinstance(inputs, dict):
@@ -95,10 +98,9 @@ def _mock_deployment(predictor=None):
 
     async def _classify_route(inputs):
         if isinstance(inputs, dict):
-            return dep.predictor.classify_batch([inputs["text"]])[0]["prediction"]
+            return dep.predictor.classify_batch([inputs["text"]])[0]
         texts = [inp["text"] for inp in inputs]
-        results = dep.predictor.classify_batch(texts)
-        return [r["prediction"] for r in results]
+        return dep.predictor.classify_batch(texts)
 
     async def _health_ready():
         body = {
@@ -264,6 +266,34 @@ class TestPydanticValidation:
         assert any("texts" in str(e.get("loc", [])) for e in errors)
 
 
+class TestGenerateRequestValidation:
+    def test_reference_images_empty_list_coerced_to_none(self) -> None:
+        from sentimentizer.serve.diffusion_models import GenerateRequest
+
+        req = GenerateRequest(prompt="test", reference_images=[])
+        assert req.reference_images is None
+
+    def test_reference_images_valid(self) -> None:
+        from sentimentizer.serve.diffusion_models import GenerateRequest
+
+        req = GenerateRequest(prompt="test", reference_images=["b64_1", "b64_2"])
+        assert req.reference_images == ["b64_1", "b64_2"]
+
+    def test_reference_images_too_many(self) -> None:
+        from sentimentizer.serve.diffusion_models import GenerateRequest
+
+        with pytest.raises(ValidationError) as exc_info:
+            GenerateRequest(prompt="test", reference_images=["b64_1", "b64_2", "b64_3"])
+        assert any(e["type"] == "value_error" for e in exc_info.value.errors())
+
+    def test_reference_images_empty_string(self) -> None:
+        from sentimentizer.serve.diffusion_models import GenerateRequest
+
+        with pytest.raises(ValidationError) as exc_info:
+            GenerateRequest(prompt="test", reference_images=[""])
+        assert any(e["type"] == "value_error" for e in exc_info.value.errors())
+
+
 # ---------------------------------------------------------------------------
 # Test: Prediction response schema (P1#5 additive format)
 # ---------------------------------------------------------------------------
@@ -297,7 +327,7 @@ class TestLivenessEndpoint:
         dep = _mock_deployment()
         result = _run(_SentimentizerDeployment.health_live(dep))
         assert isinstance(result, dict)
-        assert result["status"] == "alive"
+        assert result["status"] == "live"
         assert "uptime_s" in result
 
 
@@ -351,7 +381,6 @@ class TestSentimentModelNotLoaded:
                 _SentimentizerDeployment.predict(dep, PredictRequest(text="hello"), _mock_request())
             )
         assert exc_info.value.status_code == 503
-        assert "Sentiment model not loaded" in exc_info.value.detail
 
     def test_batch_returns_503(self):
         dep = _mock_deployment(
@@ -361,6 +390,16 @@ class TestSentimentModelNotLoaded:
         with pytest.raises(HTTPException) as exc_info:
             _run(_SentimentizerDeployment.batch(dep, MagicMock(texts=["hello"]), _mock_request()))
         assert exc_info.value.status_code == 503
+
+    def test_predict_returns_503_when_not_ready(self):
+        dep = _mock_deployment(ready=False, load_error="yelp.dictionary not found")
+
+        with pytest.raises(HTTPException) as exc_info:
+            _run(
+                _SentimentizerDeployment.predict(dep, PredictRequest(text="hello"), _mock_request())
+            )
+        assert exc_info.value.status_code == 503
+        assert "not ready" in str(exc_info.value.detail).lower()
 
 
 # ---------------------------------------------------------------------------
@@ -671,6 +710,65 @@ class TestBodySizeLimitMiddleware:
         cls_names = [m.cls for m in app.user_middleware if hasattr(m, "cls")]
         assert _RequestBodySizeLimitMiddleware in cls_names
 
+    def test_body_size_limit_middleware_with_content_length(self):
+        """Middleware rejects requests with Content-Length exceeding the limit."""
+        from fastapi import FastAPI, HTTPException, Request
+        from fastapi.testclient import TestClient
+
+        from sentimentizer.serve.app import _RequestBodySizeLimitMiddleware, http_exception_handler
+
+        test_app = FastAPI()
+        test_app.add_middleware(_RequestBodySizeLimitMiddleware, default_max_bytes=10)
+        test_app.add_exception_handler(HTTPException, http_exception_handler)
+
+        @test_app.post("/")
+        async def handler(request: Request):
+            body = await request.body()
+            return {"size": len(body)}
+
+        client = TestClient(test_app)
+        # Content length 5 < 10 -> allowed
+        resp = client.post("/", content=b"12345")
+        assert resp.status_code == 200
+        assert resp.json() == {"size": 5}
+
+        # Content length 15 > 10 -> rejected
+        resp = client.post("/", content=b"123456789012345")
+        assert resp.status_code == 413
+        assert resp.json()["error"]["code"] == "request_too_large"
+
+    def test_body_size_limit_middleware_chunked_streaming(self):
+        """Middleware rejects chunked requests exceeding the limit incrementally."""
+        from fastapi import FastAPI, HTTPException, Request
+        from fastapi.testclient import TestClient
+
+        from sentimentizer.serve.app import _RequestBodySizeLimitMiddleware, http_exception_handler
+
+        test_app = FastAPI()
+        test_app.add_middleware(_RequestBodySizeLimitMiddleware, default_max_bytes=10)
+        test_app.add_exception_handler(HTTPException, http_exception_handler)
+
+        @test_app.post("/")
+        async def handler(request: Request):
+            body = await request.body()
+            return {"size": len(body)}
+
+        client = TestClient(test_app)
+
+        # Chunked stream: generator
+        def chunked_generator(chunks):
+            yield from chunks
+
+        # Total size 6 < 10 -> allowed
+        resp = client.post("/", content=chunked_generator([b"abc", b"def"]))
+        assert resp.status_code == 200
+        assert resp.json() == {"size": 6}
+
+        # Total size 15 > 10 -> rejected
+        resp = client.post("/", content=chunked_generator([b"12345", b"67890", b"12345"]))
+        assert resp.status_code == 413
+        assert resp.json()["error"]["code"] == "request_too_large"
+
 
 # ---------------------------------------------------------------------------
 # Test: Validate model field behavior
@@ -843,7 +941,7 @@ class TestHealthResponseShape:
         result = _run(_SentimentizerDeployment.health_live(dep))
         assert "status" in result
         assert "uptime_s" in result
-        assert result["status"] == "alive"
+        assert result["status"] == "live"
 
     def test_readiness_has_device_and_version(self):
         dep = _mock_deployment()
@@ -898,14 +996,63 @@ class TestCORSMiddleware:
 
 
 # ---------------------------------------------------------------------------
-# Test: Request body size limit
+# Test: Rate Limiter and Auth (H3 and M8)
 # ---------------------------------------------------------------------------
 
 
-class TestRequestBodySizeLimit:
-    """Test the body size limit middleware."""
+class TestRateLimiterAndAuth:
+    """Test API key authentication and rate limiting behavior."""
 
-    def test_max_body_size_constant(self):
-        from sentimentizer.serve.app import MAX_REQUEST_BODY_BYTES
+    def test_require_api_key_valid(self):
+        import os
 
-        assert MAX_REQUEST_BODY_BYTES == 1 * 1024 * 1024  # 1 MiB
+        # Force reloading valid keys
+        import sentimentizer.serve.middleware as middleware
+        from sentimentizer.serve.middleware import require_api_key
+
+        middleware._valid_keys_cache = None
+
+        os.environ["SENTIMENTIZER_API_KEYS"] = "test-key-1,test-key-2"
+        try:
+            assert require_api_key("Bearer test-key-1") == "test-key-1"
+        finally:
+            del os.environ["SENTIMENTIZER_API_KEYS"]
+            middleware._valid_keys_cache = None
+
+    def test_require_api_key_invalid(self):
+        import os
+
+        import sentimentizer.serve.middleware as middleware
+        from sentimentizer.serve.middleware import require_api_key
+
+        middleware._valid_keys_cache = None
+
+        os.environ["SENTIMENTIZER_API_KEYS"] = "test-key-1"
+        try:
+            with pytest.raises(HTTPException) as exc_info:
+                require_api_key("Bearer wrong-key")
+            assert exc_info.value.status_code == 401
+            assert exc_info.value.detail["code"] == "invalid_api_key"
+        finally:
+            del os.environ["SENTIMENTIZER_API_KEYS"]
+            middleware._valid_keys_cache = None
+
+    def test_get_limiter_respects_config(self):
+        import os
+
+        import sentimentizer.serve.middleware as middleware
+        from sentimentizer.serve.middleware import _get_limiter
+
+        # Reset global limiter
+        middleware._limiter = None
+
+        os.environ["SENTIMENTIZER_RATE_LIMIT_PER_MIN"] = "99"
+        os.environ["SENTIMENTIZER_RATE_LIMIT_BURST"] = "5"
+        try:
+            limiter = _get_limiter()
+            assert limiter._rpm == 99
+            assert limiter._burst == 5
+        finally:
+            del os.environ["SENTIMENTIZER_RATE_LIMIT_PER_MIN"]
+            del os.environ["SENTIMENTIZER_RATE_LIMIT_BURST"]
+            middleware._limiter = None

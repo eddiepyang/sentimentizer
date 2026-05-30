@@ -40,6 +40,33 @@ class ServeConfig:
         classify_batch_size: Maximum requests collected per /v1/router/predict batch.
         classify_batch_wait_s: Seconds to wait before processing a partial router batch.
         cors_origins: Allowed CORS origins (comma-separated for env var).
+        flux2_klein_enabled: Enable FLUX.2 Klein 4B deployment (Apache 2.0,
+            step-distilled, ~13 GB VRAM at native placement).
+        flux2_klein_model_id: HuggingFace model ID for FLUX.2 Klein.
+        flux2_klein_cpu_offload: Diffusers CPU offload mode for FLUX.2 Klein.
+            One of "" (full GPU, default), "model", or "sequential".
+        flux2_klein_quantization: bitsandbytes quantization for the FLUX.2
+            transformer + Qwen3 text encoder. One of "" (off, default),
+            "nf4" (4-bit NF4, ~5 GB peak — fits 11 GB cards), or "int8"
+            (8-bit, ~9 GB peak). Requires the `bitsandbytes` package.
+            Pair with cpu_offload="model" on 11 GB cards.
+        sd35_enabled: Enable SD 3.5 Medium deployment.
+        sd35_model_id: HuggingFace model ID for SD 3.5 Medium.
+        sd35_cpu_offload: Diffusers CPU offload mode for SD 3.5. One of
+            "" (full GPU, default), "model" (whole-module swap), or
+            "sequential" (submodule swap, lowest VRAM, slowest).
+        sdxl_models: Named SDXL slots as "name:model_id" entries, e.g.
+            ["anime:John6666/noob-sdxl-v10", "base:stabilityai/stable-diffusion-xl-base-1.0"].
+            Each slot spawns its own GPU deployment and is addressable by name
+            in image generation requests. Fits on an 11 GB card (~6.5 GB per slot).
+        default_image_model: Default image model ("sd", "flux", "sd35", or any SDXL slot name).
+        request_timeout_s: HTTP request timeout in seconds.
+        api_keys: Comma-separated list of valid API keys (for image routes).
+        rate_limit_per_min: Rate limit per API key per minute.
+        rate_limit_burst: Token bucket burst size.
+        idempotency_ttl_s: Cache TTL for idempotency keys.
+        job_ttl_s: TTL in seconds before terminal job records are reaped.
+        prompt_blocklist_path: Path to prompt blocklist file.
     """
 
     default_model: str = "encoder"
@@ -51,6 +78,23 @@ class ServeConfig:
     classify_batch_size: int = 32
     classify_batch_wait_s: float = 0.05
     cors_origins: list[str] = field(default_factory=lambda: ["*"])
+    flux2_klein_enabled: bool = False
+    flux2_klein_model_id: str = "black-forest-labs/FLUX.2-klein-4B"
+    flux2_klein_cpu_offload: str = ""
+    flux2_klein_quantization: str = ""
+    flux2_klein_backend: str = "auto"
+    sd35_enabled: bool = False
+    sd35_model_id: str = "stabilityai/stable-diffusion-3.5-medium"
+    sd35_cpu_offload: str = ""
+    sdxl_models: list[str] = field(default_factory=list)
+    default_image_model: str = "sd35"
+    request_timeout_s: int = 600
+    api_keys: list[str] = field(default_factory=list)
+    rate_limit_per_min: int = 60
+    rate_limit_burst: int = 10
+    idempotency_ttl_s: int = 600
+    job_ttl_s: int = 3600
+    prompt_blocklist_path: str = ""
 
     def __post_init__(self) -> None:
         """Validate that numeric fields are positive."""
@@ -72,6 +116,24 @@ class ServeConfig:
                 raise ValueError(f"{name} must be > 0, got {val}")
 
 
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+_FALSY = frozenset({"0", "false", "no", "off", ""})
+
+
+def _parse_bool(value: str) -> bool:
+    """Parse a string to boolean, accepting common truthy/falsy values.
+
+    Raises ValueError for unrecognized strings (e.g. "maybe").
+    This avoids the Python footgun where ``bool("false")`` is ``True``.
+    """
+    lower = value.lower().strip()
+    if lower in _TRUTHY:
+        return True
+    if lower in _FALSY:
+        return False
+    raise ValueError(f"Cannot interpret {value!r} as boolean")
+
+
 def _parse_list(value: str) -> list[str]:
     """Parse a comma-separated string into a list of stripped strings."""
     return [item.strip() for item in value.split(",") if item.strip()]
@@ -88,11 +150,28 @@ _ENV_OVERRIDES: dict[str, str] = {
     "SENTIMENTIZER_CLASSIFY_BATCH_SIZE": "classify_batch_size",
     "SENTIMENTIZER_CLASSIFY_BATCH_WAIT_S": "classify_batch_wait_s",
     "SENTIMENTIZER_CORS_ORIGINS": "cors_origins",
+    "SENTIMENTIZER_FLUX2_KLEIN_ENABLED": "flux2_klein_enabled",
+    "SENTIMENTIZER_FLUX2_KLEIN_MODEL_ID": "flux2_klein_model_id",
+    "SENTIMENTIZER_FLUX2_KLEIN_CPU_OFFLOAD": "flux2_klein_cpu_offload",
+    "SENTIMENTIZER_FLUX2_KLEIN_QUANTIZATION": "flux2_klein_quantization",
+    "SENTIMENTIZER_DIFFUSION_FLUX2_KLEIN_BACKEND": "flux2_klein_backend",
+    "SENTIMENTIZER_SD35_ENABLED": "sd35_enabled",
+    "SENTIMENTIZER_SD35_MODEL_ID": "sd35_model_id",
+    "SENTIMENTIZER_SD35_CPU_OFFLOAD": "sd35_cpu_offload",
+    "SENTIMENTIZER_SDXL_MODELS": "sdxl_models",
+    "SENTIMENTIZER_DEFAULT_IMAGE_MODEL": "default_image_model",
+    "SENTIMENTIZER_REQUEST_TIMEOUT_S": "request_timeout_s",
+    "SENTIMENTIZER_API_KEYS": "api_keys",
+    "SENTIMENTIZER_RATE_LIMIT_PER_MIN": "rate_limit_per_min",
+    "SENTIMENTIZER_RATE_LIMIT_BURST": "rate_limit_burst",
+    "SENTIMENTIZER_IDEMPOTENCY_TTL_S": "idempotency_ttl_s",
+    "SENTIMENTIZER_JOB_TTL_S": "job_ttl_s",
+    "SENTIMENTIZER_PROMPT_BLOCKLIST_PATH": "prompt_blocklist_path",
 }
 
 # Type coercion for non-string fields
 # list[str] fields use _parse_list for comma-separated env var parsing
-_FIELD_TYPES: dict[str, type] = {
+_FIELD_TYPES: dict[str, type | callable] = {
     "max_batch_size": int,
     "max_text_length": int,
     "predict_batch_size": int,
@@ -100,7 +179,29 @@ _FIELD_TYPES: dict[str, type] = {
     "classify_batch_size": int,
     "classify_batch_wait_s": float,
     "cors_origins": list,
+    "flux2_klein_enabled": _parse_bool,
+    "sd35_enabled": _parse_bool,
+    "sdxl_models": list,
+    "request_timeout_s": int,
+    "api_keys": list,
+    "rate_limit_per_min": int,
+    "rate_limit_burst": int,
+    "idempotency_ttl_s": int,
+    "job_ttl_s": int,
 }
+
+
+def parse_sdxl_models(entries: list[str]) -> dict[str, str]:
+    """Parse ``["name:model_id", ...]`` into ``{name: model_id}``.
+
+    Entries that don't contain a colon are silently skipped.
+    """
+    result: dict[str, str] = {}
+    for entry in entries:
+        name, sep, model_id = entry.partition(":")
+        if sep and name.strip() and model_id.strip():
+            result[name.strip()] = model_id.strip()
+    return result
 
 
 def _default_config_path() -> Path:
@@ -155,3 +256,7 @@ def load_serve_config(path: str | Path | None = None) -> ServeConfig:
                     ) from None
 
     return ServeConfig(**values)
+
+
+# Global singleton instance loaded once at import time
+cfg = load_serve_config()

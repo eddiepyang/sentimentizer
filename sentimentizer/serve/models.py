@@ -2,12 +2,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
-from sentimentizer.serve.config import load_serve_config
-
-# Validation limits (max_text_length, max_batch_size) are baked at import
-# time from the ServeConfig. Environment variable changes after import will
-# not affect these limits — restart the process to pick up new values.
-cfg = load_serve_config()
+from sentimentizer.serve.config import cfg
 
 
 class PredictRequest(BaseModel):
@@ -329,10 +324,18 @@ class RouterModelsResponse(BaseModel):
 class HealthLiveResponse(BaseModel):
     """Response from /health/live."""
 
-    status: Literal["alive"] = "alive"
+    status: Literal["live"] = "live"
     uptime_s: float
 
-    model_config = {"json_schema_extra": {"examples": [{"status": "alive", "uptime_s": 123.4}]}}
+    model_config = {"json_schema_extra": {"examples": [{"status": "live", "uptime_s": 123.4}]}}
+
+
+class ImageModelsStatus(BaseModel):
+    """Status of image models within health ready response."""
+
+    flux2_klein: Literal["enabled", "disabled"]
+    sd35: Literal["enabled", "disabled"]
+    sdxl: list[str]
 
 
 class HealthReadyResponse(BaseModel):
@@ -345,6 +348,7 @@ class HealthReadyResponse(BaseModel):
     model_loaded: str
     router_loaded: bool
     router_error: str | None = None
+    image_models: ImageModelsStatus | None = None
 
     model_config = {
         "json_schema_extra": {
@@ -357,6 +361,11 @@ class HealthReadyResponse(BaseModel):
                     "model_loaded": "encoder",
                     "router_loaded": True,
                     "router_error": None,
+                    "image_models": {
+                        "flux2_klein": "enabled",
+                        "sd35": "disabled",
+                        "sdxl": ["anime"],
+                    },
                 }
             ]
         }
