@@ -69,6 +69,10 @@ def resolve_backend(model_key: str, backend: str = "auto") -> str:
     """
     available = BACKEND_REGISTRY.get(model_key, ["diffusers"])
     if backend != "auto":
+        if backend == "mlx" and not is_mlx_device():
+            raise ValueError(
+                f"backend={backend!r} not available for {model_key} (MLX device not found)."
+            )
         if backend not in available:
             raise ValueError(
                 f"backend={backend!r} not available for {model_key}. " f"Available: {available}"
