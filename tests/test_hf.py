@@ -606,3 +606,86 @@ class TestDownloadBackboneDir:
                 mock_download.assert_called_once()
         finally:
             os.unlink(tmp_path)
+
+
+class TestGetTrainedTokenizerDownload:
+    """Test that get_trained_tokenizer downloads the dictionary if missing."""
+
+    @patch("sentimentizer.tokenizer.Path.exists")
+    @patch("sentimentizer.tokenizer.corpora.Dictionary.load")
+    @patch("sentimentizer.hf.download_weights")
+    def test_tokenizer_exists_no_download(
+        self, mock_download: MagicMock, mock_load: MagicMock, mock_exists: MagicMock
+    ) -> None:
+        """When dictionary exists, load it directly without downloading."""
+        from sentimentizer.tokenizer import get_trained_tokenizer
+
+        mock_exists.return_value = True
+        mock_load.return_value = MagicMock()
+
+        tokenizer = get_trained_tokenizer()
+
+        assert tokenizer is not None
+        mock_exists.assert_called()
+        mock_download.assert_not_called()
+        mock_load.assert_called_once()
+
+    @patch("sentimentizer.tokenizer.Path.exists")
+    @patch("sentimentizer.tokenizer.corpora.Dictionary.load")
+    @patch("sentimentizer.hf.download_weights")
+    def test_tokenizer_missing_download_success(
+        self, mock_download: MagicMock, mock_load: MagicMock, mock_exists: MagicMock
+    ) -> None:
+        """When dictionary is missing, it should attempt to download and then load."""
+        from sentimentizer.tokenizer import get_trained_tokenizer
+
+        # First exists() call returns False (missing), second returns True (downloaded)
+        mock_exists.side_effect = [False, True]
+        mock_load.return_value = MagicMock()
+
+        tokenizer = get_trained_tokenizer()
+
+        assert tokenizer is not None
+        assert mock_exists.call_count == 2
+        mock_download.assert_called_once()
+        # Verify it was called with model_type="encoder", dict_path, and local_path
+        assert mock_download.call_args[1]["model_type"] == "encoder"
+        assert "yelp.dictionary" in str(mock_download.call_args[1]["dict_path"])
+        assert "encoder_weights.pth" in str(mock_download.call_args[1]["local_path"])
+        mock_load.assert_called_once()
+
+    @patch("sentimentizer.tokenizer.Path.exists")
+    @patch("sentimentizer.tokenizer.corpora.Dictionary.load")
+    @patch("sentimentizer.hf.download_weights")
+    def test_tokenizer_missing_download_exception(
+        self, mock_download: MagicMock, mock_load: MagicMock, mock_exists: MagicMock
+    ) -> None:
+        """When download raises an exception, raise FileNotFoundError."""
+        from sentimentizer.tokenizer import get_trained_tokenizer
+
+        mock_exists.return_value = False  # Always missing
+        mock_download.side_effect = Exception("Download failed")
+
+        with pytest.raises(FileNotFoundError, match="Dictionary file not found"):
+            get_trained_tokenizer()
+
+        mock_download.assert_called_once()
+        mock_load.assert_not_called()
+
+    @patch("sentimentizer.tokenizer.Path.exists")
+    @patch("sentimentizer.tokenizer.corpora.Dictionary.load")
+    @patch("sentimentizer.hf.download_weights")
+    def test_tokenizer_missing_download_still_missing(
+        self, mock_download: MagicMock, mock_load: MagicMock, mock_exists: MagicMock
+    ) -> None:
+        """When download returns but file is still missing, raise FileNotFoundError."""
+        from sentimentizer.tokenizer import get_trained_tokenizer
+
+        mock_exists.return_value = False  # Always missing (even after download)
+        mock_download.return_value = None
+
+        with pytest.raises(FileNotFoundError, match="Dictionary file not found"):
+            get_trained_tokenizer()
+
+        mock_download.assert_called_once()
+        mock_load.assert_not_called()
