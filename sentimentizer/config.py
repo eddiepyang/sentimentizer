@@ -289,6 +289,11 @@ HF_WEIGHTS_REPOS: dict[str, str] = {
     "modernbert": "ryeyoo/sentimentizer-modernbert",
 }
 
+# Hugging Face Hub repository for the pre-trained router model.
+# The router uses snapshot_download (whole-repo) rather than individual
+# file downloads, so it lives outside HF_WEIGHTS_REPOS.
+HF_ROUTER_REPO: str = "ryeyoo/sentimentizer-router"
+
 
 @dataclass
 class HuggingFaceConfig:

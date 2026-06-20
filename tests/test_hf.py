@@ -606,3 +606,218 @@ class TestDownloadBackboneDir:
                 mock_download.assert_called_once()
         finally:
             os.unlink(tmp_path)
+
+
+class TestGetTrainedTokenizerDownload:
+    """Test that get_trained_tokenizer downloads the dictionary if missing."""
+
+    @patch("sentimentizer.tokenizer.Path.exists")
+    @patch("sentimentizer.tokenizer.corpora.Dictionary.load")
+    @patch("sentimentizer.hf.download_weights")
+    def test_tokenizer_exists_no_download(
+        self, mock_download: MagicMock, mock_load: MagicMock, mock_exists: MagicMock
+    ) -> None:
+        """When dictionary exists, load it directly without downloading."""
+        from sentimentizer.tokenizer import get_trained_tokenizer
+
+        mock_exists.return_value = True
+        mock_load.return_value = MagicMock()
+
+        tokenizer = get_trained_tokenizer()
+
+        assert tokenizer is not None
+        mock_exists.assert_called()
+        mock_download.assert_not_called()
+        mock_load.assert_called_once()
+
+    @patch("sentimentizer.tokenizer.Path.exists")
+    @patch("sentimentizer.tokenizer.corpora.Dictionary.load")
+    @patch("sentimentizer.hf.download_weights")
+    def test_tokenizer_missing_download_success(
+        self, mock_download: MagicMock, mock_load: MagicMock, mock_exists: MagicMock
+    ) -> None:
+        """When dictionary is missing, it should attempt to download and then load."""
+        from sentimentizer.tokenizer import get_trained_tokenizer
+
+        # First exists() call returns False (missing), second returns True (downloaded)
+        mock_exists.side_effect = [False, True]
+        mock_load.return_value = MagicMock()
+
+        tokenizer = get_trained_tokenizer()
+
+        assert tokenizer is not None
+        assert mock_exists.call_count == 2
+        mock_download.assert_called_once()
+        # Verify it was called with model_type="encoder", dict_path, and local_path
+        assert mock_download.call_args[1]["model_type"] == "encoder"
+        assert "yelp.dictionary" in str(mock_download.call_args[1]["dict_path"])
+        assert "encoder_weights.pth" in str(mock_download.call_args[1]["local_path"])
+        mock_load.assert_called_once()
+
+    @patch("sentimentizer.tokenizer.Path.exists")
+    @patch("sentimentizer.tokenizer.corpora.Dictionary.load")
+    @patch("sentimentizer.hf.download_weights")
+    def test_tokenizer_missing_download_exception(
+        self, mock_download: MagicMock, mock_load: MagicMock, mock_exists: MagicMock
+    ) -> None:
+        """When download raises an exception, raise FileNotFoundError."""
+        from sentimentizer.tokenizer import get_trained_tokenizer
+
+        mock_exists.return_value = False  # Always missing
+        mock_download.side_effect = Exception("Download failed")
+
+        with pytest.raises(FileNotFoundError, match="Dictionary file not found"):
+            get_trained_tokenizer()
+
+        mock_download.assert_called_once()
+        mock_load.assert_not_called()
+
+    @patch("sentimentizer.tokenizer.Path.exists")
+    @patch("sentimentizer.tokenizer.corpora.Dictionary.load")
+    @patch("sentimentizer.hf.download_weights")
+    def test_tokenizer_missing_download_still_missing(
+        self, mock_download: MagicMock, mock_load: MagicMock, mock_exists: MagicMock
+    ) -> None:
+        """When download returns but file is still missing, raise FileNotFoundError."""
+        from sentimentizer.tokenizer import get_trained_tokenizer
+
+        mock_exists.return_value = False  # Always missing (even after download)
+        mock_download.return_value = None
+
+        with pytest.raises(FileNotFoundError, match="Dictionary file not found"):
+            get_trained_tokenizer()
+
+        mock_download.assert_called_once()
+        mock_load.assert_not_called()
+
+
+class TestPredictorConditionalTokenizer:
+    """Test that SentimentPredictor skips the GloVe tokenizer for HF models."""
+
+    @patch("sentimentizer.predictor.get_trained_model")
+    @patch("sentimentizer.predictor.get_trained_tokenizer")
+    @patch("sentimentizer.predictor.auto_detect_device", return_value="cpu")
+    @patch("sentimentizer.predictor._ROUTER_AVAILABLE", False)
+    def test_encoder_loads_glove_tokenizer(
+        self,
+        _mock_device: MagicMock,
+        mock_get_tokenizer: MagicMock,
+        mock_get_model: MagicMock,
+    ) -> None:
+        """GloVe models (encoder/rnn/decoder) should call get_trained_tokenizer."""
+        from sentimentizer.predictor import SentimentPredictor
+
+        mock_get_model.side_effect = FileNotFoundError("no weights")
+
+        SentimentPredictor(model_name="encoder")
+
+        mock_get_tokenizer.assert_called_once()
+
+    @patch("sentimentizer.predictor.get_trained_model")
+    @patch("sentimentizer.predictor.get_trained_tokenizer")
+    @patch("sentimentizer.predictor.auto_detect_device", return_value="cpu")
+    @patch("sentimentizer.predictor._ROUTER_AVAILABLE", False)
+    def test_modernbert_skips_glove_tokenizer(
+        self,
+        _mock_device: MagicMock,
+        mock_get_tokenizer: MagicMock,
+        mock_get_model: MagicMock,
+    ) -> None:
+        """ModernBERT should NOT call get_trained_tokenizer (uses its own HF tokenizer)."""
+        from sentimentizer.predictor import SentimentPredictor
+
+        mock_get_model.side_effect = FileNotFoundError("no weights")
+
+        predictor = SentimentPredictor(model_name="modernbert")
+
+        mock_get_tokenizer.assert_not_called()
+        assert predictor.tokenizer is None
+
+
+class TestRouterAutoDownload:
+    """Test that SentimentPredictor auto-downloads the router model from HF Hub."""
+
+    @patch("sentimentizer.predictor.get_trained_model")
+    @patch("sentimentizer.predictor.get_trained_tokenizer")
+    @patch("sentimentizer.predictor.auto_detect_device", return_value="cpu")
+    @patch("sentimentizer.predictor._ROUTER_AVAILABLE", True)
+    def test_router_downloads_when_missing(
+        self,
+        _mock_device: MagicMock,
+        _mock_tokenizer: MagicMock,
+        mock_get_model: MagicMock,
+    ) -> None:
+        """When router path doesn't exist, snapshot_download should be called."""
+        import tempfile
+
+        from sentimentizer.predictor import SentimentPredictor
+
+        mock_get_model.side_effect = FileNotFoundError("no weights")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            router_path = Path(tmpdir) / "nonexistent_router"
+
+            with patch("sentimentizer.predictor.Path.exists") as mock_exists:
+                # Path.exists() returns False for the router path
+                mock_exists.return_value = False
+
+                with patch("huggingface_hub.snapshot_download") as mock_snap:
+                    SentimentPredictor(
+                        model_name="encoder",
+                        router_model_path=str(router_path),
+                    )
+                    mock_snap.assert_called_once_with(
+                        repo_id="ryeyoo/sentimentizer-router",
+                        local_dir=str(router_path),
+                    )
+
+    @patch("sentimentizer.predictor.get_trained_model")
+    @patch("sentimentizer.predictor.get_trained_tokenizer")
+    @patch("sentimentizer.predictor.auto_detect_device", return_value="cpu")
+    @patch("sentimentizer.predictor._ROUTER_AVAILABLE", True)
+    def test_router_download_failure_degrades_gracefully(
+        self,
+        _mock_device: MagicMock,
+        _mock_tokenizer: MagicMock,
+        mock_get_model: MagicMock,
+    ) -> None:
+        """When router download fails, predictor should still init without crashing."""
+        import tempfile
+
+        from sentimentizer.predictor import SentimentPredictor
+
+        mock_get_model.side_effect = FileNotFoundError("no weights")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            router_path = Path(tmpdir) / "nonexistent_router"
+
+            with patch(
+                "huggingface_hub.snapshot_download",
+                side_effect=ConnectionError("No network"),
+            ):
+                predictor = SentimentPredictor(
+                    model_name="encoder",
+                    router_model_path=str(router_path),
+                )
+                assert predictor.router is None
+                assert predictor.router_error is not None
+
+    @patch("sentimentizer.predictor.get_trained_model")
+    @patch("sentimentizer.predictor.get_trained_tokenizer")
+    @patch("sentimentizer.predictor.auto_detect_device", return_value="cpu")
+    @patch("sentimentizer.predictor._ROUTER_AVAILABLE", False)
+    def test_router_no_download_without_sentence_transformers(
+        self,
+        _mock_device: MagicMock,
+        _mock_tokenizer: MagicMock,
+        mock_get_model: MagicMock,
+    ) -> None:
+        """When sentence-transformers is not installed, router download is skipped."""
+        from sentimentizer.predictor import SentimentPredictor
+
+        mock_get_model.side_effect = FileNotFoundError("no weights")
+
+        with patch("huggingface_hub.snapshot_download") as mock_snap:
+            predictor = SentimentPredictor(model_name="encoder")
+            mock_snap.assert_not_called()
+            assert predictor.router is None

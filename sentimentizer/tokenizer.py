@@ -4,6 +4,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 from importlib.resources import files
+from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
 import numpy as np
@@ -389,9 +390,41 @@ class Tokenizer:
 
 
 def get_trained_tokenizer() -> Tokenizer:
-    corp_dict = corpora.Dictionary.load(
-        str(files("sentimentizer.data").joinpath("yelp.dictionary"))
-    )
+    """Load the pre-trained dictionary, downloading from HF Hub if missing.
+
+    On a fresh install the ``yelp.dictionary`` file won't exist locally.
+    When that happens, we download it from the canonical encoder repo
+    (``ryeyoo/sentimentizer-encoder``) — all three GloVe model types
+    share the same dictionary.
+    """
+    dict_path = str(files("sentimentizer.data").joinpath("yelp.dictionary"))
+
+    if not Path(dict_path).exists():
+        logger.info(
+            "Dictionary not found locally, downloading from HF Hub...",
+            path=dict_path,
+        )
+        try:
+            from sentimentizer.hf import download_weights
+
+            download_weights(
+                model_type="encoder",
+                local_path=Path(dict_path).parent / "encoder_weights.pth",
+                dict_path=dict_path,
+            )
+        except Exception:
+            logger.exception("Failed to auto-download dictionary from HF Hub")
+
+    if not Path(dict_path).exists():
+        raise FileNotFoundError(
+            f"Dictionary file not found at {dict_path} and could not be "
+            "downloaded from Hugging Face Hub. Train a model first or run:\n"
+            '  python -c "from sentimentizer.hf import download_weights; '
+            "download_weights('encoder', 'sentimentizer/data/encoder_weights.pth', "
+            "dict_path='sentimentizer/data/yelp.dictionary')\""
+        )
+
+    corp_dict = corpora.Dictionary.load(dict_path)
     return Tokenizer(dictionary=corp_dict)
 
 
