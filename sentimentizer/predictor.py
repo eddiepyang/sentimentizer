@@ -73,10 +73,19 @@ class SentimentPredictor:
         device: str | None = None,
     ) -> None:
         self.device: str = device or auto_detect_device("auto")
-        self.tokenizer: Tokenizer = get_trained_tokenizer()
+        self.model_name: str = model_name.lower().strip()
+
+        # Only load the GloVe dictionary tokenizer for models that need it.
+        # HF models (e.g. ModernBERT) ship their own tokenizer and don't use
+        # the shared yelp.dictionary, so skip the download on first run.
+        from sentimentizer.hf import _HF_MODEL_TYPES
+
+        if self.model_name not in _HF_MODEL_TYPES:
+            self.tokenizer: Tokenizer | None = get_trained_tokenizer()
+        else:
+            self.tokenizer = None
 
         # --- Sentiment model ---
-        self.model_name: str = model_name.lower().strip()
         self.model, self._model_error = self._load_sentiment_model(self.model_name)
 
         # --- Router model (graceful degradation if unavailable) ---
@@ -118,7 +127,7 @@ class SentimentPredictor:
             return None, str(exc)
 
     def _load_router_model(self, router_model_path: str) -> tuple[Any, str | None]:
-        """Load the RouterModel. Returns (model, error).
+        """Load the RouterModel, downloading from HF Hub if missing.
 
         Returns (None, error_message) on failure so callers can return 503
         instead of crashing the whole deployment.
@@ -130,6 +139,21 @@ class SentimentPredictor:
 
         path = Path(router_model_path)
         try:
+            if not path.exists():
+                logger.info(f"Router model not found at {path}, " "downloading from HF Hub...")
+                try:
+                    from huggingface_hub import snapshot_download
+
+                    from sentimentizer.config import HF_ROUTER_REPO
+
+                    snapshot_download(
+                        repo_id=HF_ROUTER_REPO,
+                        local_dir=str(path),
+                    )
+                    logger.info(f"Router model downloaded to {path}")
+                except Exception:
+                    logger.exception("Failed to download router model from HF Hub")
+
             if path.exists():
                 logger.info(f"Loading router model from {path}")
                 model = RouterModel.from_pretrained(str(path))
@@ -338,7 +362,7 @@ class SentimentPredictor:
         cfg_dict = dataclasses.asdict(cfg)
         param_count = sum(p.numel() for p in self.model.parameters()) if self.model_loaded else 0
 
-        max_seq_len = self.tokenizer.cfg.max_len
+        max_seq_len = self.tokenizer.cfg.max_len if self.tokenizer else 512
         if hasattr(cfg, "max_seq_length"):
             max_seq_len = cfg.max_seq_length
 
