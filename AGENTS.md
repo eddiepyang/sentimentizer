@@ -127,6 +127,19 @@ Sentimentizer is a PyTorch-based sentiment analysis pipeline with three model ar
 
 **Key files changed**: `sentimentizer/metrics_publisher.py`, `sentimentizer/trainer.py`, `sentimentizer/exporter.py`, `workflows/stages/train.py`, `scripts/generate_ray_dashboards.py`
 
+### Lazy Router Loading (current)
+
+**Change**: The SetFit router model is no longer loaded at `SentimentPredictor()` construction time. It loads lazily on the first `classify()` / `classify_batch()` call. This fixes a bug where constructing `SentimentPredictor(model_name="encoder")` logged an error-level exception traceback when `sentence-transformers` was not installed, even though the router was never requested.
+
+**Key changes**:
+- **`SentimentPredictor.__init__`**: No longer calls `_load_router_model()`. Stores `_router_model_path` and initializes `router=None`, `_router_error=None`, `_router_loaded=False`.
+- **`_ensure_router_loaded()`**: New method called by `classify_batch()` on first use. Memoizes both success and failure (no retry on every request after a failed load).
+- **`_ROUTER_AVAILABLE` probe**: The import-time `_ROUTER_AVAILABLE` flag now probes `sentence_transformers` directly (not just `router.config`/`router.model`, which use lazy imports and always succeed). This ensures the graceful-degradation guard in `_load_router_model()` returns a clean warning instead of attempting a load that produces a noisy exception traceback.
+- **Serve handlers**: `router_predict` / `router_batch` no longer guard with `router_loaded` before calling classify (which would 503 on every request since the router isn't loaded at startup). They let `classify_batch` trigger the lazy load and catch failures → 503.
+- **`get_router_model_info()`**: Reports `"not_loaded"` (was `"error"`) when the router hasn't been loaded yet.
+
+**Key files changed**: `sentimentizer/predictor.py`, `sentimentizer/serve/app.py`, `tests/test_serve.py`, `tests/test_hf.py`
+
 ## Architecture Quick Reference
 
 ```
@@ -182,6 +195,21 @@ tests/
 - **Grafana dashboards** use `sentimentizer_training_* or ray_sentimentizer_live_*` PromQL fallback
 
 ## Common Tasks
+
+### Dependency Management
+
+This project uses **uv** for dependency management. Key commands:
+
+```bash
+uv sync                              # Install dependencies (local-only mode)
+uv sync --extra ray                  # Install with Ray distributed features
+uv sync --extra dev --extra ray      # Install dev deps (ruff, black, pytest)
+uv add <package>                     # Add a dependency
+uv add --dev <package>               # Add a dev dependency
+uv run <command>                     # Run in the venv
+```
+
+Optional extras: `--extra router` (SetFit router, `sentence-transformers`), `--extra onnx` (ONNX export), `--extra diffusion` (SD/FLUX), `--extra mlx-diffusion` (MLX on Apple Silicon), `--extra dev` (ruff/black/pytest). Combos allowed: `uv sync --extra router,onnx`.
 
 ### Troubleshooting
 
@@ -266,8 +294,8 @@ Grafana only reads provisioned dashboard files on **startup**, so a restart is r
 
 - **3-class classification**: Models output logits of shape `(B, 3)` with label mapping: 0=negative, 1=neutral, 2=positive. `LABEL_NAMES = ["negative", "neutral", "positive"]` is the single source of truth in `config.py` — import it, don't duplicate.
 - **Loss function**: `CrossEntropyLoss` (not `BCEWithLogitsLoss`). Target dtype is `torch.long` (not `torch.float32`). `FocalCrossEntropyLoss` in `sentimentizer/losses.py` for hard-example mining.
-- **`predict_batch()` returns lean prediction format**: Each result is `{"label": "positive", "score": 0.88, "token_count": 12, "model": "encoder"}` — explicit `label`, `score`, `token_count`, and `model` fields. `predict()` returns the same dict (it's `predict_batch([text])[0]`). The old `scores` dict and dynamic winning-class key (e.g., `"positive": 0.88`) have been removed.
-- **`predict_text()` on `BaseSentimentModel` still returns all 3 scores**: `{"negative": 0.05, "neutral": 0.12, "positive": 0.83}`. This is a different API surface used by `diagnose_model.py` and `hf.py` for model validation/export — it is NOT affected by the `predict_batch()` change.
+- **`predict_batch()` returns additive v1 format**: Each result is `{"label": "positive", "score": 0.88, "scores": {"negative": 0.02, "neutral": 0.10, "positive": 0.88}, "token_count": 12, "model": "encoder", "positive": 0.88}` — explicit `label`, `score`, `scores` (all 3 class probs), `token_count`, `model`, plus a deprecated dynamic winning-class key (e.g., `"positive": 0.88`) for backward compat. `predict()` returns the same dict (it's `predict_batch([text])[0]`).
+- **`predict_text()` on `BaseSentimentModel` returns all 3 scores**: `{"negative": 0.05, "neutral": 0.12, "positive": 0.83}`. Used by `diagnose_model.py` and `hf.py` for model validation/export — no `token_count` or `model` field.
 - **`classify_batch()` returns prediction with label, score, and token_count**: Each result is `{"prediction": {"label": "dietary", "score": 0.95, "token_count": 8}}` — no `text` or `category` key.
 - **Serving uses FastAPI + `@serve.ingress` with `/v1/` prefix**: Sentiment and router endpoints are under `v1` sub-app (`app.mount("/v1", v1)`). Health endpoints remain unversioned. Route handlers use `@v1.post("/predict")`, `@v1.get("/models")`, etc. Health uses `@app.get("/health/live")`, `@app.get("/health/ready")`, `@app.get("/health")`.
 - **CORS middleware**: `CORSMiddleware` added with `allow_origins=cfg.cors_origins` (default `["*"]`). Configurable via `SENTIMENTIZER_CORS_ORIGINS` env var (comma-separated). CORS is registered as outermost middleware (added last in code, processed first in request).
@@ -284,7 +312,7 @@ Grafana only reads provisioned dashboard files on **startup**, so a restart is r
 - **`RAY_ENABLE_UV_RUN_RUNTIME_ENV=0`** must be set before any Ray import. Without it, Ray workers create isolated venvs via `uv` that lack the `ray` package, causing `ModuleNotFoundError: No module named 'ray'`. Set in three places: (1) `serve.py` module level, (2) `serve.py:main()`, (3) `cli.py:serve_cmd()` subprocess env. The `lifecycle.py` module-level setting covers training paths. **If any entry point is missing this env var, Ray workers will crash with `ModuleNotFoundError`.**
 - **`auto_detect_device()` requires `"auto"` argument**: `resolve_device()` (re-exported as `auto_detect_device`) requires a `device` parameter. Never call `auto_detect_device()` — always call `auto_detect_device("auto")` or `resolve_device("auto")`.
 - **Ray Serve uses FastAPI + `@serve.ingress`**: Route handlers are `@v1.get`/`@v1.post` decorated methods on the deployment class (on the `v1` sub-app). Health handlers use `@app.get` on the main app. Do NOT define `__call__` on the deployment class — `@serve.ingress` explicitly forbids it. `@serve.batch` methods remain as internal methods called from route handlers.
-- **Prediction response format**: `predict_batch()` returns `[{"label": "positive", "score": 0.88, "token_count": 12, "model": "encoder"}, ...]` — explicit `label`, `score`, `token_count`, `model` fields. The API response wraps this in `"prediction": {...}` with `"latency_s"`. `predict_text()` on `BaseSentimentModel` still returns all 3 scores (without `token_count`).
+- **Prediction response format**: `predict_batch()` returns `[{"label": "positive", "score": 0.88, "scores": {"negative": 0.02, ...}, "token_count": 12, "model": "encoder", "positive": 0.88}, ...]` — additive v1 format (see Important Conventions). The API response wraps this in `"prediction": {...}` with `"latency_s"`. `predict_text()` on `BaseSentimentModel` still returns all 3 scores (without `token_count`).
 - **`serve/base.py`** contains only `ServiceMetrics` and `_DummyServe` — no response builder functions. Response dicts are constructed directly in FastAPI route handlers.
 - **FastAPI App Isolation**: Do not share the same `FastAPI` instance across multiple `@serve.ingress()` deployments (e.g., `SentimentizerDeployment` and `ImagesDispatcher`). This causes route handler collisions, especially when attaching middleware or handling root routes. Use a factory function like `create_fastapi_app()` to ensure each deployment gets its own isolated `FastAPI` instance.
 - **`serve.start()` Timeout Configuration**: Passing a dictionary like `http_options={"request_timeout_s": 600}` to `serve.start()` fails silently to enforce the timeout. You MUST pass an explicit `HTTPOptions` object: `serve.start(http_options=ray.serve.config.HTTPOptions(..., request_timeout_s=600))`. This is critical for preventing timeouts on slow tasks like SD3.5 or FLUX image generation.
@@ -356,4 +384,143 @@ Grafana only reads provisioned dashboard files on **startup**, so a restart is r
 - **`cpu_offload` and `dtype` are diffusers-only**: MLX predictor ignores these config fields and logs warnings if they're set.
 - **Quantization mapping**: Config `"nf4"`/`"int4"`/`"4bit"` → mflux `quantize=4`; `"int8"`/`"8bit"` → `quantize=8`; `None` → no quantization. No bitsandbytes needed.
 - **`reference_images` not yet supported for MLX backend**: Raises `NotImplementedError`. Use `backend="diffusers"` for reference image support.
+
+## Ray 2.55 API Conventions
+
+This project uses **Ray 2.55.1**. The API has changed significantly from earlier versions. Always verify against the installed source in `.venv/lib/python3.12/site-packages/ray/` if unsure.
+
+### Ray Data (`ray.data.Dataset`)
+
+- **`Dataset` objects are NOT iterable.** Never use `for row in ds:` or unpack them. Use `ds.iter_rows()`, `ds.iter_batches()`, or `ds.iter_torch_batches()` instead.
+- **Split datasets** with `ds.train_test_split(test_size=0.2, shuffle=True, seed=42)`. Returns `(train_ds, val_ds)` tuple of `MaterializedDataset`. Do NOT use `ds.random_split()` — it does not exist on `Dataset`.
+- **Sample a fraction** with `ds.random_sample(fraction, seed=42)`. Returns a single `Dataset` (NOT a tuple). Use for undersampling majority classes.
+- **Filter rows** with `ds.filter(fn=)` or `ds.filter(expr=)` (prefer `expr` for performance).
+- **Shuffle** with `ds.random_shuffle(seed=42)`.
+- **Concatenate** with `ds.union(other_ds)`.
+- **Count rows** with `ds.count()` (materializes the dataset).
+- **Rich progress bars** are enabled by default via `DataContext` configuration in `sentimentizer/loader.py` and env vars in `sentimentizer/__init__.py`:
+  - `DataContext.get_current().enable_rich_progress_bars = True`
+  - `DataContext.get_current().use_ray_tqdm = False`
+  - Env vars: `RAY_DATA_ENABLE_RICH_PROGRESS_BARS=1`, `RAY_TQDM=0`
+  - Requires the `rich` package (listed in `pyproject.toml` dependencies).
+
+### Ray Train (`ray.train`)
+
+- **Checkpoints are directory-based only.** `Checkpoint.from_dict()` and `Checkpoint.to_dict()` were **removed in Ray 2.55+**. Use the directory-based API:
+
+```python
+# Writing a checkpoint (inside a training function)
+import os, tempfile
+import ray.cloudpickle as pickle
+from ray.train import Checkpoint
+
+checkpoint_data = {
+    "model_state_dict": model.module.state_dict(),  # unwrap DDP
+    "optimizer_state_dict": optimizer.state_dict(),
+    "epoch": epoch,
+}
+with tempfile.TemporaryDirectory() as checkpoint_dir:
+    with open(os.path.join(checkpoint_dir, "data.pkl"), "wb") as fp:
+        pickle.dump(checkpoint_data, fp)
+    checkpoint = Checkpoint.from_directory(checkpoint_dir)
+    tune.report({...}, checkpoint=checkpoint)
+```
+
+```python
+# Reading a checkpoint (on the driver)
+with result.checkpoint.as_directory() as checkpoint_dir:
+    with open(os.path.join(checkpoint_dir, "data.pkl"), "rb") as fp:
+        checkpoint_data = pickle.load(fp)
+    model_state_dict = checkpoint_data["model_state_dict"]
+```
+
+- **`train.get_context()`** only works inside a Ray Train worker function (launched by `trainer.fit()`). Never call it from the driver process.
+- **`prepare_model()`** wraps a model with DDP. Access the original model via `model.module` (e.g., `model.module.state_dict()`).
+
+### Ray Tune (`ray.tune`)
+
+- Use `tune.report({...})` to report metrics from trainables.
+- Use `tune.Tuner` (not `tune.run`, which is deprecated).
+- Use `tune.with_parameters()` to pass large objects (datasets) to trainables.
+- Use `tune.with_resources()` to specify resource requirements.
+
+### Common Pitfalls
+
+- **Never iterate a `Dataset` directly.** `for x in ds` raises `TypeError`.
+- **Never use `ds.random_split()`.** It does not exist. Use `ds.train_test_split()` for splitting or `ds.random_sample()` for fractional sampling.
+- **Never use `Checkpoint.from_dict()` or `Checkpoint.to_dict()`.** They were removed. Use `Checkpoint.from_directory()` / `checkpoint.as_directory()` with pickle.
+- **Never call `train.get_context()` outside a worker.** It raises `RuntimeError`.
+- **`get_dataset_shard` is a standalone function, not a method on `get_context()`.** Use `train.get_dataset_shard("train")`, NOT `train.get_context().get_dataset_shard("train")`.
+- **`random_sample(fraction)` returns a single `Dataset`, not a tuple.** Do not unpack it like `keep, _ = ds.random_sample(0.5)`.
+- **Never create `ray.util.metrics.Gauge`/`Counter`/`Histogram` at module import time.** In Ray 2.55+, custom metric objects created in the driver process are never exported — they must be created inside a Ray worker context (task, actor, or train function) to be registered with that worker's metrics agent and pushed to Prometheus. Use lazy initialization instead (create on first use inside the worker). See `_get_ray_gauges()` in `sentimentizer/trainer.py` for the canonical pattern: a module-level cache dict + factory function that creates gauges on demand and stores them per tag key.
+- **Ray session temp files accumulate in `/tmp/ray/` (5+ GB each).** Each `ray.init()` creates a session directory that is only cleaned up by `ray.shutdown()`. If the process crashes or is killed, the directory persists. The driver (`workflows/driver.py`) cleans up stale sessions (>1 hour old) at startup via `_cleanup_stale_ray_sessions()` and shuts down Ray at exit via `_ray_cleanup()` (registered with `atexit`). Always call `ray.shutdown()` in tests and scripts when done.
+
+## Web Search Utility
+
+Web search is available via two interfaces:
+
+1. **Python module** (`sentimentizer/agent/websearch.py`) — typed, secure, and integrated with the tuning agent as a `@agent.tool`. This is the preferred interface for code and agent use.
+2. **Shell script** (`scripts/web_search.sh`) — lightweight CLI convenience for quick manual queries.
+
+### Prerequisites
+
+- Set the `OLLAMA_API_KEY` environment variable (add it to `.env` from `.env.example`)
+
+### Python module usage
+
+```python
+from sentimentizer.agent.websearch import web_search, WebSearchResult, reset_rate_limit
+
+# Basic search
+results: list[WebSearchResult] = web_search("best learning rate for RNN")
+for r in results:
+    print(r.title, r.url, r.content[:100])
+
+# Reset rate limit at the start of each agent run
+reset_rate_limit()
+```
+
+### Security safeguards (Python module)
+
+- **API key protection**: Key is read from `OLLAMA_API_KEY` env var only; never passed as a parameter or exposed in error messages
+- **Query validation**: Queries are checked for length (max 200 chars) and secret patterns (API keys, tokens, passwords) before being sent
+- **Content sanitization**: Search results are truncated (max 2000 chars) and filtered for prompt-injection patterns (`ignore previous instructions`, `system:`, `<system>` tags, etc.)
+- **Error sanitization**: Error messages have Bearer tokens and key values replaced with `[REDACTED]`
+- **Rate limiting**: Max 3 calls per agent run to prevent excessive API usage; use `reset_rate_limit()` at the start of each run
+- **Timeout**: 15-second default request timeout to prevent hanging
+
+### When to use
+
+- Looking up API documentation or library versions not in the codebase
+- Checking for known issues or breaking changes in dependencies
+- Finding current best practices or patterns
+- Verifying facts that require up-to-date information
+
+## Code Quality Principles
+
+### Always use type hints
+
+- All function and method signatures **must** include type hints for parameters and return values
+- Use Python's `typing` module for complex types (e.g., `Optional`, `Union`, `Callable`, `TypeVar`)
+- Class attributes should also be annotated with types
+- Example:
+
+```python
+def tokenize(self, text: str, max_length: int = 512) -> list[int]:
+    ...
+```
+
+### Follow DRY (Don't Repeat Yourself)
+
+- Extract duplicated or near-duplicated logic into shared functions, classes, or mixins
+- Prefer composition over copy-paste — if two modules need the same behavior, factor it into a utility or base class
+- Configuration values that appear in multiple places should be defined once (e.g., in `config.py`) and referenced elsewhere
+
+### Follow SOLID principles
+
+- **Single Responsibility**: Each class/module should have one reason to change. Keep data loading, model definition, training, and serving logic in separate modules
+- **Open/Closed**: Design classes to be extended (via subclassing or configuration) without modifying existing code. Use abstract base classes or protocols where appropriate
+- **Liskov Substitution**: Subtypes must be substitutable for their base types. Don't override methods in ways that break the contract of the parent class
+- **Interface Segregation**: Prefer small, focused interfaces (protocols/ABCs) over large, general-purpose ones
+- **Dependency Inversion**: Depend on abstractions (protocols, ABCs) rather than concrete implementations. Inject dependencies via constructors or function arguments rather than creating them internally
 

@@ -582,11 +582,6 @@ class SentimentizerDeployment:
     async def router_predict(self, body: PredictRequest, request: Request) -> dict[str, Any]:
         """POST /v1/router/predict -- classify a single text (auto-batched)."""
         self._require_ready()
-        if not self.predictor.router_loaded:
-            raise HTTPException(
-                status_code=503,
-                detail=f"Router model not loaded: {self.predictor.router_error}",
-            )
 
         start = time.perf_counter()
         try:
@@ -594,6 +589,11 @@ class SentimentizerDeployment:
         except Exception:
             latency = time.perf_counter() - start
             self._router_metrics.record_request(latency, error=True)
+            if not self.predictor.router_loaded:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Router model not loaded: {self.predictor.router_error}",
+                ) from None
             raise
         latency = time.perf_counter() - start
 
@@ -616,11 +616,6 @@ class SentimentizerDeployment:
     async def router_batch(self, body: BatchRequest, request: Request) -> dict[str, Any]:
         """POST /v1/router/batch -- classify multiple texts into routes."""
         self._require_ready()
-        if not self.predictor.router_loaded:
-            raise HTTPException(
-                status_code=503,
-                detail=f"Router model not loaded: {self.predictor.router_error}",
-            )
 
         start = time.perf_counter()
         try:
@@ -628,6 +623,11 @@ class SentimentizerDeployment:
         except Exception:
             latency = time.perf_counter() - start
             self._router_metrics.record_request(latency, error=True)
+            if not self.predictor.router_loaded:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Router model not loaded: {self.predictor.router_error}",
+                ) from None
             raise
         latency = time.perf_counter() - start
 

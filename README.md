@@ -41,13 +41,35 @@ from sentimentizer.predictor import SentimentPredictor
 # Load the model
 predictor = SentimentPredictor(model_name="encoder")
 
-# Predict sentiment (returns label, score, token count, and model type)
+# Predict sentiment (returns label, score, all-class scores, token count, and model type)
 result = predictor.predict("amazing restaurant!")
-# >> {"label": "positive", "score": 0.92, "token_count": 2, "model": "encoder"}
+# >> {"positive": 0.848753035068512,
+#     "label": "positive",
+#     "score": 0.848753035068512,
+#     "scores": {"negative": 0.05746544152498245,
+#                "neutral": 0.09378153085708618,
+#                "positive": 0.848753035068512},
+#     "token_count": 2,
+#     "model": "encoder"}
 
 # Batch prediction
 results = predictor.predict_batch(["Great food!", "Terrible service."])
-# >> [{"label": "positive", "score": 0.88, "token_count": 2, "model": "encoder"}, ...]
+# >> [{'positive': 0.848753035068512,
+#      'label': 'positive',
+#      'score': 0.848753035068512,
+#      'scores': {'negative': 0.05746544152498245,
+#                 'neutral': 0.09378153085708618,
+#                 'positive': 0.848753035068512},
+#      'token_count': 2,
+#      'model': 'encoder'},
+#     {'negative': 0.9586858749389648,
+#      'label': 'negative',
+#      'score': 0.9586858749389648,
+#      'scores': {'negative': 0.9586858749389648,
+#                 'neutral': 0.03224344924092293,
+#                 'positive': 0.0090706842020154},
+#      'token_count': 2,
+#      'model': 'encoder'}]
 ```
 
 Models output **3-class probabilities** (negative, neutral, positive) that sum to 1.0 per sample.
