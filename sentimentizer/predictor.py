@@ -48,6 +48,10 @@ from sentimentizer.tokenizer import Tokenizer, get_trained_tokenizer, regex_toke
 # ---------------------------------------------------------------------------
 
 try:
+    # RouterModel/config import lazily, so probe sentence_transformers
+    # (the actual optional dep) here to set _ROUTER_AVAILABLE correctly.
+    import sentence_transformers  # noqa: F401
+
     from sentimentizer.router.config import RouteLabels
     from sentimentizer.router.model import RouterModel
 
