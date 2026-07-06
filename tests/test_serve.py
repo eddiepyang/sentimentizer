@@ -73,6 +73,10 @@ def _mock_predictor(**overrides):
     }
     for k, v in overrides.items():
         setattr(p, k, v)
+    # When the router isn't loaded, classify_batch raises (matching the
+    # real SentimentPredictor's lazy-load-then-raise behavior).
+    if not p.router_loaded:
+        p.classify_batch.side_effect = RuntimeError(f"Router model not loaded: {p.router_error}")
     return p
 
 

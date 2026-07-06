@@ -735,7 +735,11 @@ class TestPredictorConditionalTokenizer:
 
 
 class TestRouterAutoDownload:
-    """Test that SentimentPredictor auto-downloads the router model from HF Hub."""
+    """Test that SentimentPredictor auto-downloads the router model from HF Hub.
+
+    The router loads lazily — download happens on the first classify() call,
+    not at construction time.
+    """
 
     @patch("sentimentizer.predictor.get_trained_model")
     @patch("sentimentizer.predictor.get_trained_tokenizer")
@@ -747,7 +751,7 @@ class TestRouterAutoDownload:
         _mock_tokenizer: MagicMock,
         mock_get_model: MagicMock,
     ) -> None:
-        """When router path doesn't exist, snapshot_download should be called."""
+        """When router path doesn't exist, snapshot_download is called on first classify()."""
         import tempfile
 
         from sentimentizer.predictor import SentimentPredictor
@@ -762,10 +766,15 @@ class TestRouterAutoDownload:
                 mock_exists.return_value = False
 
                 with patch("huggingface_hub.snapshot_download") as mock_snap:
-                    SentimentPredictor(
+                    predictor = SentimentPredictor(
                         model_name="encoder",
                         router_model_path=str(router_path),
                     )
+                    # Router loads lazily — no download at construction.
+                    mock_snap.assert_not_called()
+                    # Trigger lazy load.
+                    with pytest.raises(RuntimeError):
+                        predictor.classify("hello")
                     mock_snap.assert_called_once_with(
                         repo_id="ryeyoo/sentimentizer-router",
                         local_dir=str(router_path),
@@ -799,6 +808,12 @@ class TestRouterAutoDownload:
                     model_name="encoder",
                     router_model_path=str(router_path),
                 )
+                # Construction succeeds without loading the router.
+                assert predictor.router is None
+                assert predictor.router_error is None
+                # Lazy load on first classify() captures the error.
+                with pytest.raises(RuntimeError):
+                    predictor.classify("hello")
                 assert predictor.router is None
                 assert predictor.router_error is not None
 
