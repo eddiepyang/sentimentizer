@@ -244,9 +244,11 @@ All `make train*` targets automatically prevent system sleep during training usi
 ### Running tests
 
 ```bash
-uv run pytest tests/ -v --exitfirst --failed-first
+uv run pytest tests/ --exitfirst --failed-first
 # For Ray-specific tests:
-uv run pytest tests/ -v -k "Ray"
+uv run pytest tests/ -k "Ray"
+# Verbose per-test output when debugging:
+uv run pytest tests/ -v
 ```
 
 ### Linting, formatting, and checking
