@@ -18,6 +18,11 @@ if __name__ == "__main__":
         "true",
         "yes",
     )
+    env_embeddings = os.environ.get("SENTIMENTIZER_EMBEDDINGS_ENABLED", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
     parser.add_argument(
         "--diffusion",
         action="store_true",
@@ -27,10 +32,19 @@ if __name__ == "__main__":
         "Can also be enabled via config (flux2_klein_enabled, sd35_enabled, "
         "sdxl_models) or via SENTIMENTIZER_DIFFUSION_ENABLED env var.",
     )
+    parser.add_argument(
+        "--embeddings",
+        action="store_true",
+        default=env_embeddings,
+        help="Enable dense embedding routes. BGE-M3 additionally requires "
+        "SENTIMENTIZER_BGE_M3_ENABLED=1.",
+    )
     args = parser.parse_args()
 
     if args.config:
         os.environ["SENTIMENTIZER_SERVE_CONFIG"] = args.config
+    if args.embeddings:
+        os.environ["SENTIMENTIZER_EMBEDDINGS_ENABLED"] = "1"
 
     from sentimentizer.serve.app import main
 

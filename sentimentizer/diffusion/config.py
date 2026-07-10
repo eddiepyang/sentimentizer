@@ -73,6 +73,8 @@ def resolve_backend(model_key: str, backend: str = "auto") -> str:
             raise ValueError(
                 f"backend={backend!r} not available for {model_key}. " f"Available: {available}"
             )
+        if backend == "mlx" and not is_mlx_device():
+            raise ValueError(f"backend='mlx' not available for {model_key} on this device")
         return backend
     if "mlx" in available and is_mlx_device():
         return "mlx"
