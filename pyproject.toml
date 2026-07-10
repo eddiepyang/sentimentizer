@@ -64,6 +64,11 @@ router = [
     "datasets",
     "requests",
 ]
+embeddings = [
+    "sentence-transformers>=4.0.0",
+    "einops>=0.8.0,<0.9",
+    "FlagEmbedding>=1.3.5",
+]
 onnx = [
     "onnx",
     "onnxruntime",

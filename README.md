@@ -286,13 +286,16 @@ Ensure local CI tests pass prior to submitting changes:
 
 ```bash
 # Run all tests
-uv run pytest tests/ -v
+uv run pytest tests/
 
 # Run only Ray Train tests
-uv run pytest tests/ -v -k "Ray"
+uv run pytest tests/ -k "Ray"
 
 # Run with coverage report
-uv run pytest tests/ -v --cov=sentimentizer --cov-report=term-missing
+uv run pytest tests/ --cov=sentimentizer --cov-report=term-missing
+
+# Verbose per-test output (or: make test-verbose)
+uv run pytest tests/ -v
 ```
 
 ---

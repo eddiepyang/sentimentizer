@@ -26,6 +26,23 @@ sentimentizer serve --host 0.0.0.0 --port 8000
 
 By default, the server binds to `0.0.0.0:8000`.
 
+### Optional embedding service
+
+Install the embeddings extra and enable the deployment explicitly:
+
+```bash
+uv sync --extra ray --extra embeddings
+SENTIMENTIZER_EMBEDDINGS_ENABLED=1 \
+SENTIMENTIZER_BGE_M3_ENABLED=1 \
+python -m sentimentizer.serve --embeddings
+```
+
+`POST /v1/embeddings` accepts up to 64 non-empty texts and returns BGE-M3
+1024-dimensional dense vectors plus sorted learned-sparse token IDs and weights.
+The legacy `POST /vectors` and binary `POST /vectors/batch` routes serve the
+configured dense model for existing clients. Model loading is disabled by
+default because BGE-M3 is a large optional dependency.
+
 ---
 
 ## API Endpoints Reference

@@ -1,5 +1,7 @@
 FROM python:3.12-slim AS builder
 
+ARG EXTRAS="ray,embeddings"
+
 WORKDIR /app
 
 # Install uv
@@ -15,7 +17,7 @@ RUN uv pip install --system --no-cache-dir \
     torch --index-url https://download.pytorch.org/whl/cpu \
     && uv pip install --system --no-cache-dir \
     --index-url https://download.pytorch.org/whl/cpu \
-    --default-index https://pypi.org/simple/ .
+    --default-index https://pypi.org/simple/ ".[${EXTRAS}]"
 
 # --- Runtime stage ---
 FROM python:3.12-slim
@@ -28,6 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Create non-root user for security (K8s runAsNonRoot compliance)
 RUN useradd -r -s /bin/false -d /app sentimentizer \
+    && mkdir -p /app/.cache/huggingface \
     && chown -R sentimentizer:sentimentizer /app
 
 # Copy installed packages and app from builder
@@ -37,9 +40,11 @@ COPY --from=builder /app /app
 
 USER sentimentizer
 
+ENV HF_HOME=/app/.cache/huggingface
+
 # Ray Serve default port
 EXPOSE 8000
 # Ray dashboard (optional)
 EXPOSE 8265
 
-CMD ["serve", "run", "sentimentizer.serve:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "sentimentizer.serve", "--host", "0.0.0.0", "--port", "8000"]

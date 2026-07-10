@@ -1,5 +1,5 @@
 .PHONY: setup setup-ci setup-dev download-data train train-rnn train-encoder train-decoder train-modernbert \
-       train-distributed train-quick train-no-checkpoint train-resume serve test test-lint lint format check ci clean docker-build docker-run \
+       train-distributed train-quick train-no-checkpoint train-resume serve test test-verbose test-lint lint format check ci clean docker-build docker-run \
  	   gpu-reset tune tune-rnn tune-encoder tune-decoder tune-standalone \
  	   start-metrics stop-metrics setup-dashboards start-exporter stop-exporter stop-ray \
  	   upload-rnn upload-encoder upload-decoder upload-modernbert upload-router \
@@ -258,21 +258,25 @@ serve-all:
 # Testing & Linting
 # ──────────────────────────────────────────────
 
-## Run all tests with verbose output
+## Run all tests
 test:
+	uv run pytest tests/
+
+## Run all tests with verbose per-test output
+test-verbose:
 	uv run pytest tests/ -v
 
 ## Run lint checks then tests (lint must pass before tests run)
 test-lint: lint
-	uv run pytest tests/ -v
+	uv run pytest tests/
 
 ## Run tests with coverage report
 test-cov:
-	uv run pytest tests/ -v --cov=sentimentizer --cov-report=term-missing
+	uv run pytest tests/ --cov=sentimentizer --cov-report=term-missing
 
 ## Run only Ray Train tests
 test-ray:
-	uv run pytest tests/ -v -k "Ray"
+	uv run pytest tests/ -k "Ray"
 
 ## Lint with ruff
 lint:

@@ -95,6 +95,15 @@ class ServeConfig:
     idempotency_ttl_s: int = 600
     job_ttl_s: int = 3600
     prompt_blocklist_path: str = ""
+    embeddings_enabled: bool = False
+    embeddings_device: str = "auto"
+    dense_embedding_model_id: str = "nomic-ai/nomic-embed-text-v1.5"
+    dense_embedding_revision: str = "161a1515eaa28482dfe6ceae96cdefdd20dabcbd"
+    bge_m3_enabled: bool = False
+    bge_m3_model_id: str = "BAAI/bge-m3"
+    bge_m3_use_fp16: bool = False
+    bge_m3_batch_size: int = 12
+    bge_m3_batch_wait_s: float = 0.01
 
     def __post_init__(self) -> None:
         """Validate that numeric fields are positive."""
@@ -103,10 +112,12 @@ class ServeConfig:
             "max_text_length": self.max_text_length,
             "predict_batch_size": self.predict_batch_size,
             "classify_batch_size": self.classify_batch_size,
+            "bge_m3_batch_size": self.bge_m3_batch_size,
         }
         _positive_floats = {
             "predict_batch_wait_s": self.predict_batch_wait_s,
             "classify_batch_wait_s": self.classify_batch_wait_s,
+            "bge_m3_batch_wait_s": self.bge_m3_batch_wait_s,
         }
         for name, val in _positive_ints.items():
             if val < 1:
@@ -167,6 +178,15 @@ _ENV_OVERRIDES: dict[str, str] = {
     "SENTIMENTIZER_IDEMPOTENCY_TTL_S": "idempotency_ttl_s",
     "SENTIMENTIZER_JOB_TTL_S": "job_ttl_s",
     "SENTIMENTIZER_PROMPT_BLOCKLIST_PATH": "prompt_blocklist_path",
+    "SENTIMENTIZER_EMBEDDINGS_ENABLED": "embeddings_enabled",
+    "SENTIMENTIZER_EMBEDDINGS_DEVICE": "embeddings_device",
+    "SENTIMENTIZER_DENSE_EMBEDDING_MODEL_ID": "dense_embedding_model_id",
+    "SENTIMENTIZER_DENSE_EMBEDDING_REVISION": "dense_embedding_revision",
+    "SENTIMENTIZER_BGE_M3_ENABLED": "bge_m3_enabled",
+    "SENTIMENTIZER_BGE_M3_MODEL_ID": "bge_m3_model_id",
+    "SENTIMENTIZER_BGE_M3_USE_FP16": "bge_m3_use_fp16",
+    "SENTIMENTIZER_BGE_M3_BATCH_SIZE": "bge_m3_batch_size",
+    "SENTIMENTIZER_BGE_M3_BATCH_WAIT_S": "bge_m3_batch_wait_s",
 }
 
 # Type coercion for non-string fields
@@ -188,6 +208,11 @@ _FIELD_TYPES: dict[str, type | callable] = {
     "rate_limit_burst": int,
     "idempotency_ttl_s": int,
     "job_ttl_s": int,
+    "embeddings_enabled": _parse_bool,
+    "bge_m3_enabled": _parse_bool,
+    "bge_m3_use_fp16": _parse_bool,
+    "bge_m3_batch_size": int,
+    "bge_m3_batch_wait_s": float,
 }
 
 

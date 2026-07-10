@@ -62,6 +62,7 @@ Endpoints:
 
 import asyncio
 import os
+import struct
 import threading
 import time
 import uuid
@@ -78,7 +79,7 @@ from collections.abc import Awaitable, Callable
 
 from fastapi import FastAPI, HTTPException, Path, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import Response as StarletteResponse
@@ -87,6 +88,12 @@ from sentimentizer import logger
 from sentimentizer.predictor import _MODEL_CONFIGS, SentimentPredictor
 from sentimentizer.serve.base import ServiceMetrics, serve
 from sentimentizer.serve.config import cfg, parse_sdxl_models
+from sentimentizer.serve.embeddings_models import (
+    EmbeddingsRequest,
+    EmbeddingsResult,
+    VectorBatchRequest,
+    VectorRequest,
+)
 from sentimentizer.serve.models import (
     BatchRequest,
     BatchResponse,
@@ -353,13 +360,14 @@ class SentimentizerDeployment:
     ``asyncio.to_thread()`` to avoid blocking the event loop.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, embeddings_handle: Any | None = None) -> None:
         self._started_at = time.time()
         self._ready = False
         self._load_error: str | None = None
         self._sentiment_metrics = ServiceMetrics(prefix="sentimentizer")
         self._router_metrics = ServiceMetrics(prefix="router")
         self.predictor: SentimentPredictor | None = None
+        self._embeddings_handle = embeddings_handle
 
         try:
             self.predictor = SentimentPredictor(
@@ -384,6 +392,12 @@ class SentimentizerDeployment:
                 status_code=503,
                 detail=f"Service not ready: {self._load_error or 'models not loaded'}",
             )
+
+    def _require_embeddings(self, *, bge_m3: bool = False) -> None:
+        if self._embeddings_handle is None or not cfg.embeddings_enabled:
+            raise HTTPException(status_code=503, detail="Embeddings are disabled")
+        if bge_m3 and not cfg.bge_m3_enabled:
+            raise HTTPException(status_code=503, detail="BGE-M3 embeddings are disabled")
 
     def _validate_model(self, model_name: str | None) -> str:
         """Validate requested model matches loaded model.
@@ -575,6 +589,44 @@ class SentimentizerDeployment:
         return {"model": model_name, "info": model_info}
 
     # ------------------------------------------------------------------
+    # Embedding handlers
+    # ------------------------------------------------------------------
+
+    @app.post("/vectors")
+    async def vector(self, body: VectorRequest) -> dict[str, list[float]]:
+        """Return one legacy dense vector."""
+        self._require_embeddings()
+        vectors = await self._embeddings_handle.dense.remote([body.text], body.mode)
+        return {"vector": vectors[0]}
+
+    @app.post("/vectors/batch", response_class=Response)
+    async def vectors_batch(self, body: VectorBatchRequest) -> Response:
+        """Return dense vectors using the legacy little-endian binary format."""
+        self._require_embeddings()
+        vectors = await self._embeddings_handle.dense.remote(body.texts, body.mode)
+        rows = len(vectors)
+        dim = len(vectors[0]) if vectors else 0
+        payload = bytearray(struct.pack("<II", rows, dim))
+        for vector in vectors:
+            if len(vector) != dim:
+                raise HTTPException(status_code=500, detail="Embedding dimensions differ")
+            payload.extend(struct.pack(f"<{dim}f", *vector))
+        return Response(content=bytes(payload), media_type="application/octet-stream")
+
+    @app.post("/v1/embeddings", response_model=EmbeddingsResult)
+    async def embeddings(self, body: EmbeddingsRequest) -> dict[str, Any]:
+        """Return BGE-M3 dense and learned-sparse vectors in input order."""
+        self._require_embeddings(bge_m3=True)
+        vectors = await asyncio.gather(
+            *(self._embeddings_handle.bge_m3.remote(text) for text in body.texts)
+        )
+        return {
+            "backend": "flag_embedding",
+            "model": cfg.bge_m3_model_id,
+            "vectors": vectors,
+        }
+
+    # ------------------------------------------------------------------
     # Router handlers (v1 prefix)
     # ------------------------------------------------------------------
 
@@ -697,6 +749,8 @@ class SentimentizerDeployment:
                     list(parse_sdxl_models(cfg.sdxl_models).keys()) if cfg.sdxl_models else []
                 ),
             }
+        body["embeddings_enabled"] = cfg.embeddings_enabled
+        body["bge_m3_enabled"] = cfg.bge_m3_enabled
         if not self.predictor.model_loaded:
             return JSONResponse(status_code=503, content=body)
         return body
@@ -749,8 +803,14 @@ def main(host: str = "0.0.0.0", port: int = 8000, diffusion: bool = False) -> No
         )
     )
 
+    embeddings_handle = None
+    if cfg.embeddings_enabled:
+        from sentimentizer.serve.embeddings_app import EmbeddingsDeployment
+
+        embeddings_handle = EmbeddingsDeployment.bind()
+
     serve.run(
-        SentimentizerDeployment.bind(),
+        SentimentizerDeployment.bind(embeddings_handle),
         name="sentimentizer",
         route_prefix="/",
     )
