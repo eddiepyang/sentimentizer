@@ -63,7 +63,6 @@ Endpoints:
 import asyncio
 import os
 import struct
-import struct
 import threading
 import time
 import uuid
@@ -80,7 +79,6 @@ from collections.abc import Awaitable, Callable
 
 from fastapi import FastAPI, HTTPException, Path, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
 from fastapi.responses import JSONResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
@@ -365,14 +363,12 @@ class SentimentizerDeployment:
     """
 
     def __init__(self, embeddings_handle: Any | None = None) -> None:
-    def __init__(self, embeddings_handle: Any | None = None) -> None:
         self._started_at = time.time()
         self._ready = False
         self._load_error: str | None = None
         self._sentiment_metrics = ServiceMetrics(prefix="sentimentizer")
         self._router_metrics = ServiceMetrics(prefix="router")
         self.predictor: SentimentPredictor | None = None
-        self._embeddings_handle = embeddings_handle
         self._embeddings_handle = embeddings_handle
 
         try:
