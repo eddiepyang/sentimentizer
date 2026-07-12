@@ -128,7 +128,7 @@ def _mock_deployment(predictor=None, ready=True, load_error=None):
 
 def _run(coro):
     """Run an async coroutine synchronously in tests."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 def _mock_request():
