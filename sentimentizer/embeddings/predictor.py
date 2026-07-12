@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from time import perf_counter
 from typing import Any
 
+from sentimentizer import logger
 from sentimentizer.device import resolve_device
 
 try:
@@ -51,6 +53,15 @@ class DenseEmbeddingPredictor:
             return []
         if mode not in {"query", "document"}:
             raise ValueError(f"unsupported embedding mode {mode!r}")
+        started = perf_counter()
+        logger.debug(
+            "dense_embedding_started",
+            input_count=len(texts),
+            character_count=sum(len(text) for text in texts),
+            mode=mode,
+            model=self.model_id,
+            device=self.device,
+        )
         prefix = QUERY_PREFIX if mode == "query" else DOCUMENT_PREFIX
         vectors = self._model.encode(
             [prefix + text for text in texts],
@@ -63,4 +74,11 @@ class DenseEmbeddingPredictor:
                 raise RuntimeError(
                     f"dense embedder returned {len(vector)} dimensions; expected {DENSE_DIM}"
                 )
+        logger.debug(
+            "dense_embedding_completed",
+            input_count=len(result),
+            dimensions=DENSE_DIM,
+            mode=mode,
+            elapsed_ms=round((perf_counter() - started) * 1000, 2),
+        )
         return result

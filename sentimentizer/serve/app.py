@@ -89,6 +89,8 @@ from sentimentizer.predictor import _MODEL_CONFIGS, SentimentPredictor
 from sentimentizer.serve.base import ServiceMetrics, serve
 from sentimentizer.serve.config import cfg, parse_sdxl_models
 from sentimentizer.serve.embeddings_models import (
+    DenseEmbeddingsRequest,
+    DenseEmbeddingsResult,
     EmbeddingsRequest,
     EmbeddingsResult,
     VectorBatchRequest,
@@ -399,6 +401,12 @@ class SentimentizerDeployment:
         if bge_m3 and not cfg.bge_m3_enabled:
             raise HTTPException(status_code=503, detail="BGE-M3 embeddings are disabled")
 
+    def _require_embeddings(self, *, bge_m3: bool = False) -> None:
+        if self._embeddings_handle is None or not cfg.embeddings_enabled:
+            raise HTTPException(status_code=503, detail="Embeddings are disabled")
+        if bge_m3 and not cfg.bge_m3_enabled:
+            raise HTTPException(status_code=503, detail="BGE-M3 embeddings are disabled")
+
     def _validate_model(self, model_name: str | None) -> str:
         """Validate requested model matches loaded model.
 
@@ -626,6 +634,13 @@ class SentimentizerDeployment:
             "vectors": vectors,
         }
 
+    @app.post("/v1/embeddings/dense", response_model=DenseEmbeddingsResult)
+    async def dense_embeddings(self, body: DenseEmbeddingsRequest) -> dict[str, Any]:
+        """Return nomic dense vectors in input order."""
+        self._require_embeddings()
+        vectors = await self._embeddings_handle.dense.remote(body.texts, body.mode)
+        return {"model": cfg.dense_embedding_model_id, "vectors": vectors}
+
     # ------------------------------------------------------------------
     # Router handlers (v1 prefix)
     # ------------------------------------------------------------------
@@ -751,6 +766,8 @@ class SentimentizerDeployment:
             }
         body["embeddings_enabled"] = cfg.embeddings_enabled
         body["bge_m3_enabled"] = cfg.bge_m3_enabled
+        body["embeddings_enabled"] = cfg.embeddings_enabled
+        body["bge_m3_enabled"] = cfg.bge_m3_enabled
         if not self.predictor.model_loaded:
             return JSONResponse(status_code=503, content=body)
         return body
@@ -809,7 +826,14 @@ def main(host: str = "0.0.0.0", port: int = 8000, diffusion: bool = False) -> No
 
         embeddings_handle = EmbeddingsDeployment.bind()
 
+    embeddings_handle = None
+    if cfg.embeddings_enabled:
+        from sentimentizer.serve.embeddings_app import EmbeddingsDeployment
+
+        embeddings_handle = EmbeddingsDeployment.bind()
+
     serve.run(
+        SentimentizerDeployment.bind(embeddings_handle),
         SentimentizerDeployment.bind(embeddings_handle),
         name="sentimentizer",
         route_prefix="/",

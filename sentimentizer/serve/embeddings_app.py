@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from sentimentizer import logger
 from sentimentizer.embeddings import BGEM3Predictor, DenseEmbeddingPredictor
 from sentimentizer.serve.base import serve
 from sentimentizer.serve.config import cfg
@@ -42,6 +43,7 @@ class EmbeddingsDeployment:
         """Return dense embeddings for a query or document batch."""
         if self._dense is None:
             raise RuntimeError("dense embeddings are disabled")
+        logger.debug("dense_embedding_request", input_count=len(texts), mode=mode)
         return self._dense.encode(texts, mode)
 
     @serve.batch(
@@ -52,4 +54,5 @@ class EmbeddingsDeployment:
         """Auto-batch single-text BGE-M3 calls across HTTP requests."""
         if self._bge_m3 is None:
             raise RuntimeError("BGE-M3 embeddings are disabled")
+        logger.debug("bge_m3_embedding_request", input_count=len(texts))
         return self._bge_m3.encode(texts)

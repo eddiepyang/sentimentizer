@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from time import perf_counter
 from typing import Any
 
 from sentimentizer import logger
@@ -57,6 +58,14 @@ class BGEM3Predictor:
         """Encode texts in input order into JSON-serializable hybrid vectors."""
         if not texts:
             return []
+        started = perf_counter()
+        logger.debug(
+            "bge_m3_embedding_started",
+            input_count=len(texts),
+            character_count=sum(len(text) for text in texts),
+            model=self.model_id,
+            device=self.device,
+        )
         output = self._model.encode(
             list(texts),
             batch_size=self.batch_size,
@@ -89,6 +98,15 @@ class BGEM3Predictor:
                     "sparse_values": values,
                 }
             )
+        sparse_counts = [len(vector["sparse_indices"]) for vector in vectors]
+        logger.debug(
+            "bge_m3_embedding_completed",
+            input_count=len(vectors),
+            dense_dimensions=DENSE_DIM,
+            sparse_nnz_min=min(sparse_counts),
+            sparse_nnz_max=max(sparse_counts),
+            elapsed_ms=round((perf_counter() - started) * 1000, 2),
+        )
         return vectors
 
 
