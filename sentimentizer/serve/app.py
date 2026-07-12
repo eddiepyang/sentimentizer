@@ -89,6 +89,8 @@ from sentimentizer.predictor import _MODEL_CONFIGS, SentimentPredictor
 from sentimentizer.serve.base import ServiceMetrics, serve
 from sentimentizer.serve.config import cfg, parse_sdxl_models
 from sentimentizer.serve.embeddings_models import (
+    DenseEmbeddingsRequest,
+    DenseEmbeddingsResult,
     EmbeddingsRequest,
     EmbeddingsResult,
     VectorBatchRequest,
@@ -625,6 +627,13 @@ class SentimentizerDeployment:
             "model": cfg.bge_m3_model_id,
             "vectors": vectors,
         }
+
+    @app.post("/v1/embeddings/dense", response_model=DenseEmbeddingsResult)
+    async def dense_embeddings(self, body: DenseEmbeddingsRequest) -> dict[str, Any]:
+        """Return nomic dense vectors in input order."""
+        self._require_embeddings()
+        vectors = await self._embeddings_handle.dense.remote(body.texts, body.mode)
+        return {"model": cfg.dense_embedding_model_id, "vectors": vectors}
 
     # ------------------------------------------------------------------
     # Router handlers (v1 prefix)

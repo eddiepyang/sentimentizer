@@ -34,6 +34,23 @@ class EmbeddingsRequest(BaseModel):
     )
 
 
+class DenseEmbeddingsRequest(BaseModel):
+    """Batch nomic dense embedding request."""
+
+    texts: list[Annotated[str, Field(min_length=1, max_length=cfg.max_text_length)]] = Field(
+        min_length=1,
+        max_length=cfg.max_batch_size,
+    )
+    mode: Literal["query", "document"] = "query"
+
+
+class DenseEmbeddingsResult(BaseModel):
+    """Nomic dense embedding response."""
+
+    model: str
+    vectors: list[list[float]]
+
+
 class EmbeddingVector(BaseModel):
     """Dense and learned-sparse representation for one text."""
 
