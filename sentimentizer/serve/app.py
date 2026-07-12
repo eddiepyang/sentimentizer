@@ -63,6 +63,7 @@ Endpoints:
 import asyncio
 import os
 import struct
+import struct
 import threading
 import time
 import uuid
@@ -79,6 +80,7 @@ from collections.abc import Awaitable, Callable
 
 from fastapi import FastAPI, HTTPException, Path, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, Response
 from fastapi.responses import JSONResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
@@ -363,12 +365,14 @@ class SentimentizerDeployment:
     """
 
     def __init__(self, embeddings_handle: Any | None = None) -> None:
+    def __init__(self, embeddings_handle: Any | None = None) -> None:
         self._started_at = time.time()
         self._ready = False
         self._load_error: str | None = None
         self._sentiment_metrics = ServiceMetrics(prefix="sentimentizer")
         self._router_metrics = ServiceMetrics(prefix="router")
         self.predictor: SentimentPredictor | None = None
+        self._embeddings_handle = embeddings_handle
         self._embeddings_handle = embeddings_handle
 
         try:
@@ -394,6 +398,12 @@ class SentimentizerDeployment:
                 status_code=503,
                 detail=f"Service not ready: {self._load_error or 'models not loaded'}",
             )
+
+    def _require_embeddings(self, *, bge_m3: bool = False) -> None:
+        if self._embeddings_handle is None or not cfg.embeddings_enabled:
+            raise HTTPException(status_code=503, detail="Embeddings are disabled")
+        if bge_m3 and not cfg.bge_m3_enabled:
+            raise HTTPException(status_code=503, detail="BGE-M3 embeddings are disabled")
 
     def _require_embeddings(self, *, bge_m3: bool = False) -> None:
         if self._embeddings_handle is None or not cfg.embeddings_enabled:
@@ -760,6 +770,8 @@ class SentimentizerDeployment:
             }
         body["embeddings_enabled"] = cfg.embeddings_enabled
         body["bge_m3_enabled"] = cfg.bge_m3_enabled
+        body["embeddings_enabled"] = cfg.embeddings_enabled
+        body["bge_m3_enabled"] = cfg.bge_m3_enabled
         if not self.predictor.model_loaded:
             return JSONResponse(status_code=503, content=body)
         return body
@@ -818,7 +830,14 @@ def main(host: str = "0.0.0.0", port: int = 8000, diffusion: bool = False) -> No
 
         embeddings_handle = EmbeddingsDeployment.bind()
 
+    embeddings_handle = None
+    if cfg.embeddings_enabled:
+        from sentimentizer.serve.embeddings_app import EmbeddingsDeployment
+
+        embeddings_handle = EmbeddingsDeployment.bind()
+
     serve.run(
+        SentimentizerDeployment.bind(embeddings_handle),
         SentimentizerDeployment.bind(embeddings_handle),
         name="sentimentizer",
         route_prefix="/",
