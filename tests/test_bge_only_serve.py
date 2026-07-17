@@ -132,6 +132,35 @@ def test_initialize_ray_rejects_nonpositive_allocation() -> None:
         initialize_ray(MagicMock(), 0)
 
 
+def test_main_disables_uv_run_runtime_env_hook() -> None:
+    """bge_only_app sets RAY_ENABLE_UV_RUN_RUNTIME_ENV=false at module import
+    time to skip the working-dir packaging + per-session venv creation on
+    cold start (~37s savings). Must be set before any Ray import — Ray reads
+    this constant at ray_constants import time, not at ray.init() call time."""
+    # Importing the module sets the env var. Clear it first to prove the
+    # import is what sets it, not a pre-existing value.
+    with patch.dict(os.environ, {}, clear=True):
+        # Force a re-import so the module-level setdefault runs fresh.
+        import importlib
+
+        import sentimentizer.serve.bge_only_app as bga
+
+        importlib.reload(bga)
+        assert os.environ.get("RAY_ENABLE_UV_RUN_RUNTIME_ENV") == "false"
+
+
+def test_main_respects_caller_override_of_uv_run_env() -> None:
+    """A caller that pre-sets RAY_ENABLE_UV_RUN_RUNTIME_ENV=true keeps the
+    uv hook enabled — setdefault does not overwrite an explicit choice."""
+    with patch.dict(os.environ, {"RAY_ENABLE_UV_RUN_RUNTIME_ENV": "true"}, clear=True):
+        import importlib
+
+        import sentimentizer.serve.bge_only_app as bga
+
+        importlib.reload(bga)
+        assert os.environ.get("RAY_ENABLE_UV_RUN_RUNTIME_ENV") == "true"
+
+
 def test_bge_only_parser_defaults() -> None:
     args = build_parser().parse_args(["--bge-m3-only"])
 

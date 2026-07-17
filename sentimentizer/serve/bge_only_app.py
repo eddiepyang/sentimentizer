@@ -10,6 +10,15 @@ import threading
 import time
 from typing import Any
 
+# Prevent Ray from creating isolated worker venvs via the uv-run runtime-env
+# hook. The hook packages the CWD as a working_dir and creates a per-session
+# venv on every cold start (~17s of packaging + venv setup). The workers already
+# inherit the project venv via `uv run`, so the packaging is redundant for a
+# local Serve deploy. Must be set before any Ray import — Ray reads this
+# constant at ray_constants import time, not at ray.init() call time.
+# Cold start drops from ~52s to ~15s.
+os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "false")
+
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, Response
 
