@@ -498,10 +498,20 @@ def router_push(ctx: click.Context, model_path: str, repo_id: str) -> None:
 
 @cli.command("serve")
 @click.option("--model-path", default="models/router", help="Path to trained router model")
-@click.option("--host", default="0.0.0.0", help="Host to serve on")
-@click.option("--port", default=8080, type=int, help="Port to serve on")
+@click.option("--host", default=None, help="Override serve_host from service.yaml")
+@click.option(
+    "--port",
+    default=None,
+    type=click.IntRange(min=1, max=65535),
+    help="Override serve_port from service.yaml",
+)
 @click.pass_context
-def serve_cmd(ctx: click.Context, model_path: str, host: str, port: int) -> None:
+def serve_cmd(
+    ctx: click.Context,
+    model_path: str,
+    host: str | None,
+    port: int | None,
+) -> None:
     """Serve the unified Sentimentizer API via Ray Serve.
 
     Starts a REST API serving both sentiment analysis and review routing:

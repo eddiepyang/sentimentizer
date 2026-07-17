@@ -1,11 +1,14 @@
 """Configuration for the Ray Serve deployment.
 
-Loads defaults from serve_config.yaml, with environment variables
+Loads defaults from service.yaml, with environment variables
 taking priority. Use ``ServeConfig.from_yaml()`` to load with the
 standard precedence: YAML defaults < env vars.
 
 Environment variables:
     SENTIMENTIZER_SERVE_CONFIG  -- Path to custom YAML config file
+    SENTIMENTIZER_SERVE_HOST -- Override serve_host
+    SENTIMENTIZER_SERVE_PORT -- Override serve_port
+    SENTIMENTIZER_RAY_OBJECT_STORE_MEMORY_MB -- Override ray_object_store_memory_mb
     SENTIMENTIZER_DEFAULT_MODEL -- Override default_model
     SENTIMENTIZER_MAX_BATCH_SIZE -- Override max_batch_size
     SENTIMENTIZER_MAX_TEXT_LENGTH -- Override max_text_length
@@ -31,6 +34,9 @@ class ServeConfig:
     """Configuration for the Sentimentizer Ray Serve deployment.
 
     Attributes:
+        serve_host: Address used by the Ray Serve HTTP proxy.
+        serve_port: Port used by the Ray Serve HTTP proxy.
+        ray_object_store_memory_mb: Ray object-store allocation in MiB.
         default_model: Default sentiment model to load (rnn, encoder, decoder).
         router_model_path: Path to trained router model directory.
         max_batch_size: Maximum texts per /v1/batch request.
@@ -67,8 +73,15 @@ class ServeConfig:
         idempotency_ttl_s: Cache TTL for idempotency keys.
         job_ttl_s: TTL in seconds before terminal job records are reaped.
         prompt_blocklist_path: Path to prompt blocklist file.
+        bge_m3_num_replicas: Number of BGE-M3 Ray Serve replicas.
+        bge_m3_max_ongoing_requests: Maximum concurrent requests per BGE-M3 replica.
+        bge_m3_num_cpus: Ray CPU reservation per BGE-M3 replica.
+        bge_m3_num_gpus: Ray GPU reservation per BGE-M3 replica.
     """
 
+    serve_host: str = "0.0.0.0"
+    serve_port: int = 8000
+    ray_object_store_memory_mb: int = 384
     default_model: str = "encoder"
     router_model_path: str = "models/router"
     max_batch_size: int = 64
@@ -102,17 +115,25 @@ class ServeConfig:
     bge_m3_enabled: bool = False
     bge_m3_model_id: str = "BAAI/bge-m3"
     bge_m3_use_fp16: bool = False
-    bge_m3_batch_size: int = 12
+    bge_m3_batch_size: int = 8
     bge_m3_batch_wait_s: float = 0.01
+    bge_m3_num_replicas: int = 1
+    bge_m3_max_ongoing_requests: int = 64
+    bge_m3_num_cpus: float = 2.0
+    bge_m3_num_gpus: float = 0.0
 
     def __post_init__(self) -> None:
         """Validate that numeric fields are positive."""
         _positive_ints = {
+            "serve_port": self.serve_port,
+            "ray_object_store_memory_mb": self.ray_object_store_memory_mb,
             "max_batch_size": self.max_batch_size,
             "max_text_length": self.max_text_length,
             "predict_batch_size": self.predict_batch_size,
             "classify_batch_size": self.classify_batch_size,
             "bge_m3_batch_size": self.bge_m3_batch_size,
+            "bge_m3_num_replicas": self.bge_m3_num_replicas,
+            "bge_m3_max_ongoing_requests": self.bge_m3_max_ongoing_requests,
         }
         _positive_floats = {
             "predict_batch_wait_s": self.predict_batch_wait_s,
@@ -125,6 +146,16 @@ class ServeConfig:
         for name, val in _positive_floats.items():
             if val <= 0:
                 raise ValueError(f"{name} must be > 0, got {val}")
+        if not self.serve_host.strip():
+            raise ValueError("serve_host must not be empty")
+        if self.serve_port > 65535:
+            raise ValueError(f"serve_port must be <= 65535, got {self.serve_port}")
+        for name, val in {
+            "bge_m3_num_cpus": self.bge_m3_num_cpus,
+            "bge_m3_num_gpus": self.bge_m3_num_gpus,
+        }.items():
+            if val < 0:
+                raise ValueError(f"{name} must be >= 0, got {val}")
 
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
@@ -152,6 +183,9 @@ def _parse_list(value: str) -> list[str]:
 
 # Mapping from env var name to ServeConfig field name
 _ENV_OVERRIDES: dict[str, str] = {
+    "SENTIMENTIZER_SERVE_HOST": "serve_host",
+    "SENTIMENTIZER_SERVE_PORT": "serve_port",
+    "SENTIMENTIZER_RAY_OBJECT_STORE_MEMORY_MB": "ray_object_store_memory_mb",
     "SENTIMENTIZER_DEFAULT_MODEL": "default_model",
     "ROUTER_MODEL_PATH": "router_model_path",
     "SENTIMENTIZER_MAX_BATCH_SIZE": "max_batch_size",
@@ -187,11 +221,17 @@ _ENV_OVERRIDES: dict[str, str] = {
     "SENTIMENTIZER_BGE_M3_USE_FP16": "bge_m3_use_fp16",
     "SENTIMENTIZER_BGE_M3_BATCH_SIZE": "bge_m3_batch_size",
     "SENTIMENTIZER_BGE_M3_BATCH_WAIT_S": "bge_m3_batch_wait_s",
+    "SENTIMENTIZER_BGE_M3_NUM_REPLICAS": "bge_m3_num_replicas",
+    "SENTIMENTIZER_BGE_M3_MAX_ONGOING_REQUESTS": "bge_m3_max_ongoing_requests",
+    "SENTIMENTIZER_BGE_M3_NUM_CPUS": "bge_m3_num_cpus",
+    "SENTIMENTIZER_BGE_M3_NUM_GPUS": "bge_m3_num_gpus",
 }
 
 # Type coercion for non-string fields
 # list[str] fields use _parse_list for comma-separated env var parsing
 _FIELD_TYPES: dict[str, type | callable] = {
+    "serve_port": int,
+    "ray_object_store_memory_mb": int,
     "max_batch_size": int,
     "max_text_length": int,
     "predict_batch_size": int,
@@ -213,6 +253,10 @@ _FIELD_TYPES: dict[str, type | callable] = {
     "bge_m3_use_fp16": _parse_bool,
     "bge_m3_batch_size": int,
     "bge_m3_batch_wait_s": float,
+    "bge_m3_num_replicas": int,
+    "bge_m3_max_ongoing_requests": int,
+    "bge_m3_num_cpus": float,
+    "bge_m3_num_gpus": float,
 }
 
 
@@ -230,8 +274,8 @@ def parse_sdxl_models(entries: list[str]) -> dict[str, str]:
 
 
 def _default_config_path() -> Path:
-    """Return path to the default serve_config.yaml bundled with the package."""
-    return Path(__file__).parent / "serve_config.yaml"
+    """Return path to the default service.yaml bundled with the package."""
+    return Path(__file__).parent / "service.yaml"
 
 
 def load_serve_config(path: str | Path | None = None) -> ServeConfig:
@@ -245,7 +289,7 @@ def load_serve_config(path: str | Path | None = None) -> ServeConfig:
     Args:
         path: Path to YAML config file. If None, checks the
               SENTIMENTIZER_SERVE_CONFIG env var, then falls back to
-              the bundled serve_config.yaml.
+              the bundled service.yaml.
 
     Returns:
         A ServeConfig instance with resolved values.

@@ -649,7 +649,7 @@ async def images_model_detail(self, name: str = Path(...)) -> dict:
   `max_pixels`. The dispatcher uses `dataclasses.replace()` to layer `ServeConfig`-owned
   identity/behavior fields (`model_id`, `cpu_offload`) on top.
 - `.env.example` — document new env vars without committing real keys
-- `sentimentizer/serve/serve_config.yaml` — add diffusion defaults gated off
+- `sentimentizer/serve/service.yaml` — add diffusion defaults gated off
 - `sentimentizer/serve/__init__.py` / `main()`:
   ```python
   sd_handle = SDDeployment.bind() if cfg.sd_enabled else None
@@ -739,7 +739,7 @@ that owns the ref. The implemented design is **push-based**:
 - `sentimentizer/serve/diffusion_app.py` — `_get_store()` lazy actor lookup, `_track_job()`
   background asyncio task, four route handlers
 - `sentimentizer/serve/config.py` — `job_ttl_s: int = 3600` field + env var + field type
-- `sentimentizer/serve/serve_config.yaml` — `job_ttl_s: 3600`
+- `sentimentizer/serve/service.yaml` — `job_ttl_s: 3600`
 - `sentimentizer/serve/app.py` — bootstrap `JobStore` named detached actor in `main()`
 - `tests/test_diffusion_jobs.py` — 21 tests (20 unit on `JobStoreLogic`, 1 Ray integration)
 

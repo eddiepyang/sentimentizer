@@ -97,10 +97,10 @@ uv sync --no-sources-package torch
 
 Configuration lives in two YAML files following the same pattern (dataclass defaults < YAML values < environment variable overrides):
 
-- **`sentimentizer/serve/serve_config.yaml`** — operational settings: which models to enable, API keys, rate limits, model IDs, CPU offload mode.
+- **`sentimentizer/serve/service.yaml`** — operational settings: which models to enable, API keys, rate limits, model IDs, CPU offload mode.
 - **`sentimentizer/diffusion/diffusion_config.yaml`** — model-internal defaults: denoising steps, guidance scale, max pixels, dimension alignment.
 
-Edit `serve_config.yaml` to enable a model:
+Edit `service.yaml` to enable a model:
 
 ```yaml
 # Enable one or more models
@@ -187,7 +187,7 @@ curl http://localhost:8000/v1/images/jobs/{job_id} \
 
 ### Low VRAM (SD 3.5 CPU offload)
 
-SD 3.5 Medium peak VRAM is ~10 GB at 1024×1024 fp16, which won't fit comfortably on 8–11 GB GPUs (e.g. 2080 Ti, 3060). Enable diffusers' CPU offload via `SENTIMENTIZER_SD35_CPU_OFFLOAD` (or `sd35_cpu_offload` in `serve_config.yaml`):
+SD 3.5 Medium peak VRAM is ~10 GB at 1024×1024 fp16, which won't fit comfortably on 8–11 GB GPUs (e.g. 2080 Ti, 3060). Enable diffusers' CPU offload via `SENTIMENTIZER_SD35_CPU_OFFLOAD` (or `sd35_cpu_offload` in `service.yaml`):
 
 | Mode | Peak VRAM | Latency vs. baseline | When to use |
 |------|-----------|----------------------|-------------|

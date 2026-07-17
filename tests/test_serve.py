@@ -91,6 +91,7 @@ def _mock_deployment(predictor=None, ready=True, load_error=None):
     dep._load_error = load_error
     dep._sentiment_metrics = ServiceMetrics(prefix="sentimentizer")
     dep._router_metrics = ServiceMetrics(prefix="router")
+    dep._embedding_metrics = ServiceMetrics(prefix="embedding")
     dep.predictor = predictor or _mock_predictor()
     dep._require_ready = lambda: _SentimentizerDeployment._require_ready(dep)
 
@@ -520,15 +521,39 @@ class TestRequestIdMiddleware:
 
 
 # ---------------------------------------------------------------------------
-# Test: /metrics endpoint removed
+# Test: Prometheus observability endpoint
 # ---------------------------------------------------------------------------
 
 
-class TestMetricsEndpointRemoved:
-    def test_no_metrics_route_on_app(self):
-        """The /metrics endpoint should not exist on the app."""
+class TestMetricsEndpoint:
+    def test_metrics_route_on_app(self):
+        """The app should expose an unversioned Prometheus scrape endpoint."""
         route_paths = [route.path for route in app.routes]
-        assert "/metrics" not in route_paths
+        assert "/metrics" in route_paths
+
+    def test_metrics_response_uses_prometheus_format(self):
+        """Metrics should be returned as scrapeable text, not JSON-wrapped text."""
+        dep = _mock_deployment()
+        dep._sentiment_metrics.record_request(0.25)
+        dep._router_metrics.record_request(0.5, error=True)
+
+        response = _run(_SentimentizerDeployment.metrics(dep))
+        body = response.body.decode()
+
+        assert response.headers["content-type"] == "text/plain; version=0.0.4; charset=utf-8"
+        assert "sentimentizer_service_ready 1" in body
+        assert "sentimentizer_request_total 1" in body
+        assert "sentimentizer_latency_seconds_total 0.250000" in body
+        assert "router_request_total 1" in body
+        assert "router_error_total 1" in body
+        assert "embedding_request_total 0" in body
+
+    def test_metrics_reports_not_ready(self):
+        dep = _mock_deployment(ready=False)
+
+        response = _run(_SentimentizerDeployment.metrics(dep))
+
+        assert "sentimentizer_service_ready 0" in response.body.decode()
 
 
 # ---------------------------------------------------------------------------

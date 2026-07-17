@@ -31,7 +31,9 @@ dependencies = [
     "prometheus_client>=0.25.0",
     "python-dotenv>=1.2.0",
     "pyyaml>=6.0.3",
-    "fastapi>=0.115.0",
+    # FastAPI 0.139.x adds state that Ray Serve 2.55.1 cannot pickle after
+    # its class-based-view transformation in @serve.ingress.
+    "fastapi==0.136.1",
     "pydantic-ai-slim[openai]>=1.93.0",
     "langgraph>=1.1.10",
     "rich>=15.0.0",
