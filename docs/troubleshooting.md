@@ -316,6 +316,37 @@ rm -rf /tmp/ray/
 
 Then restart `make serve`.
 
+### Ray Serve fails to serialize the FastAPI app
+
+**Symptoms**: Startup fails at `@serve.ingress(app)` with `TypeError: Failed to
+serialize the ASGI app` and `cannot pickle '_thread.lock' object`. The
+serializability report may mention `FastAPI.add_api_route` or
+`_openapi_routes_version`.
+
+**Root cause**: Ray Serve 2.55.1's class-based FastAPI transformation is
+incompatible with FastAPI 0.139.x. This is dependency-version drift, not a lock
+created by the deployment instance. A minimal class-based `@serve.ingress`
+application reproduces the failure.
+
+**Fix**: Keep FastAPI pinned to 0.136.1 while Ray remains on 2.55.1. Container
+builds must install the versions in `uv.lock`; do not resolve the open-ended
+project requirements again during `docker build`.
+
+After changing either dependency, verify the serialization boundary before
+loading model weights:
+
+```bash
+python -c 'import sentimentizer.serve.bge_only_app'
+```
+
+For the FODMAP development stack, rebuild the image so an older dependency
+layer is not reused:
+
+```bash
+docker compose build --no-cache vectorizer
+docker compose up vectorizer
+```
+
 ### `/health/ready` returns 503 permanently
 
 **Symptoms**: The server is running but `/health/ready` always returns 503 with "models not loaded".

@@ -92,7 +92,7 @@ Three runtime domains follow the same loading pattern: **dataclass defaults < YA
 | :--- | :--- |
 | **Module** | [`sentimentizer/serve/config.py`](../sentimentizer/serve/config.py) |
 | **Dataclass** | `ServeConfig` |
-| **YAML** | [`sentimentizer/serve/serve_config.yaml`](../sentimentizer/serve/serve_config.yaml) |
+| **YAML** | [`sentimentizer/serve/service.yaml`](../sentimentizer/serve/service.yaml) |
 | **Loader** | `load_serve_config(path=None) -> ServeConfig` |
 | **Env prefix** | `SENTIMENTIZER_*` |
 

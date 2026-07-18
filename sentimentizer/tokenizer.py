@@ -285,7 +285,7 @@ class Tokenizer:
         cfg = self.cfg
         data = data.copy()
         if not cfg.include_neutral:
-            data = data[data[cfg.label_col] != 3].copy()
+            data = data[data[cfg.label_col] != 3].copy()  # type: ignore
         data[cfg.inputs] = data[cfg.text_col].map(
             lambda text: text_sequencer(self.dictionary, text, cfg.max_len)
         )

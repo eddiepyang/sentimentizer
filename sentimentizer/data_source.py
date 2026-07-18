@@ -31,7 +31,7 @@ from __future__ import annotations
 import operator
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Protocol, Self, runtime_checkable
+from typing import Any, Protocol, Self, runtime_checkable
 
 import numpy as np
 import pandas as pd
@@ -51,7 +51,7 @@ if RAY_AVAILABLE:
 # Operator mapping for expression-based filters (Risk 9 mitigation)
 # ---------------------------------------------------------------------------
 
-_COMP_OPS: dict[str, Callable[[object, object], bool]] = {
+_COMP_OPS: dict[str, Callable[[Any, Any], Any]] = {
     "eq": operator.eq,
     "ne": operator.ne,
     "lt": operator.lt,

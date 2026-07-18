@@ -11,9 +11,12 @@ from sentimentizer.serve.config import cfg
 
 
 @serve.deployment(
-    num_replicas=1,
-    max_ongoing_requests=64,
-    ray_actor_options={"num_cpus": 2, "num_gpus": 0},
+    num_replicas=cfg.bge_m3_num_replicas,
+    max_ongoing_requests=cfg.bge_m3_max_ongoing_requests,
+    ray_actor_options={
+        "num_cpus": cfg.bge_m3_num_cpus,
+        "num_gpus": cfg.bge_m3_num_gpus,
+    },
 )
 class EmbeddingsDeployment:
     """Own embedding model lifecycles and expose methods to the HTTP ingress."""

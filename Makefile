@@ -1,5 +1,5 @@
 .PHONY: setup setup-ci setup-dev download-data train train-rnn train-encoder train-decoder train-modernbert \
-       train-distributed train-quick train-no-checkpoint train-resume serve test test-verbose test-lint lint format check ci clean docker-build docker-run \
+       train-distributed train-quick train-no-checkpoint train-resume serve test test-verbose test-lint lint format check typecheck ci clean docker-build docker-run \
  	   gpu-reset tune tune-rnn tune-encoder tune-decoder tune-standalone \
  	   start-metrics stop-metrics setup-dashboards start-exporter stop-exporter stop-ray \
  	   upload-rnn upload-encoder upload-decoder upload-modernbert upload-router \
@@ -282,19 +282,23 @@ test-ray:
 lint:
 	uv run ruff check .
 
-## Format with black and isort
+## Format with ruff
 format:
-	uv run black .
-	uv run isort .
+	uv run ruff format .
+	uv run ruff check . --fix --select I
+
+## Run static type checks with pyright
+typecheck:
+	uv run pyright
 
 ## Auto-format, auto-fix, then lint (run after every change)
 check:
-	uv run black .
+	uv run ruff format .
 	uv run ruff check . --fix
 	uv run ruff check .
 
-## Run full CI verification locally (format, lint, test, and build)
-ci: check test
+## Run full CI verification locally (format, lint, typecheck, test, and build)
+ci: check typecheck test
 	@echo "==> Cleaning old build artifacts..."
 	rm -rf dist/
 	@echo "==> Verifying package builds successfully..."

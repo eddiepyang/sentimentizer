@@ -71,7 +71,7 @@ def resolve_backend(model_key: str, backend: str = "auto") -> str:
     if backend != "auto":
         if backend not in available:
             raise ValueError(
-                f"backend={backend!r} not available for {model_key}. " f"Available: {available}"
+                f"backend={backend!r} not available for {model_key}. Available: {available}"
             )
         if backend == "mlx" and not is_mlx_device():
             raise ValueError(f"backend='mlx' not available for {model_key} on this device")
@@ -101,7 +101,7 @@ _ENV_OVERRIDES: dict[str, tuple[str, str]] = {
 # `.type` is the annotation source string (e.g. "int", "float",
 # "str | None"), not the resolved type object — so we compare against
 # strings in _coerce below.
-_FIELD_TYPES: dict[str, str] = {f.name: f.type for f in fields(DiffusionModelConfig)}
+_FIELD_TYPES: dict[str, Any] = {f.name: f.type for f in fields(DiffusionModelConfig)}
 
 
 def _default_config_path() -> Path:

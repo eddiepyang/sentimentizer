@@ -636,7 +636,7 @@ Add to `_ENV_OVERRIDES`:
 "SENTIMENTIZER_DIFFUSION_FLUX2_KLEIN_BACKEND": "flux2_klein_backend",
 ```
 
-### 9. `sentimentizer/serve/serve_config.yaml` — Add backend config
+### 9. `sentimentizer/serve/service.yaml` — Add backend config
 
 ```yaml
 flux2_klein_backend: "auto"    # "auto", "diffusers", or "mlx"
@@ -986,7 +986,7 @@ Add under "Important Conventions":
 5. `mlx_predictor.py` — `MLXFlux2KleinPredictor` class
 6. `predictor.py` — `DiffusionPredictorProtocol`, `create_predictor()` factory, `_PREDICTOR_REGISTRY`
 7. `__init__.py` — Conditional `MLXFlux2KleinPredictor` export + `DiffusionPredictorProtocol`
-8. `serve/config.py` + `serve_config.yaml` — `flux2_klein_backend` env var
+8. `serve/config.py` + `service.yaml` — `flux2_klein_backend` env var
 9. `serve/diffusion_app.py` — Replace predictor instantiation with `create_predictor()`, thread `backend` override (step 10)
 10. `serve/diffusion_app.py` — Backend-aware dispatcher guard for `reference_images` (step 10b)
 11. `pyproject.toml` — `mlx-diffusion` optional dep

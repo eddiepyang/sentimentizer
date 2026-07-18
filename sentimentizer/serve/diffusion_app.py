@@ -270,7 +270,7 @@ class ImagesDispatcher:
                 status_code=400,
                 detail={
                     "code": "model_unavailable",
-                    "message": (f"Model '{model}' is not enabled. " f"Available: {avail}"),
+                    "message": (f"Model '{model}' is not enabled. Available: {avail}"),
                 },
             )
         return self._handles[model]
@@ -485,7 +485,7 @@ class ImagesDispatcher:
                 status_code=400,
                 detail={
                     "code": "model_unavailable",
-                    "message": (f"Model '{name}' is not enabled. " f"Available: {avail}"),
+                    "message": (f"Model '{name}' is not enabled. Available: {avail}"),
                 },
             )
         info = await self._handles[name].info.remote()

@@ -11,7 +11,7 @@ Uses ``serve.batch`` to auto-batch individual ``/v1/sentiment/predict`` and
 Uses FastAPI for HTTP routing via ``@serve.ingress(app)`` with
 decorator-based route registration.
 
-Configuration is loaded from ``serve_config.yaml`` with environment
+Configuration is loaded from ``service.yaml`` with environment
 variable overrides. See ``ServeConfig`` for all settings and their
 corresponding env vars.
 
@@ -51,6 +51,7 @@ Endpoints:
     GET  /health               -- Backward-compatible alias for /health/ready
     GET  /health/live          -- Liveness probe (always 200)
     GET  /health/ready         -- Readiness probe (503 if model not loaded)
+    GET  /metrics              -- Prometheus service and request metrics
 
   Deprecated (kept for backward compatibility, use /v1/sentiment/* instead):
     POST /v1/predict
@@ -86,7 +87,12 @@ from starlette.responses import Response as StarletteResponse
 
 from sentimentizer import logger
 from sentimentizer.predictor import _MODEL_CONFIGS, SentimentPredictor
-from sentimentizer.serve.base import ServiceMetrics, serve
+from sentimentizer.serve.base import (
+    PROMETHEUS_CONTENT_TYPE,
+    ServiceMetrics,
+    render_service_metrics,
+    serve,
+)
 from sentimentizer.serve.config import cfg, parse_sdxl_models
 from sentimentizer.serve.embeddings_models import (
     DenseEmbeddingsRequest,
@@ -368,6 +374,7 @@ class SentimentizerDeployment:
         self._load_error: str | None = None
         self._sentiment_metrics = ServiceMetrics(prefix="sentimentizer")
         self._router_metrics = ServiceMetrics(prefix="router")
+        self._embedding_metrics = ServiceMetrics(prefix="embedding")
         self.predictor: SentimentPredictor | None = None
         self._embeddings_handle = embeddings_handle
 
@@ -401,11 +408,19 @@ class SentimentizerDeployment:
         if bge_m3 and not cfg.bge_m3_enabled:
             raise HTTPException(status_code=503, detail="BGE-M3 embeddings are disabled")
 
-    def _require_embeddings(self, *, bge_m3: bool = False) -> None:
-        if self._embeddings_handle is None or not cfg.embeddings_enabled:
-            raise HTTPException(status_code=503, detail="Embeddings are disabled")
-        if bge_m3 and not cfg.bge_m3_enabled:
-            raise HTTPException(status_code=503, detail="BGE-M3 embeddings are disabled")
+    async def _observe_embedding(self, result: Awaitable[Any]) -> Any:
+        """Await one embedding operation and record its latency and outcome."""
+        started_at = time.perf_counter()
+        try:
+            value = await result
+        except Exception:
+            self._embedding_metrics.record_request(
+                time.perf_counter() - started_at,
+                error=True,
+            )
+            raise
+        self._embedding_metrics.record_request(time.perf_counter() - started_at)
+        return value
 
     def _validate_model(self, model_name: str | None) -> str:
         """Validate requested model matches loaded model.
@@ -604,14 +619,18 @@ class SentimentizerDeployment:
     async def vector(self, body: VectorRequest) -> dict[str, list[float]]:
         """Return one legacy dense vector."""
         self._require_embeddings()
-        vectors = await self._embeddings_handle.dense.remote([body.text], body.mode)
+        vectors = await self._observe_embedding(
+            self._embeddings_handle.dense.remote([body.text], body.mode)
+        )
         return {"vector": vectors[0]}
 
     @app.post("/vectors/batch", response_class=Response)
     async def vectors_batch(self, body: VectorBatchRequest) -> Response:
         """Return dense vectors using the legacy little-endian binary format."""
         self._require_embeddings()
-        vectors = await self._embeddings_handle.dense.remote(body.texts, body.mode)
+        vectors = await self._observe_embedding(
+            self._embeddings_handle.dense.remote(body.texts, body.mode)
+        )
         rows = len(vectors)
         dim = len(vectors[0]) if vectors else 0
         payload = bytearray(struct.pack("<II", rows, dim))
@@ -625,8 +644,8 @@ class SentimentizerDeployment:
     async def embeddings(self, body: EmbeddingsRequest) -> dict[str, Any]:
         """Return BGE-M3 dense and learned-sparse vectors in input order."""
         self._require_embeddings(bge_m3=True)
-        vectors = await asyncio.gather(
-            *(self._embeddings_handle.bge_m3.remote(text) for text in body.texts)
+        vectors = await self._observe_embedding(
+            asyncio.gather(*(self._embeddings_handle.bge_m3.remote(text) for text in body.texts))
         )
         return {
             "backend": "flag_embedding",
@@ -638,7 +657,9 @@ class SentimentizerDeployment:
     async def dense_embeddings(self, body: DenseEmbeddingsRequest) -> dict[str, Any]:
         """Return nomic dense vectors in input order."""
         self._require_embeddings()
-        vectors = await self._embeddings_handle.dense.remote(body.texts, body.mode)
+        vectors = await self._observe_embedding(
+            self._embeddings_handle.dense.remote(body.texts, body.mode)
+        )
         return {"model": cfg.dense_embedding_model_id, "vectors": vectors}
 
     # ------------------------------------------------------------------
@@ -722,6 +743,27 @@ class SentimentizerDeployment:
     # Infrastructure handlers (unversioned)
     # ------------------------------------------------------------------
 
+    @app.get("/metrics", response_class=Response)
+    async def metrics(self) -> Response:
+        """GET /metrics -- return per-replica Prometheus metrics."""
+        predictor_ready = bool(
+            self._ready and self.predictor is not None and self.predictor.model_loaded
+        )
+        body = render_service_metrics(
+            (
+                self._sentiment_metrics,
+                self._router_metrics,
+                self._embedding_metrics,
+            ),
+            service_prefix="sentimentizer_service",
+            ready=predictor_ready,
+            uptime_s=time.time() - self._started_at,
+        )
+        return Response(
+            content=body,
+            headers={"Content-Type": PROMETHEUS_CONTENT_TYPE},
+        )
+
     @app.get("/health/live", response_model=HealthLiveResponse)
     async def health_live(self) -> dict[str, Any]:
         """GET /health/live -- liveness probe (always returns 200)."""
@@ -778,18 +820,18 @@ class SentimentizerDeployment:
         return await self.health_ready()
 
 
-def main(host: str = "0.0.0.0", port: int = 8000, diffusion: bool = False) -> None:
+def main(host: str | None = None, port: int | None = None, diffusion: bool = False) -> None:
     """Start the Sentimentizer Serve application programmatically.
 
     Args:
-        host: Bind address (default ``0.0.0.0``).
-        port: Bind port (default ``8000``).
+        host: Bind address. Defaults to ``serve_host`` from ``service.yaml``.
+        port: Bind port. Defaults to ``serve_port`` from ``service.yaml``.
         diffusion: If True, start the image generation (diffusion) deployment
             alongside sentiment. This requires GPU hardware and model weights.
             When False (default), only sentiment + router endpoints are served.
             Diffusion can also be enabled via config: set
             ``flux2_klein_enabled``, ``sd35_enabled``, or ``sdxl_models`` in
-            ``serve_config.yaml`` or their corresponding env vars.
+            ``service.yaml`` or their corresponding env vars.
 
     Workers use the current Python executable directly (no isolated venv),
     which avoids the ``ModuleNotFoundError: No module named 'ray'`` issue
@@ -798,6 +840,9 @@ def main(host: str = "0.0.0.0", port: int = 8000, diffusion: bool = False) -> No
     import sys
 
     from ray.serve.config import HTTPOptions
+
+    host = cfg.serve_host if host is None else host
+    port = cfg.serve_port if port is None else port
 
     # RAY_ENABLE_UV_RUN_RUNTIME_ENV is already set at module level (line 51).
     os.environ.setdefault("RAY_ENABLE_RUNTIME_ENV_HOOK", "1")

@@ -147,7 +147,7 @@ class SentimentPredictor:
         path = Path(router_model_path)
         try:
             if not path.exists():
-                logger.info(f"Router model not found at {path}, " "downloading from HF Hub...")
+                logger.info(f"Router model not found at {path}, downloading from HF Hub...")
                 try:
                     from huggingface_hub import snapshot_download
 
