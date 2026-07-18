@@ -102,8 +102,9 @@ async def decide(state: AgentState) -> dict[str, Any]:
     )
 
     prompt = load_prompt("decide_node")
-    if state.get("current_analysis"):
-        prompt += f" The analysis found: {state['current_analysis'].summary}"
+    curr_analysis = state.get("current_analysis")
+    if curr_analysis:
+        prompt += f" The analysis found: {curr_analysis.summary}"
 
     result = await strategy_agent.run(prompt, deps=deps)
     decision: TuningDecision = result.output

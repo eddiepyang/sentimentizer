@@ -142,9 +142,7 @@ def main(
     host = cfg.serve_host if host is None else host
     port = cfg.serve_port if port is None else port
     object_store_memory_mb = (
-        cfg.ray_object_store_memory_mb
-        if object_store_memory_mb is None
-        else object_store_memory_mb
+        cfg.ray_object_store_memory_mb if object_store_memory_mb is None else object_store_memory_mb
     )
     os.environ.setdefault("RAY_ENABLE_RUNTIME_ENV_HOOK", "1")
     os.environ.setdefault("RAY_OVERRIDE_RUNTIME_ENV_DEFAULT_EXCLUDES", "")

@@ -188,18 +188,14 @@ def test_bundled_server_settings() -> None:
 def test_bge_only_run_uses_yaml_server_settings(tmp_path) -> None:
     config_path = tmp_path / "custom-serve.yaml"
     config_path.write_text(
-        "serve_host: 127.0.0.1\n"
-        "serve_port: 9010\n"
-        "ray_object_store_memory_mb: 512\n"
+        "serve_host: 127.0.0.1\nserve_port: 9010\nray_object_store_memory_mb: 512\n"
     )
 
     with (
         patch.dict(os.environ, {}, clear=True),
         patch("sentimentizer.serve.bge_only_app.main") as bge_main,
     ):
-        args = build_parser().parse_args(
-            ["--bge-m3-only", "--config", str(config_path)]
-        )
+        args = build_parser().parse_args(["--bge-m3-only", "--config", str(config_path)])
         run(args)
 
     bge_main.assert_called_once_with(
@@ -212,9 +208,7 @@ def test_bge_only_run_uses_yaml_server_settings(tmp_path) -> None:
 def test_bge_only_cli_server_settings_override_yaml(tmp_path) -> None:
     config_path = tmp_path / "custom-serve.yaml"
     config_path.write_text(
-        "serve_host: 127.0.0.1\n"
-        "serve_port: 9010\n"
-        "ray_object_store_memory_mb: 512\n"
+        "serve_host: 127.0.0.1\nserve_port: 9010\nray_object_store_memory_mb: 512\n"
     )
 
     with (

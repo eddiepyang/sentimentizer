@@ -321,7 +321,7 @@ def load_serve_config(path: str | Path | None = None) -> ServeConfig:
                     values[field_name] = coerce(env_value)
                 except ValueError:
                     raise ValueError(
-                        f"Invalid {env_var}={env_value!r}: " f"expected {coerce.__name__}"
+                        f"Invalid {env_var}={env_value!r}: expected {coerce.__name__}"
                     ) from None
 
     return ServeConfig(**values)

@@ -645,9 +645,7 @@ class SentimentizerDeployment:
         """Return BGE-M3 dense and learned-sparse vectors in input order."""
         self._require_embeddings(bge_m3=True)
         vectors = await self._observe_embedding(
-            asyncio.gather(
-                *(self._embeddings_handle.bge_m3.remote(text) for text in body.texts)
-            )
+            asyncio.gather(*(self._embeddings_handle.bge_m3.remote(text) for text in body.texts))
         )
         return {
             "backend": "flag_embedding",
