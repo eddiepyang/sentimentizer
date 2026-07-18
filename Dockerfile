@@ -1,21 +1,40 @@
 FROM python:3.12-slim AS builder
 
+ARG EXTRAS="ray,embeddings"
+
 WORKDIR /app
 
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# Copy project files
-COPY pyproject.toml README.md LICENSE ./
+# Copy project files and the resolved dependency graph
+COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY sentimentizer/ ./sentimentizer/
 
-# Install the project + CPU-only PyTorch + Ray Serve
-# Both installs use the CPU-only PyTorch index to avoid pulling CUDA wheels
-RUN uv pip install --system --no-cache-dir \
-    torch --index-url https://download.pytorch.org/whl/cpu \
-    && uv pip install --system --no-cache-dir \
-    --index-url https://download.pytorch.org/whl/cpu \
-    --default-index https://pypi.org/simple/ .
+# Export exact locked versions for the requested extras. PyTorch is pruned from
+# that export and installed separately from its CPU-only index; otherwise the
+# PyPI lock graph also installs CUDA runtime packages. The project itself is
+# installed without dependency resolution so the container cannot drift beyond
+# uv.lock.
+RUN set -eu; \
+    extra_args=""; \
+    old_ifs="$IFS"; \
+    IFS=","; \
+    for extra in $EXTRAS; do \
+        extra_args="$extra_args --extra $extra"; \
+    done; \
+    IFS="$old_ifs"; \
+    uv export --frozen --no-dev --no-hashes --no-emit-project \
+        --prune torch \
+        --format requirements-txt $extra_args \
+        --output-file /tmp/requirements.txt; \
+    torch_version="$(python -c 'import tomllib; data = tomllib.load(open("uv.lock", "rb")); print(next(package["version"] for package in data["package"] if package["name"] == "torch"))')"; \
+    uv pip install --system --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cpu \
+        "torch==$torch_version"; \
+    uv pip install --system --no-cache-dir \
+        --requirement /tmp/requirements.txt; \
+    uv pip install --system --no-cache-dir --no-deps .
 
 # --- Runtime stage ---
 FROM python:3.12-slim
@@ -28,6 +47,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Create non-root user for security (K8s runAsNonRoot compliance)
 RUN useradd -r -s /bin/false -d /app sentimentizer \
+    && mkdir -p /app/.cache/huggingface \
     && chown -R sentimentizer:sentimentizer /app
 
 # Copy installed packages and app from builder
@@ -37,9 +57,11 @@ COPY --from=builder /app /app
 
 USER sentimentizer
 
+ENV HF_HOME=/app/.cache/huggingface
+
 # Ray Serve default port
 EXPOSE 8000
 # Ray dashboard (optional)
 EXPOSE 8265
 
-CMD ["serve", "run", "sentimentizer.serve:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "sentimentizer.serve", "--host", "0.0.0.0", "--port", "8000"]

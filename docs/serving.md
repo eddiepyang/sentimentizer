@@ -12,19 +12,52 @@ This document describes how to deploy and interact with the unified Sentimentize
 > uv add "sentimentizer[ray]"
 > ```
 
-The `serve` command starts a Ray Serve application with FastAPI routing (featuring interactive Swagger docs at `/docs`). It loads the sentiment model (defaulting to the configuration in `serve_config.yaml`) and the SetFit router at startup. Image generation (SD 3.5 Medium, FLUX.2 Klein, SDXL slots) can be enabled via configuration. All services share the same port and handle incoming requests via route-based dispatch.
+The `serve` command starts a Ray Serve application with FastAPI routing (featuring interactive Swagger docs at `/docs`). It loads the sentiment model (defaulting to the configuration in `service.yaml`) and the SetFit router at startup. Image generation (SD 3.5 Medium, FLUX.2 Klein, SDXL slots) can be enabled via configuration. All services share the same port and handle incoming requests via route-based dispatch.
 
 ### Starting the Server
 
 ```bash
-# Start with defaults (e.g., encoder model, host 0.0.0.0, port 8000)
+# Start with defaults from sentimentizer/serve/service.yaml
 make serve
 
 # Or start via CLI with custom options
 sentimentizer serve --host 0.0.0.0 --port 8000
 ```
 
-By default, the server binds to `0.0.0.0:8000`.
+By default, the server binds to `0.0.0.0:8000`. Set `serve_host`,
+`serve_port`, and `ray_object_store_memory_mb` in
+`sentimentizer/serve/service.yaml`; command-line flags and their matching
+environment variables override the YAML values.
+
+### Optional embedding service
+
+Install the embeddings extra and enable the deployment explicitly:
+
+```bash
+uv sync --extra ray --extra embeddings
+SENTIMENTIZER_EMBEDDINGS_ENABLED=1 \
+SENTIMENTIZER_BGE_M3_ENABLED=1 \
+python -m sentimentizer.serve --embeddings
+```
+
+`POST /v1/embeddings` accepts up to 64 non-empty texts and returns BGE-M3
+1024-dimensional dense vectors plus sorted learned-sparse token IDs and weights.
+The legacy `POST /vectors` and binary `POST /vectors/batch` routes serve the
+configured dense model for existing clients. Model loading is disabled by
+default because BGE-M3 is a large optional dependency.
+
+For a BGE-M3-only production process, use:
+
+```bash
+python -m sentimentizer.serve --bge-m3-only
+```
+
+Its replica count, per-replica request concurrency, and Ray CPU/GPU reservations
+come from the `bge_m3_num_replicas`, `bge_m3_max_ongoing_requests`,
+`bge_m3_num_cpus`, and `bge_m3_num_gpus` YAML settings.
+
+Both the full and BGE-M3-only applications expose `/health/live`,
+`/health/ready`, `/health`, and `/metrics` on the serving port.
 
 ---
 
@@ -317,6 +350,21 @@ The `POST /v1/images/generate` and `POST /v1/images/jobs` endpoints support a `r
   ```bash
   curl http://localhost:8000/health
   ```
+
+#### Prometheus Metrics
+- **Route**: `GET /metrics`
+- **Purpose**: Returns Prometheus text exposition for readiness, uptime,
+  request totals, error totals, and cumulative inference latency.
+- **Command**:
+  ```bash
+  curl http://localhost:8000/metrics
+  ```
+
+Metrics are maintained per Ray Serve replica. The default deployments use one
+replica; deployments scaled above one replica should use Ray's native aggregate
+metrics rather than treating a single `/metrics` scrape as a cluster total.
+Keep this operational endpoint loopback-only or restrict it at the reverse
+proxy when the serving port is internet-facing.
 
 #### Interactive API Docs (Swagger UI)
 - Open `http://localhost:8000/docs` in your browser to view and interact with the REST API documentation.

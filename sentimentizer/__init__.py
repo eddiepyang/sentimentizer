@@ -42,7 +42,13 @@ def new_logger(level: int = 20, output: TextIO = sys.stderr) -> Any:
     return structlog.getLogger(__name__)
 
 
-logger: Any = new_logger(logging.INFO)
+def configured_log_level(value: str | None = None) -> int:
+    """Resolve SENTIMENTIZER_LOG_LEVEL, falling back safely to INFO."""
+    name = (value if value is not None else os.getenv("SENTIMENTIZER_LOG_LEVEL", "INFO")).upper()
+    return logging.getLevelNamesMapping().get(name, logging.INFO)
+
+
+logger: Any = new_logger(configured_log_level())
 
 
 def time_decorator(func: Callable[..., Any]) -> Callable[..., Any]:

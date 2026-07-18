@@ -41,13 +41,35 @@ from sentimentizer.predictor import SentimentPredictor
 # Load the model
 predictor = SentimentPredictor(model_name="encoder")
 
-# Predict sentiment (returns label, score, token count, and model type)
+# Predict sentiment (returns label, score, all-class scores, token count, and model type)
 result = predictor.predict("amazing restaurant!")
-# >> {"label": "positive", "score": 0.92, "token_count": 2, "model": "encoder"}
+# >> {"positive": 0.848753035068512,
+#     "label": "positive",
+#     "score": 0.848753035068512,
+#     "scores": {"negative": 0.05746544152498245,
+#                "neutral": 0.09378153085708618,
+#                "positive": 0.848753035068512},
+#     "token_count": 2,
+#     "model": "encoder"}
 
 # Batch prediction
 results = predictor.predict_batch(["Great food!", "Terrible service."])
-# >> [{"label": "positive", "score": 0.88, "token_count": 2, "model": "encoder"}, ...]
+# >> [{'positive': 0.848753035068512,
+#      'label': 'positive',
+#      'score': 0.848753035068512,
+#      'scores': {'negative': 0.05746544152498245,
+#                 'neutral': 0.09378153085708618,
+#                 'positive': 0.848753035068512},
+#      'token_count': 2,
+#      'model': 'encoder'},
+#     {'negative': 0.9586858749389648,
+#      'label': 'negative',
+#      'score': 0.9586858749389648,
+#      'scores': {'negative': 0.9586858749389648,
+#                 'neutral': 0.03224344924092293,
+#                 'positive': 0.0090706842020154},
+#      'token_count': 2,
+#      'model': 'encoder'}]
 ```
 
 Models output **3-class probabilities** (negative, neutral, positive) that sum to 1.0 per sample.
@@ -75,10 +97,10 @@ uv sync --no-sources-package torch
 
 Configuration lives in two YAML files following the same pattern (dataclass defaults < YAML values < environment variable overrides):
 
-- **`sentimentizer/serve/serve_config.yaml`** — operational settings: which models to enable, API keys, rate limits, model IDs, CPU offload mode.
+- **`sentimentizer/serve/service.yaml`** — operational settings: which models to enable, API keys, rate limits, model IDs, CPU offload mode.
 - **`sentimentizer/diffusion/diffusion_config.yaml`** — model-internal defaults: denoising steps, guidance scale, max pixels, dimension alignment.
 
-Edit `serve_config.yaml` to enable a model:
+Edit `service.yaml` to enable a model:
 
 ```yaml
 # Enable one or more models
@@ -165,7 +187,7 @@ curl http://localhost:8000/v1/images/jobs/{job_id} \
 
 ### Low VRAM (SD 3.5 CPU offload)
 
-SD 3.5 Medium peak VRAM is ~10 GB at 1024×1024 fp16, which won't fit comfortably on 8–11 GB GPUs (e.g. 2080 Ti, 3060). Enable diffusers' CPU offload via `SENTIMENTIZER_SD35_CPU_OFFLOAD` (or `sd35_cpu_offload` in `serve_config.yaml`):
+SD 3.5 Medium peak VRAM is ~10 GB at 1024×1024 fp16, which won't fit comfortably on 8–11 GB GPUs (e.g. 2080 Ti, 3060). Enable diffusers' CPU offload via `SENTIMENTIZER_SD35_CPU_OFFLOAD` (or `sd35_cpu_offload` in `service.yaml`):
 
 | Mode | Peak VRAM | Latency vs. baseline | When to use |
 |------|-----------|----------------------|-------------|
@@ -264,13 +286,16 @@ Ensure local CI tests pass prior to submitting changes:
 
 ```bash
 # Run all tests
-uv run pytest tests/ -v
+uv run pytest tests/
 
 # Run only Ray Train tests
-uv run pytest tests/ -v -k "Ray"
+uv run pytest tests/ -k "Ray"
 
 # Run with coverage report
-uv run pytest tests/ -v --cov=sentimentizer --cov-report=term-missing
+uv run pytest tests/ --cov=sentimentizer --cov-report=term-missing
+
+# Verbose per-test output (or: make test-verbose)
+uv run pytest tests/ -v
 ```
 
 ---

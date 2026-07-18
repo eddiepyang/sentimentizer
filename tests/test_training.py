@@ -116,9 +116,9 @@ class TestTrainStep:
 
         for p in model.parameters():
             if p.grad is not None:
-                assert (
-                    p.grad.norm().item() <= 1.0 + 1e-6
-                ), f"Gradient norm {p.grad.norm().item()} exceeds max_grad_norm"
+                assert p.grad.norm().item() <= 1.0 + 1e-6, (
+                    f"Gradient norm {p.grad.norm().item()} exceeds max_grad_norm"
+                )
 
 
 class TestValStep:
@@ -464,9 +464,9 @@ class TestSchedulerCorrectness:
         # LambdaLR with last_epoch=-1 starts at lr_lambda(0)
         initial_lr = optimizer.param_groups[0]["lr"]
         expected_multiplier = 1.0 / 2  # (0+1)/warmup_steps = 0.5
-        assert (
-            abs(initial_lr - base_lr * expected_multiplier) < 1e-8
-        ), f"Expected initial LR={base_lr * expected_multiplier}, got {initial_lr}"
+        assert abs(initial_lr - base_lr * expected_multiplier) < 1e-8, (
+            f"Expected initial LR={base_lr * expected_multiplier}, got {initial_lr}"
+        )
 
     def test_cosine_annealing_lr_decay(self) -> None:
         """CosineAnnealingLR should decay LR over the configured T_max."""
@@ -503,21 +503,21 @@ class TestSchedulerCorrectness:
         from sentimentizer.models.rnn import RNN
 
         for model_cls in (RNN, Encoder, Decoder):
-            assert (
-                model_cls.STEP_SCHEDULER_PER_BATCH is True
-            ), f"{model_cls.__name__}.STEP_SCHEDULER_PER_BATCH should be True"
+            assert model_cls.STEP_SCHEDULER_PER_BATCH is True, (
+                f"{model_cls.__name__}.STEP_SCHEDULER_PER_BATCH should be True"
+            )
         assert BaseSentimentModel.STEP_SCHEDULER_PER_BATCH is True
 
     def test_all_sched_params_have_warmup_ratio(self) -> None:
         """All scheduler params should have warmup_ratio for per-batch stepping."""
         for model_type in ("rnn", "encoder", "decoder", "modernbert"):
             sched = _get_sched_params(model_type)
-            assert hasattr(
-                sched, "warmup_ratio"
-            ), f"{model_type} scheduler params missing warmup_ratio"
-            assert (
-                sched.warmup_ratio > 0
-            ), f"{model_type} warmup_ratio should be positive, got {sched.warmup_ratio}"
+            assert hasattr(sched, "warmup_ratio"), (
+                f"{model_type} scheduler params missing warmup_ratio"
+            )
+            assert sched.warmup_ratio > 0, (
+                f"{model_type} warmup_ratio should be positive, got {sched.warmup_ratio}"
+            )
 
 
 # ─── Checkpoint with DDP Model ───────────────────────────────────

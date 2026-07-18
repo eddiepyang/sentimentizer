@@ -86,33 +86,26 @@ Risk/gap annotations are marked with **[RISK]**, **[GAP]**, or **[SAFE]**.
 
 ---
 
-### 3. Remove `/metrics` from user API
+### 3. Expose proper Prometheus service metrics
 
-**Problem**: Exposes internal operational data on user-facing port. Prometheus format embedded as string in JSON (useless for scraping). Standalone exporter on 8081 already serves proper Prometheus exposition format.
+The former `/metrics` response wrapped Prometheus text inside JSON and was
+removed because Prometheus could not scrape it. The replacement returns proper
+`text/plain; version=0.0.4` exposition directly from both the full and
+BGE-M3-only Serve applications.
 
-**Changes**:
+The endpoint reports readiness, uptime, request totals, error totals, and
+cumulative inference latency. The full service separates sentiment, router,
+and embedding collectors; the BGE-only process exposes a dedicated BGE-M3
+collector.
 
-- `sentimentizer/serve/app.py`:
-  - Delete `GET /metrics` handler and `_sentiment_metrics`/`_router_metrics` from the deployment
-  - Remove from module docstring endpoint list
-- `workflows/cli.py`:
-  - Remove `/metrics` from docstring (in `serve_cmd()` function)
-- `tests/test_serve.py`:
-  - Remove any metrics endpoint tests (none currently exist)
-- `sentimentizer/serve/base.py`:
-  - `ServiceMetrics` class stays — it's used by the standalone exporter
+**[RISK] Operational data exposure.** `/metrics` has no application auth.
+Production must keep the serving port loopback-only or block this path at the
+public reverse proxy.
 
-**[RISK] Breaking change if any client relies on /metrics.** The JSON `/metrics` endpoint is not used by Prometheus (which scrapes port 8081 in the standalone exporter). But someone might have built a dashboard or script that reads it. **Mitigation**: Check with consumers before removing, or keep as deprecated with a log warning for one release cycle.
-
-**[GAP]** The plan didn't account for `_sentiment_metrics` and `_router_metrics` being used in the handlers. Currently, `predict()`, `batch()`, `router_predict()`, and `router_batch()` all call `self._sentiment_metrics.record_request(latency)` or `self._router_metrics.record_request(latency)`. If we remove `/metrics`, we still need per-request timing for observability. **Two options**:
-  - **Option A (recommended)**: Keep `ServiceMetrics` in the deployment for internal observability and structured logging, but remove the JSON endpoint. The `record_request()` calls continue to work, and we can expose these metrics via Prometheus gauges on port 8081 instead.
-  - **Option B**: Remove both the endpoint and the metrics tracking from the deployment entirely. Simpler but loses per-replica request counts and latencies.
-
-**[GAP]** The standalone exporter (`sentimentizer/exporter.py`, port 8081) reads from per-model-type JSON files written by the training pipeline. It does **not** scrape the `/metrics` endpoint on port 8000. So removing `/metrics` from the serve deployment does not break the standalone exporter. But the per-replica `ServiceMetrics` data (request_count, error_count, avg_latency_s) is currently only exposed via `/metrics`. If we delete the endpoint, this data becomes unreachable. **Recommendation**: Option A — keep `ServiceMetrics`, delete the HTTP endpoint, and add Prometheus gauge pushes from the deployment to the exporter (or expose on a separate metrics port, deferrable to P3).
-
-**[GAP] Dead code after removal.** `ServiceMetrics.to_prometheus()` generates Prometheus exposition format text, but it's only ever consumed as a string embedded in the JSON `/metrics` response. After removing the endpoint, `to_prometheus()` becomes dead code. **Recommendation**: Keep it for now — it will be needed by the P3 Prometheus push. Add a `# TODO(P3): used by future Prometheus push` comment.
-
-**[REVIEW NOTE]** Option A is the clear choice. Remove the `/metrics` HTTP endpoint completely (no deprecation period — this is not a Prometheus endpoint and the data is useless as JSON-embedded strings). Keep `ServiceMetrics` for internal observability and structured logging. Add the TODO comment on `to_prometheus()`. The per-replica data (request_count, error_count, avg_latency_s) will be exposed via the standalone exporter on port 8081 in P3.
+**[GAP] Per-replica scope.** The in-process collectors represent the Ray replica
+that handled the scrape. This is correct for the default single-replica
+deployments. Multi-replica deployments must use Ray's native aggregate metrics
+instead of summing assumptions from one routed response.
 
 ---
 
@@ -206,7 +199,7 @@ Clients can migrate to the new fields at their own pace. The dynamic key will be
 - `sentimentizer/serve/config.py`:
   - Add `cors_origins: list[str]` field
   - Add `SENTIMENTIZER_CORS_ORIGINS` env var (comma-separated)
-- `sentimentizer/serve_config.yaml`:
+- `sentimentizer/service.yaml`:
   - Add `cors_origins: ["*"]` default
 
 **[GAP] `ServeConfig` is a frozen dataclass.** Adding `cors_origins: list[str]` with a mutable default (`["*"]`) won't work with `frozen=True` — the `field(default_factory=lambda: ["*"])` pattern is needed. Also, the `serve_config.py` `_FIELD_TYPES` dict only supports scalar types. Parsing a comma-separated env var into a `list[str]` needs a custom coercion function. **Recommendation**: Add a `_parse_list` coercion for `list[str]` fields in `serve_config.py`.
@@ -434,9 +427,10 @@ This runs inference in a thread pool, keeping the event loop responsive. The `@s
 
 ### `ServiceMetrics` — in-process, per-replica metrics
 
-**Problem**: `ServiceMetrics` tracks request_count, error_count, and total_latency per deployment replica. This data is **not** exposed on any HTTP endpoint (the old `/metrics` endpoint was removed). It's used internally for structured logging.
-
-**Future**: The `ServiceMetrics.to_prometheus()` method exists with a `# TODO(P3)` comment for future Prometheus push to the standalone exporter (port 8081). Until P3 is implemented, per-replica metrics are only visible in structured logs.
+`ServiceMetrics` tracks request count, error count, and cumulative latency per
+deployment replica. `GET /metrics` exposes those collectors together with
+readiness and uptime in Prometheus text format. The endpoint is intentionally
+separate from the training exporter on port 8081.
 
 ### The `_DummyServe` fallback pattern
 

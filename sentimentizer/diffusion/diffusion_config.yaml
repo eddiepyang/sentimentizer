@@ -3,7 +3,7 @@
 # DiffusionModelConfig. Loaded by sentimentizer.diffusion.config.load_diffusion_config().
 #
 # Operational overrides (which models to enable, API keys, rate limits)
-# live in sentimentizer/serve/serve_config.yaml. Model-identity and
+# live in sentimentizer/serve/service.yaml. Model-identity and
 # behavior overrides (model_id, model_path, cpu_offload) come from
 # ServeConfig env vars (SENTIMENTIZER_SD35_MODEL_ID, etc.) and are
 # applied on top of these defaults in the dispatcher.

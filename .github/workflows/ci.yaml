@@ -46,8 +46,11 @@ jobs:
     - name: ruff lint
       run: uv run ruff check .
 
-    - name: black format check
-      run: uv run black --check .
+    - name: ruff format check
+      run: uv run ruff format --check .
+
+    - name: pyright typecheck
+      run: uv run pyright
 
     - name: test with pytest
       run: |

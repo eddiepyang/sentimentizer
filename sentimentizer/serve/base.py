@@ -5,7 +5,10 @@ Provides ``ServiceMetrics`` for request/latency tracking and a
 """
 
 import threading
+from collections.abc import Iterable
 from typing import Any
+
+PROMETHEUS_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
 
 
 class _DummyHandle:
@@ -101,10 +104,7 @@ class ServiceMetrics:
                 self.error_count += 1
 
     def to_prometheus(self) -> str:
-        """Generate Prometheus exposition format text.
-
-        # TODO(P3): used by future Prometheus push to standalone exporter.
-        """
+        """Generate Prometheus exposition format text."""
         p = self._prefix
         with self._lock:
             metrics = [
@@ -127,3 +127,23 @@ class ServiceMetrics:
     def avg_latency_s(self) -> float:
         with self._lock:
             return self.total_latency_s / self.request_count if self.request_count else 0.0
+
+
+def render_service_metrics(
+    collectors: Iterable[ServiceMetrics],
+    *,
+    service_prefix: str,
+    ready: bool,
+    uptime_s: float,
+) -> str:
+    """Render service state and request collectors in Prometheus text format."""
+    lines = [
+        f"# HELP {service_prefix}_ready Whether the service is ready to accept traffic",
+        f"# TYPE {service_prefix}_ready gauge",
+        f"{service_prefix}_ready {int(ready)}",
+        f"# HELP {service_prefix}_uptime_seconds Service uptime in seconds",
+        f"# TYPE {service_prefix}_uptime_seconds gauge",
+        f"{service_prefix}_uptime_seconds {uptime_s:.6f}",
+    ]
+    lines.extend(collector.to_prometheus().rstrip() for collector in collectors)
+    return "\n".join(lines) + "\n"

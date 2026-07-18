@@ -116,8 +116,7 @@ class RouterModel:
             head = joblib.load(head_path)
         else:
             logger.warning(
-                f"No router_head.joblib found at {path}. "
-                f"Attempting legacy SetFit model migration."
+                f"No router_head.joblib found at {path}. Attempting legacy SetFit model migration."
             )
             return cls._migrate_legacy_setfit_model(path, backbone)
 

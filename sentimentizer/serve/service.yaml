@@ -2,6 +2,11 @@
 # Controls the Ray Serve deployment settings.
 # Environment variables override these defaults when set.
 
+# HTTP proxy and Ray runtime
+serve_host: "0.0.0.0"
+serve_port: 8000
+ray_object_store_memory_mb: 384
+
 # Default sentiment model to load (rnn, encoder, decoder)
 default_model: "encoder"
 
@@ -51,3 +56,18 @@ rate_limit_burst: 10
 idempotency_ttl_s: 600
 job_ttl_s: 3600
 prompt_blocklist_path: ""
+
+# Optional embedding deployments. Keep disabled on sentiment-only pods.
+embeddings_enabled: false
+embeddings_device: "auto"       # auto, cpu, cuda, or mps
+dense_embedding_model_id: "nomic-ai/nomic-embed-text-v1.5"
+dense_embedding_revision: "161a1515eaa28482dfe6ceae96cdefdd20dabcbd"
+bge_m3_enabled: false
+bge_m3_model_id: "BAAI/bge-m3"
+bge_m3_use_fp16: false           # effective only on CUDA
+bge_m3_batch_size: 8
+bge_m3_batch_wait_s: 0.01
+bge_m3_num_replicas: 1
+bge_m3_max_ongoing_requests: 64
+bge_m3_num_cpus: 2.0
+bge_m3_num_gpus: 0.0

@@ -48,6 +48,10 @@ from sentimentizer.tokenizer import Tokenizer, get_trained_tokenizer, regex_toke
 # ---------------------------------------------------------------------------
 
 try:
+    # router.config/model import lazily, so probe sentence_transformers
+    # (the actual optional dep) here to set _ROUTER_AVAILABLE correctly.
+    import sentence_transformers  # noqa: F401
+
     from sentimentizer.router.config import RouteLabels
     from sentimentizer.router.model import RouterModel
 
@@ -88,10 +92,13 @@ class SentimentPredictor:
         # --- Sentiment model ---
         self.model, self._model_error = self._load_sentiment_model(self.model_name)
 
-        # --- Router model (graceful degradation if unavailable) ---
+        # --- Router model (lazy — loaded on first classify() call) ---
         if router_model_path is None:
             router_model_path = "models/router"
-        self.router, self._router_error = self._load_router_model(router_model_path)
+        self._router_model_path: str = router_model_path
+        self.router: Any = None
+        self._router_error: str | None = None
+        self._router_loaded: bool = False
 
         # --- Version ---
         self._version = self._detect_version()
@@ -140,7 +147,7 @@ class SentimentPredictor:
         path = Path(router_model_path)
         try:
             if not path.exists():
-                logger.info(f"Router model not found at {path}, " "downloading from HF Hub...")
+                logger.info(f"Router model not found at {path}, downloading from HF Hub...")
                 try:
                     from huggingface_hub import snapshot_download
 
@@ -165,6 +172,18 @@ class SentimentPredictor:
         except Exception as exc:
             logger.exception("Failed to load router model")
             return None, str(exc)
+
+    def _ensure_router_loaded(self) -> None:
+        """Lazily load the router model on first classify() call.
+
+        No-op if already loaded (or if a previous load attempt failed —
+        in which case the cached error is reused so we don't retry on
+        every request).
+        """
+        if self._router_loaded or self._router_error is not None:
+            return
+        self.router, self._router_error = self._load_router_model(self._router_model_path)
+        self._router_loaded = self.router is not None
 
     # ------------------------------------------------------------------
     # Properties
@@ -287,6 +306,7 @@ class SentimentPredictor:
         Returns:
             List of dicts, each with key ``prediction`` containing label, score, and token_count.
         """
+        self._ensure_router_loaded()
         if not self.router_loaded:
             raise RuntimeError(f"Router model not loaded: {self._router_error}")
 
@@ -391,11 +411,9 @@ class SentimentPredictor:
     def get_router_model_info(self) -> dict[str, Any]:
         """Return metadata about the loaded router model."""
         info: dict[str, Any] = {
-            "model_path": str(
-                self._router_model_path if hasattr(self, "_router_model_path") else "models/router"
-            ),
+            "model_path": self._router_model_path,
             "categories": RouteLabels.label_names() if _ROUTER_AVAILABLE else [],
-            "status": "loaded" if self.router_loaded else "error",
+            "status": "loaded" if self.router_loaded else "not_loaded",
         }
         if self._router_error:
             info["error"] = self._router_error

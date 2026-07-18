@@ -31,12 +31,18 @@ spec:
             # Comma-separated list: rnn, encoder, decoder (default: all three).
             - name: SENTIMENTIZER_MODELS
               value: "encoder"
+            - name: SENTIMENTIZER_EMBEDDINGS_ENABLED
+              value: "false"
+            - name: SENTIMENTIZER_BGE_M3_ENABLED
+              value: "false"
+            - name: SENTIMENTIZER_EMBEDDINGS_DEVICE
+              value: "cpu"
           resources:
             requests:
               memory: "1Gi"
               cpu: "500m"
             limits:
-              memory: "4Gi"
+              memory: "8Gi" # BGE-M3 needs ~3 GiB in addition to sentiment/Ray
               cpu: "2000m"
           # Startup probe: generous timeout for cold starts (model download
           # from HF Hub can take minutes). Checked before liveness/readiness.
