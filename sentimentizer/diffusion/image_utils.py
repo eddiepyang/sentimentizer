@@ -1,9 +1,4 @@
-"""Public image utility functions for diffusion pipelines.
-
-These were previously private functions in ``predictor.py`` (prefixed with
-``_``).  They are used by both the diffusers predictors and the MLX
-predictor, so they belong in a shared public module.
-"""
+"""Image encoding utilities shared by the headless image API."""
 
 from __future__ import annotations
 

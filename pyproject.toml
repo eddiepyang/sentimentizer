@@ -53,13 +53,7 @@ ray = [
     "optuna>=4.8.0",
 ]
 diffusion = [
-    "diffusers>=0.38.0",
-    "accelerate>=1.8.0",
     "pillow>=12.0.0",
-    "torchvision>=0.15.0",
-]
-mlx-diffusion = [
-    "mflux>=0.17.0",
 ]
 router = [
     "sentence-transformers>=4.0.0",
@@ -160,8 +154,3 @@ filterwarnings = [
     "ignore:.*use_polars.*:DeprecationWarning",
     "ignore:.*use_arrow_tensor_v2.*:DeprecationWarning"
 ]
-
-[tool.uv]
-# diffusers 0.38.0 transitively requires safetensors>=0.8.0rc0 — opt the
-# project into pre-releases so uv sync doesn't require --prerelease=allow.
-prerelease = "allow"

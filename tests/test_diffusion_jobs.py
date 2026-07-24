@@ -46,6 +46,20 @@ class TestJobStoreSubmitAndGet:
         result = store.get("job_nonexistent", "alpha-key-12345678")
         assert result is None
 
+    def test_backend_id_is_available_only_to_job_owner(self) -> None:
+        store = JobStoreLogic()
+        job_id = store.submit(
+            "krea_2",
+            None,
+            "alpha-key-12345678",
+            backend_id="00000000-0000-4000-8000-000000000001",
+        )
+        assert (
+            store.get_backend_id(job_id, "alpha-key-12345678")
+            == "00000000-0000-4000-8000-000000000001"
+        )
+        assert store.get_backend_id(job_id, "beta-key-12345678") is None
+
 
 class TestJobStoreSetSucceeded:
     def test_succeeded(self) -> None:

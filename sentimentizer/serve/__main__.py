@@ -52,10 +52,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--diffusion",
         action="store_true",
         default=env_diffusion,
-        help="Enable image generation (SD3.5/FLUX.2 Klein/SDXL) endpoints. "
-        "Requires GPU hardware and model weights. "
-        "Can also be enabled via config (flux2_klein_enabled, sd35_enabled, "
-        "sdxl_models) or via SENTIMENTIZER_DIFFUSION_ENABLED env var.",
+        help="Enable headless ComfyUI image endpoints. At least one model must be "
+        "explicitly enabled with its license and safety configuration. Can also be enabled via "
+        "SENTIMENTIZER_DIFFUSION_ENABLED.",
     )
     parser.add_argument(
         "--embeddings",

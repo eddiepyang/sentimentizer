@@ -46,26 +46,18 @@ class ServeConfig:
         classify_batch_size: Maximum requests collected per /v1/router/predict batch.
         classify_batch_wait_s: Seconds to wait before processing a partial router batch.
         cors_origins: Allowed CORS origins (comma-separated for env var).
-        flux2_klein_enabled: Enable FLUX.2 Klein 4B deployment (Apache 2.0,
-            step-distilled, ~13 GB VRAM at native placement).
-        flux2_klein_model_id: HuggingFace model ID for FLUX.2 Klein.
-        flux2_klein_cpu_offload: Diffusers CPU offload mode for FLUX.2 Klein.
-            One of "" (full GPU, default), "model", or "sequential".
-        flux2_klein_quantization: bitsandbytes quantization for the FLUX.2
-            transformer + Qwen3 text encoder. One of "" (off, default),
-            "nf4" (4-bit NF4, ~5 GB peak — fits 11 GB cards), or "int8"
-            (8-bit, ~9 GB peak). Requires the `bitsandbytes` package.
-            Pair with cpu_offload="model" on 11 GB cards.
-        sd35_enabled: Enable SD 3.5 Medium deployment.
-        sd35_model_id: HuggingFace model ID for SD 3.5 Medium.
-        sd35_cpu_offload: Diffusers CPU offload mode for SD 3.5. One of
-            "" (full GPU, default), "model" (whole-module swap), or
-            "sequential" (submodule swap, lowest VRAM, slowest).
-        sdxl_models: Named SDXL slots as "name:model_id" entries, e.g.
-            ["anime:John6666/noob-sdxl-v10", "base:stabilityai/stable-diffusion-xl-base-1.0"].
-            Each slot spawns its own GPU deployment and is addressable by name
-            in image generation requests. Fits on an 11 GB card (~6.5 GB per slot).
-        default_image_model: Default image model ("sd", "flux", "sd35", or any SDXL slot name).
+        krea_2_enabled: Enable Krea 2 Turbo through headless ComfyUI.
+        krea_2_license_accepted: Confirms the operator has accepted the Krea 2
+            Community License and is eligible for the intended use.
+        ideogram_4_enabled: Enable Ideogram 4 through headless ComfyUI.
+        ideogram_4_license_accepted: Confirms the operator has accepted the
+            Ideogram 4 non-commercial model license.
+        comfyui_base_url: URL of the separately managed headless ComfyUI process.
+        comfyui_temp_directory: Shared path to ComfyUI's temporary output directory.
+        image_moderation_url: Operator-provided output moderation endpoint.
+        image_moderation_api_key: Optional bearer credential for that endpoint.
+        image_moderation_timeout_s: Output moderation request timeout.
+        default_image_model: Default image model ("krea_2" or "ideogram_4").
         request_timeout_s: HTTP request timeout in seconds.
         api_keys: Comma-separated list of valid API keys (for image routes).
         rate_limit_per_min: Rate limit per API key per minute.
@@ -91,16 +83,18 @@ class ServeConfig:
     classify_batch_size: int = 32
     classify_batch_wait_s: float = 0.05
     cors_origins: list[str] = field(default_factory=lambda: ["*"])
-    flux2_klein_enabled: bool = False
-    flux2_klein_model_id: str = "black-forest-labs/FLUX.2-klein-4B"
-    flux2_klein_cpu_offload: str = ""
-    flux2_klein_quantization: str = ""
-    flux2_klein_backend: str = "auto"
-    sd35_enabled: bool = False
-    sd35_model_id: str = "stabilityai/stable-diffusion-3.5-medium"
-    sd35_cpu_offload: str = ""
-    sdxl_models: list[str] = field(default_factory=list)
-    default_image_model: str = "sd35"
+    krea_2_enabled: bool = False
+    krea_2_license_accepted: bool = False
+    ideogram_4_enabled: bool = False
+    ideogram_4_license_accepted: bool = False
+    comfyui_base_url: str = "http://127.0.0.1:8188"
+    comfyui_timeout_s: float = 600.0
+    comfyui_poll_interval_s: float = 0.25
+    comfyui_temp_directory: str = ""
+    image_moderation_url: str = ""
+    image_moderation_api_key: str = ""
+    image_moderation_timeout_s: float = 10.0
+    default_image_model: str = "krea_2"
     request_timeout_s: int = 600
     api_keys: list[str] = field(default_factory=list)
     rate_limit_per_min: int = 60
@@ -139,6 +133,9 @@ class ServeConfig:
             "predict_batch_wait_s": self.predict_batch_wait_s,
             "classify_batch_wait_s": self.classify_batch_wait_s,
             "bge_m3_batch_wait_s": self.bge_m3_batch_wait_s,
+            "comfyui_timeout_s": self.comfyui_timeout_s,
+            "comfyui_poll_interval_s": self.comfyui_poll_interval_s,
+            "image_moderation_timeout_s": self.image_moderation_timeout_s,
         }
         for name, val in _positive_ints.items():
             if val < 1:
@@ -150,6 +147,45 @@ class ServeConfig:
             raise ValueError("serve_host must not be empty")
         if self.serve_port > 65535:
             raise ValueError(f"serve_port must be <= 65535, got {self.serve_port}")
+        if not self.comfyui_base_url.startswith(("http://", "https://")):
+            raise ValueError("comfyui_base_url must be an http(s) URL")
+        if self.image_moderation_url and not self.image_moderation_url.startswith(
+            ("http://", "https://")
+        ):
+            raise ValueError("image_moderation_url must be an http(s) URL")
+        if self.krea_2_enabled and not self.krea_2_license_accepted:
+            raise ValueError(
+                "krea_2_enabled requires krea_2_license_accepted=true; review the "
+                "Krea 2 Community License and confirm commercial-use eligibility"
+            )
+        if self.krea_2_enabled and not self.image_moderation_url:
+            raise ValueError(
+                "krea_2_enabled requires image_moderation_url so generated output "
+                "is checked before release"
+            )
+        if self.ideogram_4_enabled and not self.ideogram_4_license_accepted:
+            raise ValueError(
+                "ideogram_4_enabled requires ideogram_4_license_accepted=true; "
+                "the checkpoint is licensed for non-commercial use"
+            )
+        enabled_image_models = {
+            name
+            for name, enabled in {
+                "krea_2": self.krea_2_enabled,
+                "ideogram_4": self.ideogram_4_enabled,
+            }.items()
+            if enabled
+        }
+        if enabled_image_models and not self.comfyui_temp_directory:
+            raise ValueError(
+                "enabled image models require comfyui_temp_directory so temporary "
+                "PreviewImage artifacts are removed after each request"
+            )
+        if enabled_image_models and self.default_image_model not in enabled_image_models:
+            raise ValueError(
+                f"default_image_model={self.default_image_model!r} is not enabled; "
+                f"enabled image models: {sorted(enabled_image_models)}"
+            )
         for name, val in {
             "bge_m3_num_cpus": self.bge_m3_num_cpus,
             "bge_m3_num_gpus": self.bge_m3_num_gpus,
@@ -195,15 +231,17 @@ _ENV_OVERRIDES: dict[str, str] = {
     "SENTIMENTIZER_CLASSIFY_BATCH_SIZE": "classify_batch_size",
     "SENTIMENTIZER_CLASSIFY_BATCH_WAIT_S": "classify_batch_wait_s",
     "SENTIMENTIZER_CORS_ORIGINS": "cors_origins",
-    "SENTIMENTIZER_FLUX2_KLEIN_ENABLED": "flux2_klein_enabled",
-    "SENTIMENTIZER_FLUX2_KLEIN_MODEL_ID": "flux2_klein_model_id",
-    "SENTIMENTIZER_FLUX2_KLEIN_CPU_OFFLOAD": "flux2_klein_cpu_offload",
-    "SENTIMENTIZER_FLUX2_KLEIN_QUANTIZATION": "flux2_klein_quantization",
-    "SENTIMENTIZER_DIFFUSION_FLUX2_KLEIN_BACKEND": "flux2_klein_backend",
-    "SENTIMENTIZER_SD35_ENABLED": "sd35_enabled",
-    "SENTIMENTIZER_SD35_MODEL_ID": "sd35_model_id",
-    "SENTIMENTIZER_SD35_CPU_OFFLOAD": "sd35_cpu_offload",
-    "SENTIMENTIZER_SDXL_MODELS": "sdxl_models",
+    "SENTIMENTIZER_KREA_2_ENABLED": "krea_2_enabled",
+    "SENTIMENTIZER_KREA_2_LICENSE_ACCEPTED": "krea_2_license_accepted",
+    "SENTIMENTIZER_IDEOGRAM_4_ENABLED": "ideogram_4_enabled",
+    "SENTIMENTIZER_IDEOGRAM_4_LICENSE_ACCEPTED": "ideogram_4_license_accepted",
+    "SENTIMENTIZER_COMFYUI_BASE_URL": "comfyui_base_url",
+    "SENTIMENTIZER_COMFYUI_TIMEOUT_S": "comfyui_timeout_s",
+    "SENTIMENTIZER_COMFYUI_POLL_INTERVAL_S": "comfyui_poll_interval_s",
+    "SENTIMENTIZER_COMFYUI_TEMP_DIRECTORY": "comfyui_temp_directory",
+    "SENTIMENTIZER_IMAGE_MODERATION_URL": "image_moderation_url",
+    "SENTIMENTIZER_IMAGE_MODERATION_API_KEY": "image_moderation_api_key",
+    "SENTIMENTIZER_IMAGE_MODERATION_TIMEOUT_S": "image_moderation_timeout_s",
     "SENTIMENTIZER_DEFAULT_IMAGE_MODEL": "default_image_model",
     "SENTIMENTIZER_REQUEST_TIMEOUT_S": "request_timeout_s",
     "SENTIMENTIZER_API_KEYS": "api_keys",
@@ -239,9 +277,13 @@ _FIELD_TYPES: dict[str, type | callable] = {
     "classify_batch_size": int,
     "classify_batch_wait_s": float,
     "cors_origins": list,
-    "flux2_klein_enabled": _parse_bool,
-    "sd35_enabled": _parse_bool,
-    "sdxl_models": list,
+    "krea_2_enabled": _parse_bool,
+    "krea_2_license_accepted": _parse_bool,
+    "ideogram_4_enabled": _parse_bool,
+    "ideogram_4_license_accepted": _parse_bool,
+    "comfyui_timeout_s": float,
+    "comfyui_poll_interval_s": float,
+    "image_moderation_timeout_s": float,
     "request_timeout_s": int,
     "api_keys": list,
     "rate_limit_per_min": int,
@@ -258,19 +300,6 @@ _FIELD_TYPES: dict[str, type | callable] = {
     "bge_m3_num_cpus": float,
     "bge_m3_num_gpus": float,
 }
-
-
-def parse_sdxl_models(entries: list[str]) -> dict[str, str]:
-    """Parse ``["name:model_id", ...]`` into ``{name: model_id}``.
-
-    Entries that don't contain a colon are silently skipped.
-    """
-    result: dict[str, str] = {}
-    for entry in entries:
-        name, sep, model_id = entry.partition(":")
-        if sep and name.strip() and model_id.strip():
-            result[name.strip()] = model_id.strip()
-    return result
 
 
 def _default_config_path() -> Path:

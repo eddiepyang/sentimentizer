@@ -1,37 +1,28 @@
-"""Diffusion serving: dispatcher, SD3.5/FLUX.2 Klein/SDXL deployments, and image routes.
-
-Uses the Ray Serve composition pattern: a lightweight CPU dispatcher
-holds DeploymentHandles to GPU-backed model deployments. Routes are
-attached to the dispatcher via ``@app.post`` / ``@app.get`` on the same
-FastAPI app from ``sentimentizer/serve/app.py``.
-"""
+"""Headless ComfyUI image deployment and HTTP routes."""
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
+import threading
 import time
+import uuid
 from dataclasses import dataclass
 from typing import Any
 
 import orjson
-import torch
 from fastapi import Depends, HTTPException, Query, Request, Response
 
 from sentimentizer import logger
-from sentimentizer.diffusion.config import (
-    FLUX2_KLEIN_DEFAULT_CONFIG,
-    SD35_DEFAULT_CONFIG,
-    SDXL_DEFAULT_CONFIG,
+from sentimentizer.diffusion.comfyui import ComfyUICancelled, ComfyUIClient, ComfyUIError
+from sentimentizer.diffusion.config import IMAGE_MODEL_CONFIGS, ImageModelConfig
+from sentimentizer.diffusion.image_utils import b64_encode, encode_pil, generate_id
+from sentimentizer.diffusion.moderation import (
+    ImageModerationClient,
+    ImageModerationError,
+    UnsafeImageError,
 )
-from sentimentizer.diffusion.image_utils import (
-    _REF_MAX_PIXELS,
-    b64_encode,
-    decode_b64_image,
-    encode_pil,
-    generate_id,
-)
-from sentimentizer.diffusion.predictor import create_predictor
 from sentimentizer.serve.app import create_fastapi_app
 from sentimentizer.serve.base import ServiceMetrics, serve
 from sentimentizer.serve.config import cfg
@@ -57,229 +48,211 @@ def _body_hash(body: GenerateRequest) -> str:
     return hashlib.sha256(raw).hexdigest()[:32]
 
 
-_num_gpus = 1 if torch.cuda.is_available() else 0
+def _model_info(
+    name: str,
+    model_cfg: ImageModelConfig,
+    *,
+    status: str,
+    error: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "name": name,
+        "status": status,
+        "error": error,
+        "max_width": 2048,
+        "max_height": 2048,
+        "max_pixels": model_cfg.max_pixels,
+        "default_steps": model_cfg.default_steps,
+        "default_guidance": model_cfg.default_guidance,
+        "quantization": model_cfg.quantization,
+        "backend": "comfyui",
+    }
 
-_PREDICTOR_DEFAULTS: dict[str, Any] = {
-    "flux2_klein": FLUX2_KLEIN_DEFAULT_CONFIG,
-    "sd35": SD35_DEFAULT_CONFIG,
-    "sdxl": SDXL_DEFAULT_CONFIG,
+
+_BASE_NODES = {
+    "UNETLoader",
+    "CLIPLoader",
+    "VAELoader",
+    "CLIPTextEncode",
+    "ConditioningZeroOut",
+    "VAEDecode",
+    "PreviewImage",
+}
+_MODEL_NODES = {
+    "krea_2": {"EmptyLatentImage", "KSampler"},
+    "ideogram_4": {
+        "EmptyFlux2LatentImage",
+        "RandomNoise",
+        "KSamplerSelect",
+        "Ideogram4Scheduler",
+        "CFGOverride",
+        "DualModelGuider",
+        "SamplerCustomAdvanced",
+    },
 }
 
 
-def _validate_reference_images(
-    body: GenerateRequest,
-    model_name: str,
-) -> list[Any] | None:
-    """Decode and validate reference_images from the request body.
-
-    Returns the decoded PIL image list, or None if no reference images.
-    Raises HTTPException on validation failure.
-    """
-    if body.reference_images is None:
-        return None
-    if model_name != "flux2_klein":
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "reference_images_unsupported",
-                "message": "Reference images are only supported by FLUX.2 Klein",
-            },
-        )
+def _choices(node_info: dict[str, Any], node_class: str, input_name: str) -> set[str]:
     try:
-        return [decode_b64_image(b64, _REF_MAX_PIXELS) for b64 in body.reference_images]
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "invalid_reference_image",
-                "message": str(exc),
-            },
-        ) from exc
+        choices = node_info[node_class]["input"]["required"][input_name][0]
+    except (KeyError, IndexError, TypeError):
+        return set()
+    return {str(choice) for choice in choices} if isinstance(choices, list) else set()
 
 
-@dataclass
+@serve.deployment(
+    num_replicas=1,
+    max_ongoing_requests=20,
+    ray_actor_options={"num_cpus": 1, "num_gpus": 0},
+    health_check_timeout_s=30,
+)
+class ComfyUIDeployment:
+    """Serializes workflow submissions to a separately managed CUDA process."""
+
+    def __init__(self, model_names: list[str]) -> None:
+        self._models = {name: IMAGE_MODEL_CONFIGS[name] for name in model_names}
+        self._client = ComfyUIClient(
+            cfg.comfyui_base_url,
+            timeout_s=cfg.comfyui_timeout_s,
+            poll_interval_s=cfg.comfyui_poll_interval_s,
+            temp_directory=cfg.comfyui_temp_directory,
+        )
+        self._generation_lock = asyncio.Lock()
+        self._cancel_events: dict[str, threading.Event] = {}
+        self._metrics = ServiceMetrics(prefix="comfyui_images")
+        self._validate_runtime()
+
+    def _validate_runtime(self) -> None:
+        self._client.system_stats()
+        for model_name, model_cfg in self._models.items():
+            required_nodes = _BASE_NODES | _MODEL_NODES[model_name]
+            node_details: dict[str, Any] = {}
+            missing_nodes: list[str] = []
+            for node_class in sorted(required_nodes):
+                info = self._client.node_info(node_class)
+                if node_class not in info:
+                    missing_nodes.append(node_class)
+                else:
+                    node_details.update(info)
+            if missing_nodes:
+                raise RuntimeError(
+                    f"ComfyUI is missing nodes required by {model_name}: {missing_nodes}. "
+                    "Install a current native ComfyUI release; custom nodes are not required."
+                )
+            checkpoints = {
+                ("UNETLoader", "unet_name"): [
+                    model_cfg.transformer,
+                    *(
+                        [model_cfg.unconditional_transformer]
+                        if model_cfg.unconditional_transformer
+                        else []
+                    ),
+                ],
+                ("CLIPLoader", "clip_name"): [model_cfg.text_encoder],
+                ("VAELoader", "vae_name"): [model_cfg.vae],
+            }
+            missing_checkpoints: list[str] = []
+            for (node_class, input_name), filenames in checkpoints.items():
+                available = _choices(node_details, node_class, input_name)
+                missing_checkpoints.extend(name for name in filenames if name not in available)
+            if missing_checkpoints:
+                raise RuntimeError(
+                    f"ComfyUI is missing checkpoints required by {model_name}: "
+                    f"{missing_checkpoints}"
+                )
+
+    async def generate(self, model_name: str, **kwargs: Any) -> dict[str, Any]:
+        if model_name not in self._models:
+            raise ValueError(f"model is not enabled: {model_name}")
+        prompt_id = kwargs.get("prompt_id")
+        cancel_event = threading.Event()
+        if isinstance(prompt_id, str):
+            self._cancel_events[prompt_id] = cancel_event
+        kwargs["cancel_event"] = cancel_event
+        start = time.perf_counter()
+        try:
+            async with self._generation_lock:
+                result = await asyncio.to_thread(
+                    self._client.generate,
+                    model_name,
+                    self._models[model_name],
+                    **kwargs,
+                )
+        except Exception:
+            self._metrics.record_request(time.perf_counter() - start, error=True)
+            raise
+        finally:
+            if isinstance(prompt_id, str):
+                self._cancel_events.pop(prompt_id, None)
+        latency = time.perf_counter() - start
+        self._metrics.record_request(latency)
+        return {"image": result.data, "seed": result.seed, "latency_s": latency}
+
+    async def cancel(self, prompt_id: str) -> bool:
+        """Cancel a targeted queued or running ComfyUI prompt."""
+        cancel_event = self._cancel_events.get(prompt_id)
+        if cancel_event is not None:
+            cancel_event.set()
+        return await asyncio.to_thread(self._client.cancel, prompt_id)
+
+    async def check_health(self) -> None:
+        """Fail Ray Serve health checks when the sidecar is unavailable."""
+        await asyncio.to_thread(self._client.system_stats)
+
+    async def info(self, model_name: str) -> dict[str, Any]:
+        try:
+            await self.check_health()
+        except Exception as exc:
+            logger.warning("comfyui_health_check_failed", error=str(exc))
+            return _model_info(
+                model_name,
+                self._models[model_name],
+                status="error",
+                error="ComfyUI sidecar unavailable",
+            )
+        return _model_info(model_name, self._models[model_name], status="loaded")
+
+
+@dataclass(frozen=True)
 class _PreparedRequest:
     model_name: str
-    handle: Any
-    reference_images: list[Any] | None
+    model_config: ImageModelConfig
     steps: int
     guidance_scale: float
-    max_pixels: int
-    dim_alignment: int
 
 
 images_app = create_fastapi_app(
     title="Sentimentizer Images",
-    description="Image generation API (FLUX.2 Klein / SD 3.5 Medium / SDXL)",
+    description="Headless Krea 2 and Ideogram 4 image generation API",
     path_limits={"/": 4 * 1024 * 1024},
 )
 
 
 @serve.deployment(
     num_replicas=1,
-    max_ongoing_requests=4,
-    ray_actor_options={"num_cpus": 2, "num_gpus": _num_gpus},
-    health_check_timeout_s=600,
-)
-class Flux2KleinDeployment:
-    def __init__(self) -> None:
-        from dataclasses import replace
-
-        from sentimentizer.diffusion.config import FLUX2_KLEIN_DEFAULT_CONFIG
-
-        overrides: dict[str, Any] = {}
-        if cfg.flux2_klein_model_id:
-            overrides["model_id"] = cfg.flux2_klein_model_id
-        if cfg.flux2_klein_cpu_offload:
-            overrides["cpu_offload"] = cfg.flux2_klein_cpu_offload
-        if cfg.flux2_klein_quantization:
-            overrides["quantization"] = cfg.flux2_klein_quantization
-        if cfg.flux2_klein_backend:
-            overrides["backend"] = cfg.flux2_klein_backend
-        model_cfg = (
-            replace(FLUX2_KLEIN_DEFAULT_CONFIG, **overrides)
-            if overrides
-            else FLUX2_KLEIN_DEFAULT_CONFIG
-        )
-        self.predictor = create_predictor("flux2_klein", model_cfg)
-        self.predictor.warmup()
-        self._metrics = ServiceMetrics(prefix="flux2_klein")
-
-    async def generate(self, **kwargs: Any) -> tuple[Any, int]:
-        start = time.perf_counter()
-        try:
-            res = await asyncio.to_thread(self.predictor.generate, **kwargs)
-        except Exception:
-            latency = time.perf_counter() - start
-            self._metrics.record_request(latency, error=True)
-            raise
-        latency = time.perf_counter() - start
-        self._metrics.record_request(latency)
-        return res
-
-    def info(self) -> dict[str, Any]:
-        return self.predictor.model_info()
-
-
-@serve.deployment(
-    num_replicas=1,
-    max_ongoing_requests=4,
-    ray_actor_options={"num_cpus": 2, "num_gpus": _num_gpus},
-    health_check_timeout_s=600,
-)
-class SD35Deployment:
-    def __init__(self) -> None:
-        from dataclasses import replace
-
-        from sentimentizer.diffusion.config import SD35_DEFAULT_CONFIG
-
-        overrides: dict[str, Any] = {}
-        if cfg.sd35_model_id:
-            overrides["model_id"] = cfg.sd35_model_id
-        if cfg.sd35_cpu_offload:
-            overrides["cpu_offload"] = cfg.sd35_cpu_offload
-        model_cfg = replace(SD35_DEFAULT_CONFIG, **overrides) if overrides else SD35_DEFAULT_CONFIG
-        self.predictor = create_predictor("sd35", model_cfg)
-        self.predictor.warmup()
-        self._metrics = ServiceMetrics(prefix="sd35")
-
-    async def generate(self, **kwargs: Any) -> tuple[Any, int]:
-        start = time.perf_counter()
-        try:
-            res = await asyncio.to_thread(self.predictor.generate, **kwargs)
-        except Exception:
-            latency = time.perf_counter() - start
-            self._metrics.record_request(latency, error=True)
-            raise
-        latency = time.perf_counter() - start
-        self._metrics.record_request(latency)
-        return res
-
-    def info(self) -> dict[str, Any]:
-        return self.predictor.model_info()
-
-
-@serve.deployment(
-    num_replicas=1,
-    max_ongoing_requests=4,
-    ray_actor_options={"num_cpus": 2, "num_gpus": _num_gpus},
-    health_check_timeout_s=600,
-)
-class SDXLDeployment:
-    def __init__(self, model_id: str) -> None:
-        from dataclasses import replace
-
-        from sentimentizer.diffusion.config import SDXL_DEFAULT_CONFIG
-
-        model_cfg = (
-            replace(SDXL_DEFAULT_CONFIG, model_id=model_id) if model_id else SDXL_DEFAULT_CONFIG
-        )
-        self.predictor = create_predictor("sdxl", model_cfg)
-        self.predictor.warmup()
-        self._metrics = ServiceMetrics(prefix="sdxl")
-
-    async def generate(self, **kwargs: Any) -> tuple[Any, int]:
-        start = time.perf_counter()
-        try:
-            res = await asyncio.to_thread(self.predictor.generate, **kwargs)
-        except Exception:
-            latency = time.perf_counter() - start
-            self._metrics.record_request(latency, error=True)
-            raise
-        latency = time.perf_counter() - start
-        self._metrics.record_request(latency)
-        return res
-
-    def info(self) -> dict[str, Any]:
-        return self.predictor.model_info()
-
-
-@serve.deployment(
-    num_replicas=2,
     max_ongoing_requests=20,
     ray_actor_options={"num_cpus": 1, "num_gpus": 0},
 )
 @serve.ingress(images_app)
 class ImagesDispatcher:
-    """Front-door deployment with HTTP routes; forwards work to SD/FLUX actors."""
+    """Image API front door forwarding work to one headless ComfyUI queue."""
 
-    def __init__(
-        self,
-        flux2_klein: Any = None,
-        sd35: Any = None,
-        sdxl: dict[str, Any] | None = None,
-    ) -> None:
-        self._handles: dict[str, Any] = {}
-        if flux2_klein is not None:
-            self._handles["flux2_klein"] = flux2_klein
-        if sd35 is not None:
-            self._handles["sd35"] = sd35
-        for name, handle in (sdxl or {}).items():
-            self._handles[name] = handle
-        self._sdxl_names: set[str] = set(sdxl.keys()) if sdxl else set()
+    def __init__(self, comfyui: Any, model_names: list[str]) -> None:
+        self._comfyui = comfyui
+        self._model_names = set(model_names)
         self._idem = IdempotencyCache(ttl_s=cfg.idempotency_ttl_s)
+        self._moderator = (
+            ImageModerationClient(
+                cfg.image_moderation_url,
+                api_key=cfg.image_moderation_api_key,
+                timeout_s=cfg.image_moderation_timeout_s,
+            )
+            if cfg.image_moderation_url
+            else None
+        )
         self._store: Any = None
         self._refs: dict[str, Any] = {}
-        self._poll_tasks: set[asyncio.Task] = set()
-        self._backend_by_model: dict[str, str] = {}
-
-    def _get_handle(self, model: str) -> Any:
-        if model not in self._handles:
-            avail = list(self._handles.keys())
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "code": "model_unavailable",
-                    "message": (f"Model '{model}' is not enabled. Available: {avail}"),
-                },
-            )
-        return self._handles[model]
-
-    async def _get_backend(self, model: str) -> str:
-        if model not in self._backend_by_model:
-            info = await self._handles[model].info.remote()
-            self._backend_by_model[model] = info.get("backend", "diffusers")
-        return self._backend_by_model[model]
+        self._poll_tasks: set[asyncio.Task[Any]] = set()
 
     def _get_store(self) -> Any:
         import ray
@@ -290,89 +263,151 @@ class ImagesDispatcher:
             except ValueError:
                 raise HTTPException(
                     status_code=503,
-                    detail={
-                        "code": "job_store_unavailable",
-                        "message": "Job store not initialized",
-                    },
+                    detail={"code": "job_store_unavailable", "message": "Job store unavailable"},
                 ) from None
         return self._store
 
-    def _get_predictor_defaults(self, model: str) -> dict[str, Any]:
-        model_cfg = _PREDICTOR_DEFAULTS.get(model)
-        if model_cfg is None and model in self._sdxl_names:
-            model_cfg = SDXL_DEFAULT_CONFIG
-        if model_cfg is None:
+    def _prepare_request(self, body: GenerateRequest, model_name: str) -> _PreparedRequest:
+        if model_name not in self._model_names:
             raise HTTPException(
                 status_code=400,
                 detail={
                     "code": "model_unavailable",
-                    "message": f"No default config for model '{model}'",
+                    "message": (
+                        f"Model '{model_name}' is not enabled. "
+                        f"Available: {sorted(self._model_names)}"
+                    ),
                 },
             )
-        return {
-            "default_steps": model_cfg.default_steps,
-            "default_guidance": model_cfg.default_guidance,
-            "max_pixels": model_cfg.max_pixels,
-            "dim_alignment": model_cfg.dim_alignment,
-        }
-
-    async def _prepare_request(self, body: GenerateRequest, model_name: str) -> _PreparedRequest:
-        """Validate and resolve all request parameters shared by generate and create_job."""
-        handle = self._get_handle(model_name)
-        reference_images = _validate_reference_images(body, model_name)
-
-        if body.reference_images is not None and reference_images is not None:
-            backend = await self._get_backend(model_name)
-            if backend == "mlx":
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "code": "reference_images_unsupported_backend",
-                        "message": (
-                            "reference_images require backend='diffusers'; "
-                            "current FLUX.2 Klein backend is 'mlx'. "
-                            "Set SENTIMENTIZER_DIFFUSION_FLUX2_KLEIN_BACKEND=diffusers."
-                        ),
-                    },
-                )
-
-        defaults = self._get_predictor_defaults(model_name)
-        steps = body.steps if body.steps is not None else defaults["default_steps"]
-        guidance_scale = (
-            body.guidance_scale if body.guidance_scale is not None else defaults["default_guidance"]
-        )
-        max_pixels = defaults["max_pixels"]
-        dim_alignment = defaults["dim_alignment"]
-
-        w_h = body.width * body.height
-        if w_h > max_pixels:
+        if body.negative_prompt:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "negative_prompt_unsupported",
+                    "message": f"{model_name} uses its native unconditional workflow",
+                },
+            )
+        if body.reference_images is not None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "reference_images_unsupported",
+                    "message": "Krea 2 and Ideogram 4 currently support text-to-image only",
+                },
+            )
+        if body.response_format == "url":
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "response_format_unsupported",
+                    "message": "url output requires an external storage backend; use b64_json",
+                },
+            )
+        model_config = IMAGE_MODEL_CONFIGS[model_name]
+        pixels = body.width * body.height
+        if pixels > model_config.max_pixels:
             raise HTTPException(
                 status_code=400,
                 detail={
                     "code": "invalid_dimensions",
-                    "message": f"width×height ({w_h}) exceeds model max ({max_pixels})",
+                    "message": (
+                        f"width×height ({pixels}) exceeds model max "
+                        f"({model_config.max_pixels})"
+                    ),
                 },
             )
-        if body.width % dim_alignment or body.height % dim_alignment:
+        if body.width % model_config.dim_alignment or body.height % model_config.dim_alignment:
             raise HTTPException(
                 status_code=400,
                 detail={
                     "code": "invalid_dimensions",
-                    "message": f"{model_name} requires dimensions aligned to {dim_alignment}px",
+                    "message": f"{model_name} requires dimensions aligned to 16px",
                 },
             )
-
         check_prompt_safety(body.prompt)
-
         return _PreparedRequest(
             model_name=model_name,
-            handle=handle,
-            reference_images=reference_images,
-            steps=steps,
-            guidance_scale=guidance_scale,
-            max_pixels=max_pixels,
-            dim_alignment=dim_alignment,
+            model_config=model_config,
+            steps=body.steps or model_config.default_steps,
+            guidance_scale=(
+                body.guidance_scale
+                if body.guidance_scale is not None
+                else model_config.default_guidance
+            ),
         )
+
+    def _submit(
+        self,
+        body: GenerateRequest,
+        prepared: _PreparedRequest,
+        *,
+        prompt_id: str | None = None,
+    ) -> Any:
+        return self._comfyui.generate.remote(
+            prepared.model_name,
+            prompt=body.prompt,
+            steps=prepared.steps,
+            guidance_scale=prepared.guidance_scale,
+            width=body.width,
+            height=body.height,
+            seed=body.seed,
+            prompt_id=prompt_id,
+        )
+
+    async def _response(
+        self,
+        body: GenerateRequest,
+        prepared: _PreparedRequest,
+        generated: dict[str, Any],
+    ) -> dict[str, Any]:
+        import PIL.Image
+
+        if self._moderator is not None:
+            try:
+                await asyncio.to_thread(
+                    self._moderator.check,
+                    generated["image"],
+                    model=prepared.model_name,
+                    user=body.user,
+                )
+            except UnsafeImageError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"code": exc.code, "message": exc.message},
+                ) from exc
+            except ImageModerationError as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "code": "image_moderation_unavailable",
+                        "message": "Generated output could not be safety checked",
+                    },
+                ) from exc
+
+        with PIL.Image.open(io.BytesIO(generated["image"])) as image:
+            image.load()
+            image_bytes = encode_pil(image, format=body.output_format)
+        return {
+            "id": generate_id(),
+            "created": int(time.time()),
+            "model": prepared.model_name,
+            "image_b64": b64_encode(image_bytes),
+            "image_url": None,
+            "format": body.output_format,
+            "width": body.width,
+            "height": body.height,
+            "seed": generated["seed"],
+            "steps": prepared.steps,
+            "guidance_scale": prepared.guidance_scale,
+            "negative_prompt": None,
+            "latency_s": round(float(generated["latency_s"]), 4),
+        }
+
+    async def _await_generation(self, ref: Any) -> dict[str, Any]:
+        try:
+            return await ref
+        except Exception as exc:
+            raise _backend_http_exception(exc) from exc
 
     @images_app.post(
         "/generate",
@@ -387,109 +422,43 @@ class ImagesDispatcher:
         idempotency_key: str | None = Depends(idempotent),
     ) -> dict[str, Any]:
         model_name = body.model or cfg.default_image_model
-
         if idempotency_key and api_key:
-            self._idem.check_conflict(api_key, idempotency_key, _body_hash(body))
+            body_hash = _body_hash(body)
+            self._idem.check_conflict(api_key, idempotency_key, body_hash)
             cached = self._idem.get(api_key, idempotency_key)
             if cached is not None:
                 return cached
-
-        req = await self._prepare_request(body, model_name)
-
-        request_id = getattr(request.state, "request_id", "unknown")
+        prepared = self._prepare_request(body, model_name)
         logger.info(
-            "Received image generation request",
+            "received_image_generation_request",
             model=model_name,
             width=body.width,
             height=body.height,
-            request_id=request_id,
+            request_id=getattr(request.state, "request_id", "unknown"),
         )
-
-        start = time.perf_counter()
-        image, used_seed = await req.handle.generate.remote(
-            prompt=body.prompt,
-            negative_prompt=body.negative_prompt,
-            steps=req.steps,
-            guidance_scale=req.guidance_scale,
-            width=body.width,
-            height=body.height,
-            seed=body.seed,
-            reference_images=req.reference_images,
-        )
-        latency = time.perf_counter() - start
-
-        img_bytes = encode_pil(image, format=body.output_format)
-        image_b64 = b64_encode(img_bytes) if body.response_format == "b64_json" else None
-        image_url = None
-
-        response = {
-            "id": generate_id(),
-            "created": int(time.time()),
-            "model": model_name,
-            "image_b64": image_b64,
-            "image_url": image_url,
-            "format": body.output_format,
-            "width": body.width,
-            "height": body.height,
-            "seed": used_seed,
-            "steps": req.steps,
-            "guidance_scale": req.guidance_scale,
-            "negative_prompt": body.negative_prompt,
-            "latency_s": round(latency, 4),
-        }
-
+        generated = await self._await_generation(self._submit(body, prepared))
+        result = await self._response(body, prepared, generated)
         if idempotency_key and api_key:
-            self._idem.put(api_key, idempotency_key, response, _body_hash(body))
+            self._idem.put(api_key, idempotency_key, result, _body_hash(body))
+        return result
 
-        logger.info(
-            "image generated",
-            id=response["id"],
-            model=model_name,
-            user=body.user,
-            key_prefix=api_key[:8] if api_key else None,
-            latency_s=latency,
-            reference_images_count=len(body.reference_images) if body.reference_images else 0,
-        )
-
-        return response
-
-    @images_app.get(
-        "/models",
-        response_model=ImageModelsResponse,
-    )
-    async def images_models(
-        self,
-        api_key: str = Depends(require_api_key),
-    ) -> dict[str, Any]:
-        models_info = {}
-        for name, handle in self._handles.items():
-            info = await handle.info.remote()
-            models_info[name] = info
-        return {
-            "models": models_info,
-            "default": cfg.default_image_model,
+    @images_app.get("/models", response_model=ImageModelsResponse)
+    async def images_models(self, api_key: str = Depends(require_api_key)) -> dict[str, Any]:
+        models = {
+            name: await self._comfyui.info.remote(name) for name in sorted(self._model_names)
         }
+        return {"models": models, "default": cfg.default_image_model}
 
-    @images_app.get(
-        "/models/{name}",
-        response_model=ImageModelDetailResponse,
-    )
+    @images_app.get("/models/{name}", response_model=ImageModelDetailResponse)
     async def images_model_detail(
-        self,
-        name: str,
-        api_key: str = Depends(require_api_key),
+        self, name: str, api_key: str = Depends(require_api_key)
     ) -> dict[str, Any]:
-        if name not in self._handles:
-            avail = list(self._handles.keys())
+        if name not in self._model_names:
             raise HTTPException(
                 status_code=400,
-                detail={
-                    "code": "model_unavailable",
-                    "message": (f"Model '{name}' is not enabled. Available: {avail}"),
-                },
+                detail={"code": "model_unavailable", "message": f"Model '{name}' is not enabled"},
             )
-        info = await self._handles[name].info.remote()
-        return {"model": name, "info": info}
+        return {"model": name, "info": await self._comfyui.info.remote(name)}
 
     @images_app.post(
         "/jobs",
@@ -506,81 +475,67 @@ class ImagesDispatcher:
         idempotency_key: str | None = Depends(idempotent),
     ) -> dict[str, Any]:
         model_name = body.model or cfg.default_image_model
-
         if idempotency_key and api_key:
-            self._idem.check_conflict(api_key, idempotency_key, _body_hash(body))
+            body_hash = _body_hash(body)
+            self._idem.check_conflict(api_key, idempotency_key, body_hash)
             cached = self._idem.get(api_key, idempotency_key)
             if cached is not None:
                 prefix = request.scope.get("root_path", "/v1/images")
                 response.headers["Location"] = f"{prefix}/jobs/{cached['job_id']}"
                 return cached
-
-        req = await self._prepare_request(body, model_name)
+        prepared = self._prepare_request(body, model_name)
         store = self._get_store()
-
-        ref = req.handle.generate.remote(
-            prompt=body.prompt,
-            negative_prompt=body.negative_prompt,
-            steps=req.steps,
-            guidance_scale=req.guidance_scale,
-            width=body.width,
-            height=body.height,
-            seed=body.seed,
-            reference_images=req.reference_images,
-        )
-
+        prompt_id = str(uuid.uuid4())
         job_id = await store.submit.remote(
             model=model_name,
             user=body.user,
             api_key=api_key,
+            backend_id=prompt_id,
         )
-
+        ref = self._submit(body, prepared, prompt_id=prompt_id)
         self._refs[job_id] = ref
-
-        self._track_job(job_id, ref, model_name, store)
-
-        job_resp = await store.get.remote(job_id, api_key)
-
+        self._track_job(job_id, ref, body, prepared, store)
+        job_response = await store.get.remote(job_id, api_key)
         prefix = request.scope.get("root_path", "/v1/images")
         response.headers["Location"] = f"{prefix}/jobs/{job_id}"
-
         if idempotency_key and api_key:
-            self._idem.put(api_key, idempotency_key, job_resp, _body_hash(body))
-
-        logger.info(
-            "job created",
-            job_id=job_id,
-            model=model_name,
-            user=body.user,
-            key_prefix=api_key[:8],
-            request_id=getattr(request.state, "request_id", "unknown"),
-            reference_images_count=len(body.reference_images) if body.reference_images else 0,
-        )
-
-        return job_resp
+            self._idem.put(api_key, idempotency_key, job_response, _body_hash(body))
+        return job_response
 
     def _track_job(
         self,
         job_id: str,
         ref: Any,
-        model_name: str,
+        body: GenerateRequest,
+        prepared: _PreparedRequest,
         store: Any,
     ) -> None:
         import ray
 
         async def _poll() -> None:
             try:
-                result = await ref
+                generated = await ref
+                result = await self._response(body, prepared, generated)
                 await store.set_succeeded.remote(job_id, result)
-            except ray.exceptions.TaskCancelledError:
-                # Normal path: cancel_job already set status to "canceled" before
-                # calling ray.cancel(). For unexpected cancellation (preemption, OOM),
-                # mark as failed so the job doesn't stay in "processing" indefinitely.
+            except (ray.exceptions.TaskCancelledError, ComfyUICancelled):
                 status = await store.get_status.remote(job_id)
                 if status not in ("canceled", "succeeded", "failed"):
                     await store.set_failed.remote(job_id, "task_cancelled", "task was cancelled")
+            except HTTPException as exc:
+                detail = exc.detail if isinstance(exc.detail, dict) else {}
+                await store.set_failed.remote(
+                    job_id,
+                    str(detail.get("code") or "generation_failed"),
+                    str(detail.get("message") or "Image generation failed"),
+                )
             except Exception as exc:
-                await store.set_failed.remote(job_id, "generation_failed", str(exc))
+                backend_error = _backend_http_exception(exc)
+                detail = backend_error.detail
+                await store.set_failed.remote(
+                    job_id,
+                    str(detail["code"]),
+                    str(detail["message"]),
+                )
             finally:
                 self._refs.pop(job_id, None)
 
@@ -589,17 +544,12 @@ class ImagesDispatcher:
         task.add_done_callback(self._poll_tasks.discard)
 
     @images_app.get(
-        "/jobs/{job_id}",
-        response_model=JobResponse,
-        dependencies=[Depends(require_api_key)],
+        "/jobs/{job_id}", response_model=JobResponse, dependencies=[Depends(require_api_key)]
     )
     async def get_job(
-        self,
-        job_id: str,
-        api_key: str = Depends(require_api_key),
+        self, job_id: str, api_key: str = Depends(require_api_key)
     ) -> dict[str, Any]:
-        store = self._get_store()
-        result = await store.get.remote(job_id, api_key)
+        result = await self._get_store().get.remote(job_id, api_key)
         if result is None:
             raise HTTPException(
                 status_code=404,
@@ -620,8 +570,7 @@ class ImagesDispatcher:
         status: str | None = Query(None),
         model: str | None = Query(None),
     ) -> dict[str, Any]:
-        store = self._get_store()
-        return await store.list_jobs.remote(
+        return await self._get_store().list_jobs.remote(
             api_key=api_key,
             page_size=page_size,
             page_token=page_token,
@@ -630,25 +579,81 @@ class ImagesDispatcher:
         )
 
     @images_app.delete(
-        "/jobs/{job_id}",
-        response_model=JobResponse,
-        dependencies=[Depends(require_api_key)],
+        "/jobs/{job_id}", response_model=JobResponse, dependencies=[Depends(require_api_key)]
     )
     async def cancel_job(
-        self,
-        job_id: str,
-        api_key: str = Depends(require_api_key),
+        self, job_id: str, api_key: str = Depends(require_api_key)
     ) -> dict[str, Any]:
-        import ray
-
         store = self._get_store()
-        result = await store.cancel.remote(job_id, api_key)
-        if result is None:
+        current = await store.get.remote(job_id, api_key)
+        if current is None:
             raise HTTPException(
                 status_code=404,
                 detail={"code": "job_not_found", "message": "Job not found"},
             )
-        ref = self._refs.pop(job_id, None)
-        if ref is not None:
-            ray.cancel(ref, force=False)
+        if current["status"] != "processing":
+            return current
+
+        prompt_id = await store.get_backend_id.remote(job_id, api_key)
+        if prompt_id:
+            try:
+                await self._comfyui.cancel.remote(prompt_id)
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "code": "backend_cancel_failed",
+                        "message": "Could not cancel the ComfyUI prompt; retry the request",
+                    },
+                ) from exc
+
+        ref = self._refs.get(job_id)
+        if ref is not None and not prompt_id:
+            self._refs.pop(job_id, None)
+            ref.cancel()
+        result = await store.cancel.remote(job_id, api_key)
         return result
+
+
+def _backend_http_exception(exc: Exception) -> HTTPException:
+    """Translate ComfyUI and Ray transport failures into stable API errors."""
+    cause: BaseException = exc
+    try:
+        import ray
+
+        if isinstance(exc, ray.exceptions.RayTaskError):
+            cause = exc.as_instanceof_cause()
+        if isinstance(exc, ray.exceptions.RayActorError):
+            return HTTPException(
+                status_code=503,
+                detail={
+                    "code": "image_backend_unavailable",
+                    "message": "Image backend unavailable",
+                },
+            )
+    except (ImportError, AttributeError):
+        pass
+
+    message = str(cause)
+    if isinstance(cause, ComfyUICancelled):
+        return HTTPException(
+            status_code=409,
+            detail={"code": "generation_cancelled", "message": "Image generation was cancelled"},
+        )
+    if isinstance(cause, ComfyUIError) or "ComfyUI" in message:
+        if "timed out" in message.lower():
+            return HTTPException(
+                status_code=504,
+                detail={"code": "image_backend_timeout", "message": "Image backend timed out"},
+            )
+        return HTTPException(
+            status_code=502,
+            detail={
+                "code": "image_backend_error",
+                "message": "Image backend rejected or failed the workflow",
+            },
+        )
+    return HTTPException(
+        status_code=503,
+        detail={"code": "image_backend_unavailable", "message": "Image backend unavailable"},
+    )

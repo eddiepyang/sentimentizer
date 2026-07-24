@@ -333,9 +333,8 @@ class HealthLiveResponse(BaseModel):
 class ImageModelsStatus(BaseModel):
     """Status of image models within health ready response."""
 
-    flux2_klein: Literal["enabled", "disabled"]
-    sd35: Literal["enabled", "disabled"]
-    sdxl: list[str]
+    krea_2: Literal["enabled", "disabled"]
+    ideogram_4: Literal["enabled", "disabled"]
 
 
 class HealthReadyResponse(BaseModel):
@@ -362,9 +361,8 @@ class HealthReadyResponse(BaseModel):
                     "router_loaded": True,
                     "router_error": None,
                     "image_models": {
-                        "flux2_klein": "enabled",
-                        "sd35": "disabled",
-                        "sdxl": ["anime"],
+                        "krea_2": "enabled",
+                        "ideogram_4": "disabled",
                     },
                 }
             ]
