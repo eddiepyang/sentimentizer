@@ -1,6 +1,13 @@
-# SetFit Router (Review Categorization)
+# Intent Router (Review Categorization)
 
-The SetFit Router is a lightweight review classification module that categorizes incoming restaurant reviews into targeted areas. This allows downstream systems to route reviews to appropriate teams or track issues (e.g. flagging gluten-free queries to the kitchen).
+The intent router is a lightweight review classification module that categorizes incoming restaurant reviews into targeted areas. This allows downstream systems to route reviews to appropriate teams or track issues (e.g. flagging gluten-free queries to the kitchen).
+
+> **Not SetFit.** This module was originally built on the `setfit` library, and
+> some names still carry that history (`SetFitConfig` is a backward-compatible
+> alias for `RouterConfig`). `setfit` is no longer a dependency and is imported
+> nowhere. `RouterModel` (`sentimentizer/router/model.py`) is a
+> `SentenceTransformer` backbone fine-tuned with contrastive pairs plus an
+> sklearn `LogisticRegression` head.
 
 ---
 
@@ -21,59 +28,66 @@ Reviews are classified into three mutually exclusive categories:
 Since hand-labeling thousands of reviews is expensive, Sentimentizer uses a few-shot augmentation pipeline. It starts with 30 golden seed examples (10 per category) defined in `sentimentizer/router/seeds.py` and uses **GLM 5.1** via **Ollama** to generate synthetic variations.
 
 ```bash
-# Run augmentation using default configurations (usually 1,500 train, 300 test items)
+# Run augmentation using default configurations (30 seeds x 50 variations = ~1,500 items)
 make router-augment
 
 # Or customize using the CLI
 sentimentizer router augment \
-  --model "glm5.1" \
+  --model "glm-5.1:cloud" \
   --variations 50 \
-  --output "router/data/augmented_reviews.jsonl"
+  --output "augmented_yelp.jsonl"
 ```
 
 To resume an interrupted generation, add the `--resume` flag to skip already-generated seeds and append new variations.
 
 ---
 
-### 2. Model Training (SetFit)
+### 2. Model Training
 
-SetFit (Sentence Transformer Fine-Tuning) is an efficient framework for few-shot text classification. It first fine-tunes a Sentence Transformer model (`sentence-transformers/all-MiniLM-L6-v2`) using contrastive learning, and then trains a classification head (logistic regression) on the generated embeddings.
+Training follows the SetFit *method* without the library: it fine-tunes a sentence-transformer backbone (`BAAI/bge-base-en-v1.5` by default, 109M params, 768-dim) with contrastive pairs, then fits an sklearn `LogisticRegression` head on the resulting embeddings. `RouterConfig.num_iterations` (default 20) controls contrastive pairs generated per example.
 
 ```bash
 # Run training on the augmented data
 make router-train
 
 # Or train via CLI specifying the data file
-sentimentizer router train --data router/data/augmented_reviews.jsonl --output-dir models/router
+sentimentizer router train --data augmented_yelp.jsonl --output-dir models/router
 ```
 
 ---
 
 ### 3. Evaluation
 
-Model evaluation measures macro-averaged precision, recall, and F1-score. The target performance threshold for deployment is **>0.90 Macro F1** across all three classes.
+`evaluate_router()` reports a classification report (accuracy, per-class precision/recall/F1), a centroid cosine-similarity matrix, and a tau threshold calibration.
+
+Embedding-separation targets, enforced as `OK`/`HIGH`/`LOW` labels in the log output:
+
+- **Inter-class similarity < 0.65** — categories must not collapse into each other
+- **Intra-class similarity > 0.85** — each category must be internally coherent
 
 ```bash
 # Evaluate the model
-make router-eval
+make router-evaluate
 
 # Or run via CLI
-sentimentizer router evaluate --model-path models/router --data router/data/augmented_reviews.jsonl
+sentimentizer router evaluate --model-path models/router --data augmented_yelp.jsonl
 ```
 
 ---
 
 ### 4. Push to Hugging Face Hub
 
-Once trained and validated, you can publish the SetFit model directory to the Hugging Face Hub.
+Once trained and validated, publish the model directory to the Hugging Face Hub.
 
 ```bash
 # Push model to the Hub
-make router-push
+make upload-router
 
 # Or push via CLI with a custom repo ID
 sentimentizer router push --model-path models/router --repo-id your-username/sentimentizer-router
 ```
+
+Run the whole pipeline (augment → train → evaluate) with `make router-pipeline`.
 
 ---
 
@@ -128,7 +142,7 @@ Invalid values raise `ValueError` at load time with the offending env var name. 
 - `--config`: Path to router config YAML.
 
 ### `sentimentizer router evaluate`
-- `--model-path`: **Required**. Path to the trained SetFit router model.
+- `--model-path`: **Required**. Path to the trained router model directory.
 - `--data`: Path to evaluation JSONL data.
 
 ### `sentimentizer router push`

@@ -12,7 +12,7 @@ This document describes how to deploy and interact with the unified Sentimentize
 > uv add "sentimentizer[ray]"
 > ```
 
-The `serve` command starts a Ray Serve application with FastAPI routing (featuring interactive Swagger docs at `/docs`). It loads the sentiment model (defaulting to the configuration in `service.yaml`) and the SetFit router at startup. Headless Krea 2 and Ideogram 4 generation can be enabled through a separate ComfyUI process. All public APIs share the Ray Serve port.
+The `serve` command starts a Ray Serve application with FastAPI routing (featuring interactive Swagger docs at `/docs`). It loads the sentiment model (defaulting to the configuration in `service.yaml`) and the intent router at startup. Headless Krea 2 and Ideogram 4 generation can be enabled through a separate ComfyUI process. All public APIs share the Ray Serve port.
 
 ### Starting the Server
 
@@ -63,10 +63,27 @@ Both the full and BGE-M3-only applications expose `/health/live`,
 
 ## API Endpoints Reference
 
+> **Route namespacing.** Sentiment routes are canonically namespaced under
+> `/v1/sentiment/…`. The older flat forms — `/v1/predict`, `/v1/batch`,
+> `/v1/tokenize`, `/v1/models`, `/v1/models/{model_name}` — still work but are
+> declared `deprecated=True` in the OpenAPI schema. Prefer the namespaced route
+> in new clients.
+>
+> | Deprecated | Canonical |
+> |---|---|
+> | `POST /v1/predict` | `POST /v1/sentiment/predict` |
+> | `POST /v1/batch` | `POST /v1/sentiment/batch` |
+> | `POST /v1/tokenize` | `POST /v1/sentiment/tokenize` |
+> | `GET /v1/models` | `GET /v1/sentiment/models` |
+> | `GET /v1/models/{model_name}` | `GET /v1/sentiment/models/{model_name}` |
+>
+> Router (`/v1/router/…`), embeddings (`/v1/embeddings`, `/v1/embeddings/dense`),
+> and images (`/v1/images/…`) are already namespaced and have no deprecated form.
+
 ### Sentiment Analysis Endpoints
 
 #### Single Sentiment Prediction
-- **Route**: `POST /v1/predict`
+- **Route**: `POST /v1/sentiment/predict` (deprecated alias: `POST /v1/predict`)
 - **Request Body**:
   ```json
   {
@@ -75,7 +92,7 @@ Both the full and BGE-M3-only applications expose `/health/live`,
   ```
 - **Command**:
   ```bash
-  curl -X POST http://localhost:8000/v1/predict \
+  curl -X POST http://localhost:8000/v1/sentiment/predict \
     -H "Content-Type: application/json" \
     -d '{"text": "the food was terrific"}'
   ```
@@ -93,7 +110,7 @@ Both the full and BGE-M3-only applications expose `/health/live`,
   ```
 
 #### Batch Sentiment Prediction
-- **Route**: `POST /v1/batch`
+- **Route**: `POST /v1/sentiment/batch` (deprecated alias: `POST /v1/batch`)
 - **Request Body**:
   ```json
   {
@@ -102,7 +119,7 @@ Both the full and BGE-M3-only applications expose `/health/live`,
   ```
 - **Command**:
   ```bash
-  curl -X POST http://localhost:8000/v1/batch \
+  curl -X POST http://localhost:8000/v1/sentiment/batch \
     -H "Content-Type: application/json" \
     -d '{"texts": ["great pizza!", "terrible service"]}'
   ```
@@ -133,7 +150,7 @@ Both the full and BGE-M3-only applications expose `/health/live`,
   ```
 
 #### Standalone Tokenization (No Inference)
-- **Route**: `POST /v1/tokenize`
+- **Route**: `POST /v1/sentiment/tokenize` (deprecated alias: `POST /v1/tokenize`)
 - **Request Body**:
   ```json
   {
@@ -142,7 +159,7 @@ Both the full and BGE-M3-only applications expose `/health/live`,
   ```
 - **Command**:
   ```bash
-  curl -X POST http://localhost:8000/v1/tokenize \
+  curl -X POST http://localhost:8000/v1/sentiment/tokenize \
     -H "Content-Type: application/json" \
     -d '{"text": "the food was terrific"}'
   ```
@@ -157,17 +174,17 @@ Both the full and BGE-M3-only applications expose `/health/live`,
   ```
 
 #### List All Sentiment Models
-- **Route**: `GET /v1/models`
+- **Route**: `GET /v1/sentiment/models` (deprecated alias: `GET /v1/models`)
 - **Command**:
   ```bash
-  curl http://localhost:8000/v1/models
+  curl http://localhost:8000/v1/sentiment/models
   ```
 
 #### Single Model Metadata
-- **Route**: `GET /v1/models/{model_name}`
+- **Route**: `GET /v1/sentiment/models/{model_name}` (deprecated alias: `GET /v1/models/{model_name}`)
 - **Command**:
   ```bash
-  curl http://localhost:8000/v1/models/encoder
+  curl http://localhost:8000/v1/sentiment/models/encoder
   ```
 
 ---
@@ -429,7 +446,7 @@ This section documents non-obvious Ray Serve behaviors that affect development a
 1. `sentimentizer/serve/app.py` — module-level, before `from ray import serve`
 2. `sentimentizer/serve/app.py` — `main()` function, before `ray.init()`
 3. `workflows/cli.py` — `serve_cmd()`, before importing `sentimentizer.serve`
-4. `sentimentizer/lifecycle.py` — module-level (covers training paths)
+4. `workflows/lifecycle.py` — module-level (covers training paths)
 
 If you add a new entry point that uses Ray, add this env var.
 
