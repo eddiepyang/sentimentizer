@@ -12,7 +12,7 @@ The following default repositories are used for default weights and backbones:
 | **RNN** | Default RNN weights | `eddiepyang/sentimentizer-rnn` |
 | **Encoder** | Default Encoder weights | `eddiepyang/sentimentizer-encoder` |
 | **Decoder** | Default Decoder weights | `eddiepyang/sentimentizer-decoder` |
-| **Router** | Default SetFit routing weights | `eddiepyang/sentimentizer-router` |
+| **Router** | Default router weights | `eddiepyang/sentimentizer-router` |
 
 ---
 
