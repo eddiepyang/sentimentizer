@@ -60,8 +60,7 @@ def test_ideogram_workflow_uses_dual_models_and_native_scheduler() -> None:
 
     assert workflow["2"]["inputs"]["unet_name"] == "ideogram4_int8_convrot.safetensors"
     assert (
-        workflow["3"]["inputs"]["unet_name"]
-        == "ideogram4_unconditional_int8_convrot.safetensors"
+        workflow["3"]["inputs"]["unet_name"] == "ideogram4_unconditional_int8_convrot.safetensors"
     )
     assert workflow["10"]["class_type"] == "Ideogram4Scheduler"
     assert workflow["11"]["inputs"] == {
@@ -145,9 +144,7 @@ def test_client_rejects_changed_prompt_id() -> None:
         "prompt-1": {
             "outputs": {
                 "preview_image": {
-                    "images": [
-                        {"filename": "out.png", "subfolder": "", "type": "temp"}
-                    ]
+                    "images": [{"filename": "out.png", "subfolder": "", "type": "temp"}]
                 }
             }
         }
@@ -222,9 +219,7 @@ def test_client_queues_polls_and_fetches_matching_prompt() -> None:
 
     assert result.data == b"png"
     assert result.seed == 42
-    request_bytes.assert_called_once_with(
-        "GET", "/view?filename=out.png&subfolder=&type=temp"
-    )
+    request_bytes.assert_called_once_with("GET", "/view?filename=out.png&subfolder=&type=temp")
     delete_history.assert_called_once_with(prompt_id)
 
 
@@ -288,9 +283,7 @@ def test_history_execution_error_is_reported() -> None:
             "outputs": {},
             "status": {
                 "status_str": "error",
-                "messages": [
-                    ["execution_error", {"exception_message": "CUDA out of memory"}]
-                ],
+                "messages": [["execution_error", {"exception_message": "CUDA out of memory"}]],
             },
         }
     }

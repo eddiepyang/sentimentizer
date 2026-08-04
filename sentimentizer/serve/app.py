@@ -811,15 +811,11 @@ class SentimentizerDeployment:
         if self._image_model_names:
             try:
                 await asyncio.to_thread(self._comfyui_health_client.system_stats)
-                body["image_models"] = {
-                    name: "ready" for name in self._image_model_names
-                }
+                body["image_models"] = {name: "ready" for name in self._image_model_names}
             except Exception:
                 image_backend_ready = False
                 body["status"] = "not_ready"
-                body["image_models"] = {
-                    name: "unavailable" for name in self._image_model_names
-                }
+                body["image_models"] = {name: "unavailable" for name in self._image_model_names}
                 body["image_backend_error"] = "ComfyUI sidecar unavailable"
         body["embeddings_enabled"] = cfg.embeddings_enabled
         body["bge_m3_enabled"] = cfg.bge_m3_enabled

@@ -311,8 +311,7 @@ class ImagesDispatcher:
                 detail={
                     "code": "invalid_dimensions",
                     "message": (
-                        f"width×height ({pixels}) exceeds model max "
-                        f"({model_config.max_pixels})"
+                        f"width×height ({pixels}) exceeds model max ({model_config.max_pixels})"
                     ),
                 },
             )
@@ -444,9 +443,7 @@ class ImagesDispatcher:
 
     @images_app.get("/models", response_model=ImageModelsResponse)
     async def images_models(self, api_key: str = Depends(require_api_key)) -> dict[str, Any]:
-        models = {
-            name: await self._comfyui.info.remote(name) for name in sorted(self._model_names)
-        }
+        models = {name: await self._comfyui.info.remote(name) for name in sorted(self._model_names)}
         return {"models": models, "default": cfg.default_image_model}
 
     @images_app.get("/models/{name}", response_model=ImageModelDetailResponse)
@@ -546,9 +543,7 @@ class ImagesDispatcher:
     @images_app.get(
         "/jobs/{job_id}", response_model=JobResponse, dependencies=[Depends(require_api_key)]
     )
-    async def get_job(
-        self, job_id: str, api_key: str = Depends(require_api_key)
-    ) -> dict[str, Any]:
+    async def get_job(self, job_id: str, api_key: str = Depends(require_api_key)) -> dict[str, Any]:
         result = await self._get_store().get.remote(job_id, api_key)
         if result is None:
             raise HTTPException(

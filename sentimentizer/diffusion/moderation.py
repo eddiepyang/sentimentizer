@@ -73,14 +73,10 @@ class ImageModerationClient:
             with urllib.request.urlopen(request, timeout=self.timeout_s) as response:
                 result = _load_response(response.read())
         except urllib.error.HTTPError as exc:
-            raise ImageModerationError(
-                f"Image moderation returned HTTP {exc.code}"
-            ) from exc
+            raise ImageModerationError(f"Image moderation returned HTTP {exc.code}") from exc
         except (TimeoutError, urllib.error.URLError) as exc:
             reason = getattr(exc, "reason", exc)
-            raise ImageModerationError(
-                f"Cannot reach image moderation service: {reason}"
-            ) from exc
+            raise ImageModerationError(f"Cannot reach image moderation service: {reason}") from exc
 
         if result.get("safe") is True:
             return
