@@ -4,15 +4,17 @@ This document describes how to train Sentimentizer models (RNN, Encoder, Decoder
 
 ## Prerequisites
 
-Before starting training, you must download the pre-trained GloVe word embeddings and the Amazon Food Reviews dataset.
+Before starting training, you must download the pre-trained GloVe word embeddings and obtain the Yelp reviews dataset.
 
 ```bash
-# Download GloVe embeddings (into static/glove.6B/)
-make download
-
-# Download review dataset (into static/reviews.csv)
-make download
+# Downloads GloVe embeddings and prints Yelp dataset instructions
+make download-data
 ```
+
+`scripts/download_data.sh` fetches GloVe automatically. The Yelp dataset cannot
+be downloaded programmatically — the script prints the manual steps: register at
+<https://www.yelp.com/dataset>, download the archive, and place it at
+`static/yelp_dataset.tar`.
 
 ---
 

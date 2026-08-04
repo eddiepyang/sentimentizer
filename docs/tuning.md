@@ -13,7 +13,7 @@ Sentimentizer offers three ways to tune hyperparameters, each at a different lev
 | **Auto-retry on failure** | ❌ | ❌ | ✅ Re-tunes up to `max_retries` times |
 | **Saves final model** | ❌ | ❌ | ✅ Trains & saves best model weights |
 | **Requires Ollama** | ❌ No | ✅ Yes | Only in agent mode |
-| **CLI flag** | `--tune --tune-mode standalone` | `--agent-tune` | `--tune` (defaults to agent mode) |
+| **CLI** | `tune --mode standalone` | `tune --mode agent` | `tune --save` (agent mode by default) |
 | **When to use** | Quick sweep, no Ollama available | You want LLM-guided search but will handle model training yourself | You want a complete end-to-end pipeline |
 
 ## Standalone Tuning
@@ -102,20 +102,27 @@ The result is always written to `best_config.json`:
 }
 ```
 
-> **Note:** Agent tuning (`--agent-tune`) only runs the LLM-guided search loop — it finds the best hyperparameters but does **not** train a final model or validate predictions. To get a trained, validated model, use the Tuning Workflow below.
+> **Note:** Agent tuning (`tune --mode agent`) only runs the LLM-guided search loop — it finds the best hyperparameters but does **not** train a final model or validate predictions. Add `--save`, or use the Tuning Workflow below, to get a trained and validated model.
 
 ### Usage
 
 ```bash
-# Via Makefile
-make train-agent
+# Via Makefile (agent mode is the default)
+make tune MODEL=encoder
 
 # Via CLI
-python workflows/driver.py --model encoder --agent-tune --save
+sentimentizer --model encoder tune --mode agent --save
 
 # With a custom agent config
-python workflows/driver.py --model encoder --agent-tune --agent-config path/to/custom.yaml --save
+sentimentizer --model encoder tune --mode agent --agent-config path/to/custom.yaml --save
+
+# Standalone (single Ray Tune sweep, no LLM agent)
+sentimentizer --model encoder tune --mode standalone --save
 ```
+
+The tuning mode is selected with `--mode agent|standalone`; there is no
+`--agent-tune` flag. `make tune-standalone` is the Makefile shortcut for the
+standalone form.
 
 ## Tuning Workflow Pipeline
 

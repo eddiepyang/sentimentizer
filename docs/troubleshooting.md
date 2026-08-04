@@ -227,9 +227,9 @@ pip install -e ".[onnx]"
 uv sync --extra onnx
 ```
 
-### `setfit` import error during router training
+### `sentence_transformers` import error during router training
 
-**Symptoms**: `ModuleNotFoundError: No module named 'setfit'` when running `sentimentizer router train`.
+**Symptoms**: `ModuleNotFoundError: No module named 'sentence_transformers'` (or `sklearn`) when running `sentimentizer router train`.
 
 **Fix**: Install the router optional dependency group:
 
@@ -239,11 +239,15 @@ pip install -e ".[router]"
 uv sync --extra router
 ```
 
+> If you hit `No module named 'setfit'`, you are running stale code or a stale
+> checkout — `setfit` is no longer a dependency of this project. See
+> [router.md](router.md).
+
 ### Do I need `optimum-onnx`?
 
 No. This project's ONNX export and quantization use `onnxruntime.quantization.quantize_dynamic` directly (see `sentimentizer/export_onnx.py`); the `[onnx]` extra installs only `onnx`, `onnxruntime`, and `onnxscript`. `optimum-onnx` was previously considered for SetFit ONNX export, but SetFit is no longer a dependency.
 
-## SetFit Router Issues
+## Intent Router Issues
 
 ### Ollama API connection failure during augmentation
 
@@ -265,7 +269,7 @@ The `augment_seeds()` function gracefully handles API failures — it returns th
 **Fix**: This typically means:
 1. Too few training examples — run augmentation to expand seeds
 2. Hard negatives not represented — ensure `augment.py` generates category-confusing examples
-3. Consider upgrading the base model from `BAAI/bge-base-en-v1.5` to `mxbai-embed-large-v1` in `SetFitConfig`
+3. Consider upgrading the base model from `BAAI/bge-base-en-v1.5` to `mxbai-embed-large-v1` in `RouterConfig`
 
 ## ModernBERT Issues
 
@@ -296,7 +300,7 @@ The `augment_seeds()` function gracefully handles API failures — it returns th
 **Fix**: Ensure `RAY_ENABLE_UV_RUN_RUNTIME_ENV=0` is set before any `import ray` in all entry points:
 - `sentimentizer/serve/app.py` (module-level and `main()`)
 - `workflows/cli.py` (`serve_cmd()`)
-- `sentimentizer/lifecycle.py` (module-level)
+- `workflows/lifecycle.py` (module-level)
 
 If you add a new CLI command or entry point that uses Ray, add `os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")` at the top.
 
@@ -411,6 +415,22 @@ And passes `runtime_env={"py_executable": sys.executable}` to `ray.init()`. This
 ## Linting and Formatting
 
 ```bash
-make check   # Runs ruff check --fix, ruff check, and black --check
-make format  # Runs ruff check --fix and black .
+make ci        # Full CI mirror: check + typecheck + test — run before pushing
+make check     # ruff format, ruff check --fix, ruff check
+make format    # ruff format, then ruff check --fix --select I (import sort)
+make typecheck # pyright
 ```
+
+**Do not run `black`.** It is not a dependency; the project formats with
+`ruff format`.
+
+### CI fails with "Would reformat: ..." but `make lint` passed
+
+`make lint` and `make test-lint` run only `ruff check`, which does **not**
+verify formatting. CI runs `ruff format --check .` as a separate step and fails
+on any drift.
+
+**Fix**: run `make check` (or `make format`) to apply formatting, then `make ci`
+to confirm the whole chain. Note CI uses `bash -e`, so a formatting failure
+aborts the job before pyright and pytest run — a green format does not mean the
+remaining steps passed.

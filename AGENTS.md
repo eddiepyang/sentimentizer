@@ -1,416 +1,521 @@
 # Agent Guide
 
-## Project Overview
+Sentimentizer is a PyTorch sentiment-analysis pipeline with four model
+architectures (RNN/LSTM, Transformer Encoder, Encoder-Decoder, ModernBERT). It
+supports single-node and distributed training via Ray Train, Ray Serve
+inference, an intent router, BGE-M3 embeddings, headless image generation
+through a ComfyUI sidecar, Prometheus metrics, and Grafana dashboards.
 
-Sentimentizer is a PyTorch-based sentiment analysis pipeline with three model architectures (RNN/LSTM, Transformer Encoder, Transformer Encoder-Decoder). It supports single-node and distributed training (via Ray Train), Prometheus metrics, and Grafana dashboards.
+This file holds durable rules and routing. Implementation narratives belong in
+`docs/`; change history belongs in `git log`.
 
-## Recent Changes
+## Verification
 
-### ModernBERT Integration (May 2026)
+**`make ci` is the completion gate for any code change.** It runs
+`check` (ruff format, ruff fix, ruff check), then `typecheck` (pyright), then
+`test` (pytest) — the same four gates CI enforces, in the same order.
 
-**Change**: Integrated ModernBERT-base as a high-performance sentiment classification model option. This includes a new Hugging Face tokenization and training pipeline supporting 8-bit optimizer precision and layer-wise unfreezing.
+```bash
+make ci        # full local mirror of CI — run before pushing
+make check     # format + autofix + lint only (fast inner loop)
+make typecheck # pyright
+make test      # pytest tests/
+```
 
-**Key changes**:
-- **ModernBERT Wrapper**: Added `ModernBERT` wrapper model (`new_modernbert_model` factory) utilizing the `nomic-ai/modernbert-base` backbone, mean pooling, and classifier head.
-- **Hugging Face Tokenizer & Loader**: Implemented `HFTokenizer` and `HFDataset`/`HFCollateFn` to handle tokenization and dynamic per-batch padding natively, bypassing standard static vocabulary pipelines.
-- **8-bit AdamW Optimization**: Upgraded `trainer.py` to support 8-bit AdamW via `bitsandbytes` to minimize VRAM memory footprint on consumer-grade GPUs, falling back to standard AdamW if bitsandbytes is unavailable.
-- **Backbone Unfreezing Callback**: Implemented an unfreezing callback (`UnfreezeBackboneCallback`) to gradually unfreeze layers during fine-tuning (e.g., train only classifier head for 1 epoch, then unfreeze backbone completely).
-- **Progress Bar Enhancements**: Switched training loop progress bars to use `ray.experimental.tqdm_ray.tqdm` under distributed training (rank 0) to avoid newlines in the driver console, while falling back to standard `tqdm` in local contexts.
-- **Checkpoint & Registry**: Added `HFTransformerModel` base to save weights alongside config sidecars and full pre-trained tokenizer directories for absolute offline reproducibility.
-- **ONNX Limitation**: ModernBERT has `SUPPORTS_ONNX = False` configured, so `sentimentizer export` will reject it cleanly.
+Rules:
 
-**Key files changed**: `sentimentizer/config.py`, `sentimentizer/trainer.py`, `sentimentizer/hf_tokenizer.py`, `sentimentizer/hf_dataset.py`, `sentimentizer/models/base.py`, `sentimentizer/models/hf_base.py`, `sentimentizer/models/modernbert.py`, `workflows/stages/train.py`, `tests/test_modernbert.py`
+- **Do not run `black`.** It is not a dependency. The project formats with
+  `ruff format`; running another formatter produces churn that CI rejects.
+- **`make lint` and `make test-lint` do not check formatting.** They run only
+  `ruff check`. CI runs `ruff format --check .` as a separate step and fails on
+  drift, so a green `make lint` does not mean a green CI. Use `make ci`.
+- CI aborts at the first failing step (`bash -e`). A formatting failure means
+  pyright and pytest never ran — fix the format, then re-run `make ci` locally
+  before assuming the rest passes.
+- Run verification **only when code changed**. Documentation- and
+  markdown-only changes do not need the suite.
+- pyright reports warnings that do not fail the build; only `error` counts.
 
-### Transformer Architecture and Training Optimizations (May 2026)
+## Task Routing
 
-**Change**: Optimized the Transformer Encoder, Decoder, and RNN architectures to prevent GloVe embedding overfitting, stabilize training with Pre-LN/GELU, and correctly decay learning rates to minimum values.
+| Task | Where to look first |
+|---|---|
+| Plan a feature, refactor, or architectural change | `.skills/plan-feature/SKILL.md` |
+| Runtime failures, zero negative accuracy, GloVe mismatch, scheduler issues | `docs/troubleshooting.md` |
+| Metric definitions, gauges, stale-metric behavior | `docs/metrics.md` |
+| Config dataclasses and env vars | `docs/configuration.md` |
+| Serving endpoints and API shape | `docs/serving.md` |
+| Training behavior and loops | `docs/training.md`, `docs/tuning.md` |
+| ONNX export | `docs/onnx.md` |
+| Intent router | `docs/router.md` |
+| Hugging Face upload/download | `docs/huggingface.md` |
 
-**Key changes**:
-- **Embeddings**: Added `padding_idx=0` to `nn.Embedding`. Frozen the entire GloVe matrix by registering a backward hook that zeroes out gradients for all tokens except the Out-Of-Vocabulary (OOV) token, allowing the model to learn an optimal "average unknown word" vector without overfitting GloVe tokens.
-- **Weight Decay**: Removed `embed` layers, `1-D` parameters, and `bias` from `AdamW` weight decay in `trainer.py` via `no_decay` parameter splitting to prevent frozen weights and layer norms from decaying towards zero.
-- **Transformers**: Upgraded `TransformerEncoderLayer` and `TransformerDecoderLayer` to use `norm_first=True` (Pre-LN) and `activation="gelu"` for smooth gradient flow.
-- **Encoder Pooling**: Replaced CLS token pooling with mean pooling over non-padding tokens.
-- **Scheduler Math**: Fixed `_LinearWarmupCosineScheduler` to return a relative lambda multiplier (`eta_min / base_lr`) so the learning rate bottoms out exactly at `eta_min` (e.g., `1e-6`) instead of decaying to near-zero (`1e-10`).
-- **Embedding Scaling**: Applied `math.sqrt(d_model)` scaling to projected embeddings to balance semantic signal against positional encoding noise.
+`docs/*_plan.md` files are historical design context, not current behavior.
+Treat the code as the source of truth when they disagree.
 
-**Key files changed**: `sentimentizer/models/encoder.py`, `sentimentizer/models/decoder.py`, `sentimentizer/models/rnn.py`, `sentimentizer/trainer.py`
-
-### 3-Class Classification Migration (current)
-
-**Change**: Migrated from binary classification (negative/positive, BCEWithLogitsLoss) to 3-class classification (negative/neutral/positive, CrossEntropyLoss). All models now output logits of shape `(B, 3)` instead of `(B, 1)`. `predict_text()` returns `dict[str, float]` instead of `float`. Per-class metrics replace single-class metrics throughout the pipeline.
-
-**Key changes**:
-- **Models**: All three models (RNN, Encoder, Decoder) use `num_classes=3` in classifier head, output `(B, 3)` logits, and use `softmax` instead of `sigmoid`
-- **Loss**: `CrossEntropyLoss` with `class_weights` and `label_smoothing=0.1` (or `FocalCrossEntropyLoss` with `loss_type="focal"`)
-- **Config**: `LABEL_NAMES = ["negative", "neutral", "positive"]`, `NUM_CLASSES = 3`, `include_neutral=True`, `TrainerConfig` has `class_weights`, `loss_type`, `focal_gamma`, `label_smoothing`, `weight_smoothing`, `neutral_oversample_ratio`
-- **Tokenizer**: `convert_rating()` maps 1-2★→0, 3★→1, 4-5★→2; `include_neutral=True` keeps 3-star reviews
-- **Metrics**: `ClassificationMetrics` has per-class fields (e.g., `neutral_precision`, `negative_recall`), `balanced_accuracy`, `macro_f1`, `weighted_f1`, `confusion_matrix` (3×3); old binary fields (`tp`, `tn`, `fp`, `fn`, `precision`, `recall`, `f1`, `npv`, `positive_accuracy`, `negative_accuracy`, `auc_roc`, `avg_precision`) removed
-- **Prometheus gauges**: Per-class names (e.g., `TRAINING_VAL_NEUTRAL_F1`) replace binary names (e.g., `TRAINING_VAL_F1`)
-- **Serving**: `_predict_sentiment()` returns `{"model": ..., "label": ..., "score": ..., "token_count": ...}` instead of `{"sentiment_score": float, "label": ...}`
-- **Training pipeline**: `compute_class_weights()` replaces `compute_pos_weight()`; `_balance_dataframe()` / `_balance_ray_dataset()` handle multi-class targets
-- **ONNX**: Metadata JSON includes `num_classes` and `label_names`
-
-**Key files changed**: `config.py`, `tokenizer.py`, `loader.py`, `metrics.py`, `metrics_publisher.py`, `exporter.py`, `trainer.py`, `models/{base,rnn,encoder,decoder}.py`, `losses.py`, `serve.py`, `tuner.py`, `agent/diagnose_model.py`, `hf.py`, `export_onnx.py`, `workflows/{cli,stages/train,stages/tune}.py`, `scripts/generate_ray_dashboards.py`
-
-### torchmetrics Migration
-
-**Change**: Replaced custom `_cohen_kappa()`, `_auc_roc()`, and `_auc_roc_manual()` implementations with `torchmetrics` library (`BinaryPrecision`, `BinaryRecall`, `BinaryF1Score`, `BinaryCohenKappa`, `BinaryAUROC`, `BinaryMatthewsCorrCoef`, `BinaryNegativePredictiveValue`, `BinaryAveragePrecision`). This eliminates ~200 lines of hand-rolled metric math and the `sklearn.metrics.roc_auc_score` conditional import.
-
-**New metrics added**:
-- **MCC** (Matthews Correlation Coefficient): Range -1 to 1, robust to class imbalance. Best single-number summary of confusion matrix quality.
-- **NPV** (Negative Predictive Value): TN / (TN + FN). Complement to precision for the negative class.
-- **Average Precision** (PR-AUC): Area under the Precision-Recall curve. More informative than AUC-ROC for imbalanced datasets.
-- **Macro F1**: Mean of per-class F1 scores. Weights both classes equally — drops significantly when the model ignores the negative class, unlike positive-class-only F1.
-
-**Edge-case handling**:
-- **NaN probabilities**: `torchmetrics.BinaryAUROC` silently gives wrong results with NaN input. `_replace_nan_probs()` replaces NaN→0.5 *before* calling torchmetrics, preserving the existing warning log.
-- **Single-class Cohen's kappa**: `torchmetrics.BinaryCohenKappa` returns `nan` for single-class targets. `_safe_item()` coerces `nan→0.0` to avoid Prometheus gauge issues. **Behavioral change**: single-class kappa is now `0.0` (was `1.0` in the custom implementation).
-- **Empty arrays**: Guard clause returns `ClassificationMetrics(total=0)` before calling torchmetrics (which would crash on empty input).
-
-**Key files changed**:
-- `sentimentizer/metrics.py` — rewrote with torchmetrics `Multiclass*` classes; added `_to_long_tensor`, `_to_float_tensor`, `_replace_nan_probs`, `_safe_item` helpers; added per-class precision/recall/F1, `balanced_accuracy`, `macro_f1`, `weighted_f1`, `mcc`, per-class `auc_roc`/`avg_precision`, confusion matrix 3×3
-- `sentimentizer/trainer.py` — added per-class gauges, JSON persistence, and logger fields
-- `sentimentizer/exporter.py` — added per-class `TRAINING_VAL_*` gauges (negative/neutral/positive precision, recall, F1), `TRAINING_VAL_BALANCED_ACCURACY`, `TRAINING_VAL_MACRO_F1`, `TRAINING_VAL_WEIGHTED_F1`, `TRAINING_VAL_MCC`, `TRAINING_VAL_NEUTRAL_AUC_ROC`, `TRAINING_VAL_NEUTRAL_AVG_PRECISION`, neutral diagnostic gauges
-- `workflows/stages/train.py` — updated `_reset_stale_metrics()` and `_persist_metrics_to_file()` for new metrics
-- `tests/test_metrics.py` — updated for torchmetrics; added `TestHelperFunctions` class; updated `TestCohenKappa.test_single_class_returns_zero`
-- `tests/test_rnn.py` — updated mock_gauges dicts with new keys
-- `pyproject.toml` — added `torchmetrics>=1.9.0` dependency
-- `docs/metrics.md` — updated NaN handling section; added new metric names
-
-### Dictionary Tokenization Bug Fix
-
-**Problem**: The dictionary stored tokens with wrapping quotes (e.g., `"'the'"` instead of `"the"`) because `str()` was called on numpy arrays from parquet columns instead of converting them to Python lists via `list()`. This caused a 99.9% GloVe vocabulary mismatch — nearly every word was mapped to the OOV embedding index (row `len(dictionary) + 1`), so the model trained on random embeddings and collapsed to predicting the majority class (zero negative accuracy, zero Cohen's kappa).
-
-**Root cause**: `isinstance(doc_tokens, list)` returns `False` for numpy arrays. The fallback `regex_tokenize(str(numpy_array))` stringified the array representation `"['if' 'you' ...]"` and the regex `[a-z0-9'-]+` captured the wrapping quotes as part of each token.
-
-**Fix**: Changed the fallback in `new_dictionary()` and `_count_vocab_batch()` to `list(doc_tokens)` with a `TypeError` catch for genuinely non-iterable types. Same fix in `workflows/stages/tokenize.py` for the resume path.
-
-**Related fix — scheduler**: `EncoderSchedulerParams.T_max` was `4` but `default_epochs("encoder")` is `8`, causing the LR to decay to minimum after half the epochs. `T_max` for both transformer schedulers is now `16` — twice `default_epochs` — so training uses only the gentle first half of the cosine curve and stays productive through the final epoch; `warmup_epochs` is `3`. The invariant is `T_max >= epochs_trained`, **not** `T_max == default_epochs`. Also fixed `_LinearWarmupCosineScheduler` which returned `0.0` at step 0 (zero LR for the entire first epoch) — changed from `step / warmup_steps` to `(step + 1) / warmup_steps` — and clamped `progress` to `1.0` so stepping past `total_steps` can't bounce the LR back up. Separately, `TuningRun._train_final_model` trained `2 * default_epochs` epochs while `T_max` was `16`, re-creating the dead-LR-at-the-end problem; final training now uses `default_epochs(model_type)` and relies on early stopping.
-
-**Tests**: `TestDictionaryNumpyArrays` in `tests/test_loader.py`, `TestSchedulerCorrectness` in `tests/test_training.py`, `TestCountVocabBatch.test_numpy_array_tokens` and `TestCountVocabBatch.test_pandas_series_tokens` in `tests/test_dictionary_lifecycle.py`.
-
-**Key files changed**:
-- `sentimentizer/tokenizer.py` — numpy array handling in `new_dictionary()` and `_count_vocab_batch()`
-- `workflows/stages/tokenize.py` — numpy array handling in resume path
-- `sentimentizer/config.py` — All `*SchedulerParams` now have `warmup_ratio=0.06`; `RNNSchedulerParams` is a new dataclass; `T_max` and `warmup_epochs` are legacy fields
-- `sentimentizer/trainer.py` — All models use per-batch `_LinearWarmupCosineScheduler`; `CosineAnnealingLR` removed; `_rebuild_optimizer_after_unfreeze()` has no `CosineAnnealingLR` branch; `new_ray_trainer()` passes `warmup_ratio` instead of `use_warmup`/`warmup_steps`/`total_steps`
-- `sentimentizer/models/base.py` — `STEP_SCHEDULER_PER_BATCH = True` (was `False`); `HFTransformerModel` no longer overrides it
-- `sentimentizer/agent/diagnose_model.py` — final training uses `default_epochs` (not 2×); sidecar config JSON for exact model reconstruction
-
-### Stale Metrics Cleanup
-
-**Problem**: When training the encoder model, the dashboard showed unexpected RNN metrics from a previous training run because a single shared JSON file accumulated entries across runs and `prometheus_client` gauges retained their last-set values. Concurrent training processes could also race on the shared file.
-
-**Solution**: Switched from a single shared JSON file (`/tmp/sentimentizer_training_metrics.json`) to per-model-type JSON files (`/tmp/sentimentizer_metrics/{model_type}_metrics.json`). Each model type writes to its own file, so concurrent training processes never race. The standalone exporter discovers all three files and zeroes gauges for any model type whose file is missing or stale. Added `_written_by` and `_written_at` trace fields to every write, and `_trace.reset_by` / `_trace.reset_at` to reset files, so debugging future issues is trivial: just `cat` the file to see which model_type wrote it and when.
-
-**Important**: `_reset_stale_metrics(model_type)` writes zeroed-out JSON files for **all three** model types (rnn, encoder, decoder) so the exporter can clear stale values, but only resets **Prometheus gauges for the current model type**. Other model types' gauges retain their last real values — the exporter skips `_reset: true` files so untrained models don't show `epoch=0` on the dashboard. Each zeroed-out file includes `_reset: true` and `_trace.reset_by` to distinguish stale resets from real training data.
-
-**Tests**: `TestResetStaleMetrics` in `tests/test_training.py` (6 tests covering JSON file cleanup for all model types, stale cross-model-type data overwrite, missing/corrupt files, Prometheus gauge reset for current model type only, and Ray gauge cache invalidation).
-
-**Key files changed**:
-- `workflows/stages/train.py` — added `_reset_stale_metrics()` function and call in `run_train()`
-- `tests/test_training.py` — added `TestResetStaleMetrics` test class
-- `docs/metrics.md` — added "Stale Metrics Reset" section
-- `CLAUDE.md` — added stale metrics convention
-
-### Intra-Epoch Batch Snapshots
-
-**Problem**: The Grafana dashboard showed flat-zero metrics during training because epoch-level metrics were only written to the per-model JSON file after each epoch completed. During a multi-minute epoch, the dashboard showed no data at all.
-
-**Solution**: Added lightweight batch snapshot files written every N batches (10 for ModernBERT, 50 for RNN/Encoder/Decoder) for near-real-time dashboard visibility.
-
-- **`write_batch_snapshot()`** in `sentimentizer/metrics_publisher.py` writes `/tmp/sentimentizer_metrics/{model_type}_batch.json` containing `{epoch, batch, loss_ema, avg_loss, lr, _written_by, _written_at}`. This is a tiny file (~200 bytes) written atomically via `write_text()`.
-- **`_train_func()`** in `sentimentizer/trainer.py` calls `write_batch_snapshot()` every `ray_update_every` batches on rank 0.
-- **Standalone exporter** (`sentimentizer/exporter.py`) reads `{model_type}_batch.json` for intra-epoch `train_loss_ema`, `train_loss_avg`, and `batch` gauges. Falls back to the `batch_metrics` list in the epoch-end JSON if no snapshot file exists.
-- **`_reset_stale_metrics()`** removes `{model_type}_batch.json` files at training start so stale data doesn't appear.
-- **Critical bug fix**: When the epoch metrics file had `_reset: true`, the exporter was zeroing ALL gauges (including batch gauges) and skipping the batch snapshot read. Fixed to only zero epoch-level gauges and still read the batch snapshot.
-
-**Key files changed**: `sentimentizer/metrics_publisher.py`, `sentimentizer/trainer.py`, `sentimentizer/exporter.py`, `workflows/stages/train.py`, `scripts/generate_ray_dashboards.py`
-
-### Lazy Router Loading (current)
-
-**Change**: The SetFit router model is no longer loaded at `SentimentPredictor()` construction time. It loads lazily on the first `classify()` / `classify_batch()` call. This fixes a bug where constructing `SentimentPredictor(model_name="encoder")` logged an error-level exception traceback when `sentence-transformers` was not installed, even though the router was never requested.
-
-**Key changes**:
-- **`SentimentPredictor.__init__`**: No longer calls `_load_router_model()`. Stores `_router_model_path` and initializes `router=None`, `_router_error=None`, `_router_loaded=False`.
-- **`_ensure_router_loaded()`**: New method called by `classify_batch()` on first use. Memoizes both success and failure (no retry on every request after a failed load).
-- **`_ROUTER_AVAILABLE` probe**: The import-time `_ROUTER_AVAILABLE` flag now probes `sentence_transformers` directly (not just `router.config`/`router.model`, which use lazy imports and always succeed). This ensures the graceful-degradation guard in `_load_router_model()` returns a clean warning instead of attempting a load that produces a noisy exception traceback.
-- **Serve handlers**: `router_predict` / `router_batch` no longer guard with `router_loaded` before calling classify (which would 503 on every request since the router isn't loaded at startup). They let `classify_batch` trigger the lazy load and catch failures → 503.
-- **`get_router_model_info()`**: Reports `"not_loaded"` (was `"error"`) when the router hasn't been loaded yet.
-
-**Key files changed**: `sentimentizer/predictor.py`, `sentimentizer/serve/app.py`, `tests/test_serve.py`, `tests/test_hf.py`
-
-## Architecture Quick Reference
+## Architecture
 
 ```
 sentimentizer/
-  config.py        — Dataclass configs (DriverConfig, RNNConfig, EncoderConfig, etc.)
-  trainer.py        — Trainer class, new_trainer(), _train_func(), Ray gauge logic
-  exporter.py       — Standalone Prometheus exporter (port 8081), all gauge definitions
-  tuner.py          — Ray Tune integration with TunePrometheusCallback
-  metrics.py        — ClassificationMetrics dataclass + compute functions
-  export_onnx.py    — Unified ONNX export, quantization, validation (_RNNOnnxWrapper)
-  predictor.py      — SentimentPredictor (model loading, inference, additive v1 format)
-  serve.py          — Ray Serve deployment: FastAPI + @serve.ingress, route handlers, @serve.batch
-  serve_base.py     — ServiceMetrics (request/latency tracking), _DummyServe fallback
-  serve_config.py   — ServeConfig dataclass + YAML/env var loading (incl. cors_origins)
+  config.py            — Dataclass configs (DriverConfig, RNNConfig, EncoderConfig, *SchedulerParams)
+  trainer.py           — Trainer, new_trainer(), _train_func(), Ray gauge logic, scheduler rebuild
+  tuner.py             — Ray Tune integration, TunePrometheusCallback
+  metrics.py           — ClassificationMetrics dataclass + compute functions (torchmetrics)
+  metrics_publisher.py — Per-model-type JSON writes, write_batch_snapshot(), _METRIC_GAUGE_KEYS
+  exporter.py          — Standalone Prometheus exporter (port 8081), all gauge definitions
+  losses.py            — FocalCrossEntropyLoss
+  loader.py            — DataLoader, Ray Data loading, class balancing
+  tokenizer.py         — Vocabulary/dictionary build, regex_tokenize, convert_rating
+  hf_tokenizer.py      — HFTokenizer for ModernBERT
+  hf_dataset.py        — HFDataset / HFCollateFn (dynamic per-batch padding)
+  predictor.py         — SentimentPredictor (model loading, inference, lazy router load)
+  export_onnx.py       — ONNX export, quantization, validation (_RNNOnnxWrapper)
+  extractor.py         — Raw data extraction
+  data_source.py       — Dataset source abstraction
+  device.py            — resolve_device() / auto_detect_device()
+  safety.py            — Output safety checks
+  env.py               — Environment variable handling
+  hf.py                — Hugging Face Hub upload/download
   models/
-    base.py          — BaseSentimentModel with predict() and predict_text()
-    rnn.py          — Bidirectional LSTM (with onnx_export flag)
-    encoder.py      — Transformer encoder with CLS token
-    decoder.py      — Encoder-decoder transformer
-  router/           — SetFit router module (avoids shadowing setfit library)
-    config.py        — SetFitConfig, RouteLabels, AugmentConfig dataclasses
-    seeds.py         — Golden example utterances per category (10 per category)
-    augment.py       — GLM 5.1 augmentation via Ollama API
-    dataset.py       — JSONL dataset loader, train/test split
-    train_router.py  — SetFit training script with compat shims
-    evaluate.py      — Validation: similarity heatmap, threshold calibration
+    base.py            — BaseSentimentModel, predict(), predict_text(), STEP_SCHEDULER_PER_BATCH
+    hf_base.py         — HFTransformerModel base (weights + config sidecar + tokenizer dir)
+    rnn.py             — Bidirectional LSTM (onnx_export flag)
+    encoder.py         — Transformer encoder, mean pooling
+    decoder.py         — Encoder-decoder transformer
+    modernbert.py      — ModernBERT wrapper (new_modernbert_model)
+  serve/
+    app.py             — Main Ray Serve deployment: FastAPI + @serve.ingress, /v1 sub-app
+    base.py            — ServiceMetrics, _DummyServe fallback (no response builders)
+    config.py          — ServeConfig dataclass + YAML/env loading (incl. cors_origins)
+    models.py          — Pydantic request/response models
+    middleware.py      — Request-ID, body-size-limit middleware
+    bge_only_app.py    — BGE-M3-only deployment
+    embeddings_app.py  — Embeddings deployment
+    embeddings_models.py
+    diffusion_app.py   — Image generation dispatcher (ComfyUIDeployment)
+    diffusion_models.py
+    service.yaml       — Serve config
+  diffusion/
+    comfyui.py         — ComfyUI HTTP client, INT8 ConvRot workflows, checkpoint names
+    config.py          — diffusion_config.yaml loading, licensing gates
+    job_store.py       — JobStore (persists ComfyUI prompt UUIDs for cancellation)
+    moderation.py      — Output safety gate for Krea
+    image_utils.py
+  embeddings/
+    bge_m3.py          — BGE-M3 dense/sparse embeddings
+    predictor.py
+  router/              — Intent router (SentenceTransformer + LogisticRegression)
+    config.py          — RouterConfig (alias SetFitConfig), RouteLabels, AugmentConfig
+    model.py           — RouterModel: backbone + sklearn head
+    seeds.py           — Golden example utterances (10 per category)
+    augment.py         — GLM 5.1 augmentation via Ollama
+    dataset.py         — JSONL loader, train/test split
+    train_router.py    — Contrastive fine-tune + LogisticRegression head fit
+    evaluate.py        — Similarity heatmap, threshold calibration
+  agent/
+    diagnose_model.py  — Tuning/diagnosis agent
+    websearch.py       — Typed web search tool
+    agents.py graph.py nodes.py state.py prompts.py loader.py models.py
 
 workflows/
-  driver.py         — CLI entry point
+  driver.py            — CLI entry point
+  cli.py               — Click command definitions
+  lifecycle.py         — State, logger, Ray init, stale-session cleanup, atexit handlers
+  helpers.py           — Model loading, config utilities
   stages/
-    train.py        — run_train(), _run_fit_single(), _run_fit_distributed(), _reset_stale_metrics()
-    tune.py          — Ray Tune orchestration
-    export.py         — ONNX export workflow stage
-  lifecycle.py       — State, logger, Ray init/cleanup
-  helpers.py         — Model loading, config utilities
-
-tests/
-  test_training.py          — Training primitives, Trainer.fit, checkpoints, scheduler correctness, stale metrics
-  test_loader.py            — DataLoader, compute_pos_weight, dictionary numpy array handling
-  test_dictionary_lifecycle.py — Dictionary save/load, _count_vocab_batch with numpy arrays
-  test_rnn.py                — RNN/Encoder model integration + Ray distributed tests
-  test_diagnose_model.py      — Agent/tuning config tests
-  test_export_onnx.py — ONNX export, quantization, validation, _RNNOnnxWrapper
-  test_router.py      — SetFit config, labels, seeds, dataset, augmentation
+    train.py           — run_train(), _run_fit_single(), _run_fit_distributed(), _reset_stale_metrics()
+    tune.py            — Ray Tune orchestration
+    tokenize.py        — Dictionary build / resume path
+    extract.py export.py diagnose.py hf.py
 ```
+
+`tests/` mirrors these modules (28 `test_*.py` files plus `conftest.py`). Find
+the relevant one with `ls tests/` rather than trusting a list here.
 
 ## Metrics Pipeline
 
-- **Training driver** writes metrics to `/tmp/sentimentizer_metrics/{model_type}_metrics.json` (one file per `model_type`)
-- **Standalone exporter** (port 8081) reads JSON every 10s and serves `sentimentizer_training_*` gauges
+- **Training driver** writes `/tmp/sentimentizer_metrics/{model_type}_metrics.json` (one file per model type)
+- **Batch snapshots** write `/tmp/sentimentizer_metrics/{model_type}_batch.json` every N batches (10 for ModernBERT, 50 otherwise) for intra-epoch dashboard visibility
+- **Standalone exporter** (port 8081) reads both every 10s, serves `sentimentizer_training_*` gauges
 - **Ray workers** (port 8080) emit `ray_sentimentizer_live_*` gauges from rank 0
 - **Tune process** (port 8082) emits `sentimentizer_tune_*` gauges per trial
-- **Grafana dashboards** use `sentimentizer_training_* or ray_sentimentizer_live_*` PromQL fallback
+- **Grafana** uses `sentimentizer_training_* or ray_sentimentizer_live_*` PromQL fallback
+
+Per-model-type files exist so concurrent training runs never race on a shared
+file. `_reset_stale_metrics(model_type)` writes zeroed JSON for **all** model
+types (so the exporter can clear stale gauges) but resets **Prometheus gauges
+only for the current model type**. Zeroed files carry `_reset: true` and
+`_trace.reset_by`; the exporter skips `_reset: true` epoch data so untrained
+models do not show `epoch=0`, while still reading batch snapshots.
 
 ## Common Tasks
 
-### Dependency Management
-
-This project uses **uv** for dependency management. Key commands:
+### Dependency management
 
 ```bash
-uv sync                              # Install dependencies (local-only mode)
-uv sync --extra ray                  # Install with Ray distributed features
-uv sync --extra dev --extra ray      # Install dev deps (ruff, black, pytest)
-uv add <package>                     # Add a dependency
-uv add --dev <package>               # Add a dev dependency
-uv run <command>                     # Run in the venv
+uv sync                          # local-only mode
+uv sync --extra ray              # Ray distributed features
+uv sync --extra dev --extra ray  # dev deps (ruff, pytest, pyright)
+uv add <package>                 # add a dependency
+uv run <command>                 # run in the venv
 ```
 
-Optional extras: `--extra router` (SetFit router, `sentence-transformers`), `--extra onnx` (ONNX export), `--extra diffusion` (SD/FLUX), `--extra mlx-diffusion` (MLX on Apple Silicon), `--extra dev` (ruff/black/pytest). Combos allowed: `uv sync --extra router,onnx`.
-
-### Troubleshooting
-
-See [`docs/troubleshooting.md`](docs/troubleshooting.md) for common issues and fixes, including:
-- Zero negative-class accuracy / Cohen's kappa = 0
-- Dictionary tokens with wrapping quotes
-- GloVe match rate below 50%
-- Scheduler T_max and warmup issues
-- Class imbalance
-
-### Checkpointing
-
-All `make train*` targets enable checkpointing by default, saving to `checkpoints/<model>/` every epoch. This prevents total loss if the machine sleeps, crashes, or is interrupted.
-
-- **Default checkpoint dir**: `CHECKPOINT_DIR ?= checkpoints/$(MODEL)` in the Makefile
-- **Resume from checkpoint**: `make train-resume MODEL=modernbert`
-- **Disable checkpointing**: `make train-no-checkpoint`
-- **Checkpoint contents**: Model weights, optimizer state, scheduler state, epoch number, val_loss
-- **Best model**: `best_model.pth` saved whenever val_loss improves (controlled by `--checkpoint-best`, default True)
-- **Periodic checkpoints**: `checkpoint_epoch_N.pth` saved every N epochs (controlled by `--checkpoint-every`, default 1)
-
-The `train-resume` target uses `--resume-train` which calls `latest_checkpoint()` to find the most recent `checkpoint_epoch_*.pth` and restores model/optimizer/scheduler state.
-
-### Sleep Prevention
-
-All `make train*` targets automatically prevent system sleep during training using `systemd-inhibit` on Linux. This is detected at Makefile parse time — if `systemd-inhibit` is available, it wraps the training command; otherwise the command runs directly (no-op fallback).
-
-- **How it works**: `INHIBIT_SLEEP` is set to `systemd-inhibit --what=sleep --who='training' --why='Model training in progress' --mode=block` if the command is available, otherwise empty
-- **To disable**: `make train INHIBIT_SLEEP=` (empty override)
-- **Scope**: Only inhibits sleep (not idle shutdown or lid close) — `--what=sleep` is targeted
+Extras: `dev`, `ray`, `router` (sentence-transformers, scikit-learn), `onnx`,
+`diffusion`, `mlx-diffusion` (Apple Silicon). Combos allowed:
+`uv sync --extra router,onnx`. CI installs `dev,diffusion,ray,onnx,router`.
 
 ### Running tests
 
 ```bash
 uv run pytest tests/ --exitfirst --failed-first
-# For Ray-specific tests:
-uv run pytest tests/ -k "Ray"
-# Verbose per-test output when debugging:
-uv run pytest tests/ -v
+uv run pytest tests/ -k "Ray"      # Ray-specific
+uv run pytest tests/ -v            # verbose when debugging
 ```
 
-### Linting, formatting, and checking
+### Checkpointing
 
-```bash
-# Auto-format, auto-fix, then lint (run after every change)
-make check
+All `make train*` targets checkpoint to `checkpoints/<MODEL>/` every epoch
+(`--checkpoint-dir checkpoints/<MODEL> --checkpoint-every 1`), so an
+interrupted machine does not lose the run. `TrainerConfig.checkpoint_dir`
+defaults to `""` (disabled) — checkpointing is enabled by CLI/Makefile, not by
+the config dataclass.
 
-# Individual commands
-uv run ruff check .
-uv run ruff check --fix .
-uv run black --check .
-uv run black .
-```
+- Resume: `make train-resume MODEL=modernbert` (uses `--resume-train` →
+  `latest_checkpoint()` → restores model/optimizer/scheduler state)
+- Disable: `make train-no-checkpoint`
+- Contents: model weights, optimizer state, scheduler state, epoch, val_loss
+- `best_model.pth` written whenever val_loss improves (`--checkpoint-best`, default True)
+
+### Sleep prevention
+
+All `make train*` targets wrap training in `systemd-inhibit --what=sleep` on
+Linux when available, detected at Makefile parse time via `INHIBIT_SLEEP`.
+Disable with `make train INHIBIT_SLEEP=`. Only sleep is inhibited, not idle
+shutdown or lid close.
 
 ### Regenerating dashboards
 
-After modifying `scripts/generate_ray_dashboards.py` (or any code that affects dashboard JSON output), regenerate and reload Grafana:
-
 ```bash
-make start-metrics    # Regenerates JSON + restarts Grafana + starts exporter
+make start-metrics   # regenerate JSON + restart Grafana + start exporter
 ```
 
-Grafana only reads provisioned dashboard files on **startup**, so a restart is required after any dashboard changes.
+Grafana reads provisioned dashboards only at **startup**, so a restart is
+required after any dashboard change.
 
 ### Adding a new model type
 
-1. Add config dataclass in `sentimentizer/config.py`
-2. Add model class in `sentimentizer/models/`
-3. Add optimization/scheduler params in `sentimentizer/config.py` (`_get_opt_params`, `_get_sched_params` — include `warmup_ratio`)
-4. Add model factory import in `sentimentizer/trainer.py` (`_train_func`, `new_trainer`)
-5. Add model import in `workflows/helpers.py` (`_load_model`, `_get_model_config`)
+1. Config dataclass in `sentimentizer/config.py`
+2. Model class in `sentimentizer/models/`
+3. Optimization/scheduler params in `config.py` (`_get_opt_params`,
+   `_get_sched_params` — include `warmup_ratio`)
+4. Model factory import in `trainer.py` (`_train_func`, `new_trainer`)
+5. Model import in `workflows/helpers.py` (`_load_model`, `_get_model_config`)
 
 ### Adding a new training metric
 
-1. Add gauge definition in `sentimentizer/exporter.py` (with `model_type` label)
-2. Add gauge in `_get_ray_gauges()` in `sentimentizer/trainer.py`
-3. Add to `_METRIC_GAUGE_KEYS` in `sentimentizer/metrics_publisher.py`
-4. Set gauge in `Trainer.evaluate()`, `_train_func()`, and via `publish_epoch_metrics()`
+1. Gauge definition in `exporter.py` (with `model_type` label)
+2. Gauge in `_get_ray_gauges()` in `trainer.py`
+3. Add to `_METRIC_GAUGE_KEYS` in `metrics_publisher.py`
+4. Set in `Trainer.evaluate()`, `_train_func()`, and via `publish_epoch_metrics()`
 5. Add to `_reset_stale_metrics()` in `workflows/stages/train.py` (reset to 0)
 6. Add to `_persist_metrics_to_file()` and `_update_training_metrics()` in exporter
 7. Add to dashboard in `scripts/generate_ray_dashboards.py`
 
-## Important Conventions
+## Conventions
 
-- **3-class classification**: Models output logits of shape `(B, 3)` with label mapping: 0=negative, 1=neutral, 2=positive. `LABEL_NAMES = ["negative", "neutral", "positive"]` is the single source of truth in `config.py` — import it, don't duplicate.
-- **Loss function**: `CrossEntropyLoss` (not `BCEWithLogitsLoss`). Target dtype is `torch.long` (not `torch.float32`). `FocalCrossEntropyLoss` in `sentimentizer/losses.py` for hard-example mining.
-- **`predict_batch()` returns additive v1 format**: Each result is `{"label": "positive", "score": 0.88, "scores": {"negative": 0.02, "neutral": 0.10, "positive": 0.88}, "token_count": 12, "model": "encoder", "positive": 0.88}` — explicit `label`, `score`, `scores` (all 3 class probs), `token_count`, `model`, plus a deprecated dynamic winning-class key (e.g., `"positive": 0.88`) for backward compat. `predict()` returns the same dict (it's `predict_batch([text])[0]`).
-- **`predict_text()` on `BaseSentimentModel` returns all 3 scores**: `{"negative": 0.05, "neutral": 0.12, "positive": 0.83}`. Used by `diagnose_model.py` and `hf.py` for model validation/export — no `token_count` or `model` field.
-- **`classify_batch()` returns prediction with label, score, and token_count**: Each result is `{"prediction": {"label": "dietary", "score": 0.95, "token_count": 8}}` — no `text` or `category` key.
-- **Serving uses FastAPI + `@serve.ingress` with `/v1/` prefix**: Sentiment and router endpoints are under `v1` sub-app (`app.mount("/v1", v1)`). Health endpoints remain unversioned. Route handlers use `@v1.post("/predict")`, `@v1.get("/models")`, etc. Health uses `@app.get("/health/live")`, `@app.get("/health/ready")`, `@app.get("/health")`.
-- **CORS middleware**: `CORSMiddleware` added with `allow_origins=cfg.cors_origins` (default `["*"]`). Configurable via `SENTIMENTIZER_CORS_ORIGINS` env var (comma-separated). CORS is registered as outermost middleware (added last in code, processed first in request).
-- **Request-ID middleware**: `X-Request-Id` header read from request or auto-generated UUID. Added to response headers and `request.state.request_id`. Registered as second middleware (inner to CORS).
-- **Pydantic validation centralized**: Request models use `Annotated[str, Field(min_length=1, max_length=cfg.max_text_length)]` for per-item validation. `BatchRequest.texts` uses `list[Annotated[str, Field(...)]]` with both per-item string length and list size validation. Manual HTTPException(400) validation removed from handlers — 422 responses from Pydantic instead.
-- **`/metrics` endpoint removed**: The JSON `/metrics` endpoint is gone. `ServiceMetrics` class is kept for internal observability (used by handlers for latency tracking). `to_prometheus()` method has a `TODO(P3)` comment for future Prometheus push.
-- **Error response envelope**: All HTTP exceptions now use `{"error": {"code": "...", "message": "..."}}` format via `http_exception_handler`. Unhandled exceptions return `{"error": {"code": "internal_error", "message": "Internal server error", "request_id": "..."}}`. Pydantic 422 validation errors retain their default format.
-- **`model` field on requests**: `PredictRequest` and `BatchRequest` accept an optional `model: str | None = None` field. If provided, it's validated against the loaded model (returns 400 if mismatch). If omitted, the default model is used. This provides the API shape for future multi-model support.
-- **`token_count` in prediction response**: `predict_batch()` returns `token_count` (number of tokens per text) in each prediction dict. `_format_prediction()` passes it through to the API response. This uses `len(regex_tokenize(text))` computed during the existing tokenization step — no extra tokenization cost.
-- **`GET /v1/models/{model_name}`**: Returns metadata for a single model. Returns 400 for unknown model names, 404 if model exists but isn't loaded.
-- **Request body size limit middleware**: `_RequestBodySizeLimitMiddleware` rejects requests with `Content-Length` > 1 MiB with 413. Defense-in-depth alongside K8s ingress `proxy-body-size: "1m"`.
-### Ray Serve Deployment
+### Model and tensor contracts
 
-- **`RAY_ENABLE_UV_RUN_RUNTIME_ENV=0`** must be set before any Ray import. Without it, Ray workers create isolated venvs via `uv` that lack the `ray` package, causing `ModuleNotFoundError: No module named 'ray'`. Set in three places: (1) `serve.py` module level, (2) `serve.py:main()`, (3) `cli.py:serve_cmd()` subprocess env. The `lifecycle.py` module-level setting covers training paths. **If any entry point is missing this env var, Ray workers will crash with `ModuleNotFoundError`.**
-- **`RAY_ENABLE_UV_RUN_RUNTIME_ENV=false` also controls cold-start speed.** When left at its default (`true`), Ray's uv-run runtime-env hook fires under `uv run`: it packages the entire CWD as a `working_dir` (~3MB), creates a per-session venv, and installs all 172 project packages on **every cold start** — adding ~37s of packaging before the Serve controller even starts. The workers already inherit the project venv via `uv run`, so the packaging is redundant for a local Serve deploy. Setting it to `false`/`0` drops BGE-M3 cold start from ~52s to ~16s. **Must be set at module level** (before any `import ray`), because Ray reads the constant at `ray_constants.py` import time, not at `ray.init()` call time — setting it inside `main()` before `ray.init()` is too late. `app.py` (line 76) and `bge_only_app.py` (module level) both set it; `lifecycle.py` covers training. If a new Serve entry point is added, set `os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "false")` at module level before any Ray import.
-- **`auto_detect_device()` requires `"auto"` argument**: `resolve_device()` (re-exported as `auto_detect_device`) requires a `device` parameter. Never call `auto_detect_device()` — always call `auto_detect_device("auto")` or `resolve_device("auto")`.
-- **Ray Serve uses FastAPI + `@serve.ingress`**: Route handlers are `@v1.get`/`@v1.post` decorated methods on the deployment class (on the `v1` sub-app). Health handlers use `@app.get` on the main app. Do NOT define `__call__` on the deployment class — `@serve.ingress` explicitly forbids it. `@serve.batch` methods remain as internal methods called from route handlers.
-- **Prediction response format**: `predict_batch()` returns `[{"label": "positive", "score": 0.88, "scores": {"negative": 0.02, ...}, "token_count": 12, "model": "encoder", "positive": 0.88}, ...]` — additive v1 format (see Important Conventions). The API response wraps this in `"prediction": {...}` with `"latency_s"`. `predict_text()` on `BaseSentimentModel` still returns all 3 scores (without `token_count`).
-- **`serve/base.py`** contains only `ServiceMetrics` and `_DummyServe` — no response builder functions. Response dicts are constructed directly in FastAPI route handlers.
-- **FastAPI App Isolation**: Do not share the same `FastAPI` instance across multiple `@serve.ingress()` deployments (e.g., `SentimentizerDeployment` and `ImagesDispatcher`). This causes route handler collisions, especially when attaching middleware or handling root routes. Use a factory function like `create_fastapi_app()` to ensure each deployment gets its own isolated `FastAPI` instance.
-- **`serve.start()` Timeout Configuration**: Passing a dictionary like `http_options={"request_timeout_s": 600}` to `serve.start()` fails silently to enforce the timeout. You MUST pass an explicit `HTTPOptions` object: `serve.start(http_options=ray.serve.config.HTTPOptions(..., request_timeout_s=600))`. This is critical for preventing timeouts on slow tasks like SD3.5 or FLUX image generation.
-- **Trailing Slashes in Routes**: You cannot use `@app.post("")` to avoid trailing slashes in Ray Serve. FastAPI's `include_router` (used by `@serve.ingress`) throws a `FastAPIError: Prefix and path cannot be both empty` if you try to use an empty string for the path. Therefore, if your deployment uses `route_prefix="/v1/images"`, you MUST use `@app.post("/")`, which means clients MUST include the trailing slash (`/v1/images/`) or they will receive a `307 Temporary Redirect`. Always document endpoints with the trailing slash if they map to the root of a `route_prefix`.
+- **3-class classification.** Logits are `(B, 3)`; labels are 0=negative,
+  1=neutral, 2=positive. `LABEL_NAMES = ["negative", "neutral", "positive"]`
+  and `NUM_CLASSES = 3` in `config.py` are the single source of truth — import
+  them, never duplicate.
+- **`forward()` output is always `(B, num_classes)`.** Never squeeze; a
+  batch-of-1 returns `(1, 3)`, not `(3,)`.
+- **`predict()`** returns `torch.softmax(logits, dim=-1)` — a
+  `(B, num_classes)` probability matrix.
+- **Loss is `CrossEntropyLoss`**, not `BCEWithLogitsLoss`. **Target dtype is
+  `torch.long`** — never call `.float()` on targets, in either the DataLoader
+  or the Ray path. `FocalCrossEntropyLoss` (`losses.py`) is available via
+  `loss_type="focal"`.
+- **`predict_text()`** on `BaseSentimentModel` returns all three scores
+  (`{"negative": …, "neutral": …, "positive": …}`) with no `token_count` or
+  `model` field. Used by `diagnose_model.py` and `hf.py`.
+- **Tuned models save a sidecar config JSON** (`best_model_<type>_config.json`)
+  — `n_heads` cannot be inferred from weights, so reconstruction needs it.
+- All function signatures need type hints.
 
-### Ray Worker Environment Variables
-- **`forward()` output shape**: Always `(B, num_classes)`, never squeeze. Batch-of-1 returns `(1, 3)`, not `(3,)`.
-- **`predict()` output**: `torch.softmax(logits, dim=-1)` returns `(B, num_classes)` probability matrix.
-- **`compute_class_weights()`** replaces `compute_pos_weight()`. The old function raises `ValueError` if `num_classes > 2`.
-- **`_replace_nan_probs()`**: Accepts `(N, num_classes)` shape. NaN values replaced with `1/num_classes`. Rows with partial NaN are re-normalized to sum to 1.0.
-- **`ClassificationMetrics`**: 3-class dataclass with per-class fields (`negative_precision`, `neutral_recall`, etc.), `balanced_accuracy`, `macro_f1`, `weighted_f1`, `confusion_matrix` (3×3), `neutral_to_positive_rate`, `neutral_to_negative_rate`, `pred_neutral_frac`. Old binary fields (`tp`, `tn`, `fp`, `fn`, `precision`, `recall`, `f1`, `npv`, `positive_accuracy`, `negative_accuracy`, `auc_roc`, `avg_precision`) no longer exist.
-- **Prometheus gauges**: Per-class names (e.g., `TRAINING_VAL_NEUTRAL_F1`, `TRAINING_VAL_NEGATIVE_PRECISION`), not binary names. Ray gauge dict keys match `_METRIC_GAUGE_KEYS` in `metrics_publisher.py`.
-- **`_reset_stale_metrics(model_type)`** is called at training start to prevent stale cross-model-type metrics. Writes `_reset: true` flag in zeroed-out JSON files.
-- **Ray 2.55.1 API**: use `Checkpoint.from_directory()`, `train.get_dataset_shard()` (not `get_context().get_dataset_shard()`)
-- **`prometheus_client` gauges** must NOT be created at module import time for Ray workers — use lazy init via `_get_ray_gauges()`
-- **`ray.init(ignore_reinit_error=True)`** in tests; `ray.shutdown()` in cleanup
-- All function signatures need type hints
-- **Always run lint and tests, but only when code changes are made**: Run linting and tests (such as `make check` or `pytest`) only when actual code changes have been introduced. Do not run them if the changes are limited to documentation or markdown files. When code changes are present, run `make test-lint` (runs `ruff check .` then `pytest`) or run `make lint` first, fix findings, then `make test` to catch any issues.
-- When iterating over DataFrame or batch columns containing token lists, use `list(doc_tokens)` with a `TypeError` catch — never `str(doc_tokens)`. Numpy arrays from parquet are iterable but not `isinstance(x, list)`, and `str()` produces array representations with wrapping quotes
-- Scheduler invariant: All models use per-batch scheduler stepping (`STEP_SCHEDULER_PER_BATCH = True` on `BaseSentimentModel`). The scheduler is rebuilt with real optimizer-step counts in `Trainer.fit()` / `_train_func()` once the DataLoader length is known. `T_max` and `warmup_epochs` in `SchedulerParams` are legacy fields from per-epoch stepping — `warmup_ratio` (default `0.06`) controls what fraction of total optimizer steps are spent warming up. `CosineAnnealingLR` is no longer used anywhere — all models use `_LinearWarmupCosineScheduler`.
-- `_LinearWarmupCosineScheduler` warmup must use `(step + 1) / warmup_steps` to avoid zero LR at step 0, and clamp `progress` to `1.0`
-- Tuned models save a sidecar config JSON (`best_model_<type>_config.json`) — `n_heads` can't be inferred from weights, so reconstruction needs it
-- **Target dtype is `torch.long`** for `CrossEntropyLoss` — never `.float()` on targets. This applies to both DataLoader and Ray paths. The bug was that three `.float()` casts existed in the Ray distributed path — all are now `.long()`.
-- **`_load_model()`** is only called in the single-node path. Distributed training (`_run_fit_distributed`) does NOT load the model in the driver process — Ray workers create their own model via `_train_func`.
-- **`torchmetrics.MulticlassAUROC`** silently gives wrong results with NaN input — always call `_replace_nan_probs()` before passing probabilities to it
-- **`torchmetrics.MulticlassCohenKappa`** returns `nan` for single-class targets — always wrap with `_safe_item()` to coerce `nan→0.0` for Prometheus gauge compatibility
-- Single-class Cohen's kappa is `0.0` (not `1.0`) — this is a behavioral change from the previous custom implementation
-- Empty arrays must be guarded before calling torchmetrics (it crashes on empty input) — use the `if total == 0` early return in `compute_classification_metrics()`
-- **`_balance_dataframe()`** and **`_balance_ray_dataset()`** handle multi-class targets (0, 1, 2), not just binary (0.0, 1.0)
-- **`weight_smoothing`** parameter (default `0.5`) controls class weight aggressiveness in `compute_class_weights()`: `1.0` = full inverse frequency, `0.0` = uniform weights
-- **`label_smoothing`** default is `0.1` for 3-class `CrossEntropyLoss`
-- **`neutral_oversample_ratio`** (default `0.0`) targets a moderate neutral class ratio; `0.20` = oversample neutral to 20% of training data
-- **Checkpointing is enabled by default**: All `make train*` targets pass `--checkpoint-dir checkpoints/<MODEL> --checkpoint-every 1`. Use `make train-no-checkpoint` to disable. Resume with `make train-resume MODEL=<type>`. The `TrainerConfig.checkpoint_dir` default is `""` (disabled) — checkpointing is only enabled via CLI/Makefile, not in the config dataclass itself.
-- **Sleep prevention is enabled by default**: All `make train*` targets automatically use `systemd-inhibit --what=sleep` on Linux to prevent the system from sleeping during training. Detected at Makefile parse time via `INHIBIT_SLEEP`. Override with `make train INHIBIT_SLEEP=` to disable.
+### Serving API
 
-### ONNX Export
+- **`predict_batch()` returns the additive v1 format**, and `predict()` is
+  `predict_batch([text])[0]`:
 
-- **RNN `onnx_export` flag**: `RNN.forward(inputs, onnx_export=True)` bypasses `pack_padded_sequence` (ONNX-incompatible) with a masked fallback that extracts hidden states from `lstm_out`. The standard path (default `onnx_export=False`) is unchanged for training and inference.
-- **`_RNNOnnxWrapper`**: Wraps RNN to call `forward(inputs, onnx_export=True)` during `torch.onnx.export()` tracing, since `torch.onnx.export()` calls `model(*args)` internally and cannot pass keyword arguments.
-- **RNN ONNX tolerance**: Use `1e-2` for RNN ONNX validation (masked fallback has padding drift), `1e-4` for Encoder/Decoder.
-- **ONNX opset version**: Use 17 (stable, well-tested). Opset 18+ requires `dynamo_export` which is still preview.
-- **Quantization**: Use `onnxruntime.quantization.quantize_dynamic` with `QuantType.QInt8` for INT8 dynamic quantization (FP32 activations, INT8 weights — optimal for AVX-512).
-- **`optimum-onnx[onnxruntime]`**: Use this package (not `optimum[onnxruntime]`) — `optimum` v2.0+ moved ONNX to a separate package.
-- **ONNX artifacts** go in `onnx_artifacts/` (gitignored). Metadata JSON files are saved alongside each `.onnx` file with model_type, opset_version, input_shape, dictionary path, and validation results.
-- **Export CLI**: `sentimentizer export --model rnn --quantize` (also `encoder`, `decoder`)
+  ```python
+  {"label": "positive", "score": 0.88,
+   "scores": {"negative": 0.02, "neutral": 0.10, "positive": 0.88},
+   "token_count": 12, "model": "encoder",
+   "positive": 0.88}  # deprecated dynamic winning-class key, kept for back-compat
+  ```
 
-### SetFit Router
+  The HTTP layer wraps this in `"prediction": {...}` with `"latency_s"`.
+  `token_count` comes from `len(regex_tokenize(text))` computed during existing
+  tokenization — no extra cost.
+- **`classify_batch()`** returns `{"prediction": {"label": "dietary", "score":
+  0.95, "token_count": 8}}` — no `text` or `category` key.
+- **FastAPI + `@serve.ingress`, one app per deployment.** There is **no mounted
+  `v1` sub-app** — routes declare their full path on the app returned by
+  `create_fastapi_app()`, e.g. `@app.post("/v1/sentiment/predict")`. Health
+  endpoints stay unversioned (`/health`, `/health/live`, `/health/ready`).
+- **Routes are namespaced by domain; the flat forms are deprecated.** Canonical:
+  `/v1/sentiment/{predict,batch,tokenize,models,models/{name}}`,
+  `/v1/router/{predict,batch,models}`, `/v1/embeddings`,
+  `/v1/embeddings/dense`, and `/v1/images/*` on a separate deployment with
+  `route_prefix="/v1/images"`. The unnamespaced `/v1/predict`, `/v1/batch`,
+  `/v1/tokenize`, `/v1/models`, `/v1/models/{name}` still exist but are declared
+  `deprecated=True` — do not add new callers.
+- **`GET /metrics` serves per-replica Prometheus text**, rendered by
+  `render_service_metrics()` in `serve/base.py` with prefix
+  `sentimentizer_service`. It is per-replica: aggregate across replicas rather
+  than treating one scrape as a cluster total.
+- **Never define `__call__`** on a deployment class — `@serve.ingress`
+  forbids it. `@serve.batch` methods stay internal, called from route handlers.
+- **Do not share one `FastAPI` instance across deployments.** Two
+  `@serve.ingress()` deployments sharing an app collide on routes and
+  middleware. Use a factory such as `create_fastapi_app()` so each deployment
+  gets its own instance.
+- **Trailing slashes.** `@app.post("")` raises `FastAPIError: Prefix and path
+  cannot be both empty`. A deployment with `route_prefix="/v1/images"` must use
+  `@app.post("/")`, so clients must send `/v1/images/` or get a 307. Document
+  such endpoints with the trailing slash.
+- **`serve.start()` timeouts need an explicit object.** `http_options={"request_timeout_s": 600}`
+  is silently ignored; pass
+  `ray.serve.config.HTTPOptions(..., request_timeout_s=600)`. Required for slow
+  image generation.
+- **Middleware order:** CORS is outermost (added last, processed first) with
+  `allow_origins=cfg.cors_origins` (default `["*"]`, configurable via
+  `SENTIMENTIZER_CORS_ORIGINS`, comma-separated). Request-ID is inner to CORS:
+  `X-Request-Id` is read or generated, set on the response and
+  `request.state.request_id`. `_RequestBodySizeLimitMiddleware` rejects
+  `Content-Length` > 1 MiB with 413, matching the K8s ingress
+  `proxy-body-size: "1m"`.
+- **Validation is centralized in Pydantic.** Request models use
+  `Annotated[str, Field(min_length=1, max_length=cfg.max_text_length)]`;
+  `BatchRequest.texts` validates both per-item length and list size. Do not add
+  manual `HTTPException(400)` validation — Pydantic returns 422.
+- **Error envelope:** HTTP exceptions return
+  `{"error": {"code": ..., "message": ...}}`; unhandled exceptions add
+  `request_id`. Pydantic 422 responses keep their default shape.
+- **`model` field on requests.** `PredictRequest`/`BatchRequest` accept optional
+  `model: str | None`. If given it is validated against the loaded model (400 on
+  mismatch); if omitted the default model is used.
+- **`GET /v1/models/{model_name}`** returns 400 for unknown names, 404 when the
+  model exists but is not loaded.
+- **`serve/base.py` holds `ServiceMetrics`, `_DummyServe`, and
+  `render_service_metrics()`.** Response dicts are built directly in route
+  handlers — there are no response-builder helpers.
+- **Router loads lazily.** `SentimentPredictor.__init__` does not load the
+  router model; `_ensure_router_loaded()` runs on the first
+  `classify()`/`classify_batch()` and memoizes success *and* failure. Serve
+  handlers let `classify_batch` trigger the load and catch failures → 503; they
+  must not pre-guard on `router_loaded`. `get_router_model_info()` reports
+  `"not_loaded"` before first use.
 
-- **Router module**: `sentimentizer/router/` — named `router` to avoid shadowing the `setfit` library.
-- **Base model**: Default is `BAAI/bge-base-en-v1.5` (109M params, 768-dim embeddings, strong MTEB scores). Switch to `mxbai-embed-large-v1` (335M params) only if evaluation thresholds are not met.
-- **Categories**: Dietary (0), Service (1), General (2) — defined in `RouteLabels` dataclass.
-- **Seed utterances**: 10 per category in `sentimentizer/router/seeds.py` — expanded via `augment.py` (GLM 5.1 via Ollama, default model `glm-5.1:cloud`).
-- **Training**: `make router-augment` to generate data, `make router-train` to train — uses `setfit>=1.1.0` with `Trainer` (not deprecated `SetFitTrainer`).
-- **Evaluation**: `make router-evaluate` — similarity matrix (inter-class < 0.65, intra-class > 0.85) and tau threshold calibration.
-- **Upload**: `make upload-router` pushes the trained model to Hugging Face Hub (default: `ryeyoo/sentimentizer-router`).
-- **Router ONNX export**: Deferred to v2 — router uses Python `setfit` inference for now.
-- **Optional dependencies**: `pip install -e ".[router]"` for SetFit training, `pip install -e ".[onnx]"` for ONNX export, `pip install -e ".[router,onnx]"` for both.
-- **setfit/transformers compatibility**: `setfit 1.1.x` imports `default_logdir` from `transformers.training_args`, which was removed in `transformers 5.x`. The `sentimentizer/compat.py` module includes a monkey-patch shim that injects `default_logdir` if missing. This must be imported BEFORE `import setfit`. The shim is applied automatically by `sentimentizer/router/__init__.py` and `sentimentizer/router/train_router.py`.
-- **setfit/config_setfit.json 404**: Sentence-transformer models like `BAAI/bge-base-en-v1.5` don't have `config_setfit.json` on HuggingFace Hub. `huggingface_hub>=1.0` raises a hard 404 error. The `_load_setfit_model()` function in `train_router.py` catches this and falls back to loading via `SentenceTransformer(model_id)` then wrapping with `SetFitModel(model_body=...)`.
-- **setfit model_head is None**: When loading a sentence-transformer model as a SetFit backbone (no `config_setfit.json`), `SetFitModel(model_body=...)` does NOT auto-create a classification head. `_load_setfit_model()` creates a `LogisticRegression(max_iter=1000, solver="lbfgs")` head explicitly and sets `model.labels` to the route category names (`["dietary", "service", "general"]`).
+### Ray Serve environment
 
-### Headless Image Generation
+- **`RAY_ENABLE_UV_RUN_RUNTIME_ENV` must be `0`/`false`, set at module level
+  before any `import ray`.** Two separate failures ride on this one variable:
+  - Left at its default, Ray workers build isolated venvs that lack `ray`,
+    producing `ModuleNotFoundError: No module named 'ray'`.
+  - It also controls cold start: the uv-run runtime-env hook packages the whole
+    CWD (~3 MB) and reinstalls all 172 packages on every cold start, adding
+    ~37 s. Disabling it drops BGE-M3 cold start from ~52 s to ~16 s. Workers
+    already inherit the project venv via `uv run`, so the packaging is
+    redundant.
 
-- **ComfyUI is a sidecar**: Torch Sentiment never imports ComfyUI or reserves its CUDA device. `ComfyUIDeployment` serializes HTTP submissions to the separately managed process configured by `comfyui_base_url`.
-- **Supported models are Krea 2 and Ideogram 4 only**: The native INT8 ConvRot workflows and checkpoint filenames live in `sentimentizer/diffusion/comfyui.py` and `diffusion_config.yaml`. Do not reintroduce SDXL, SD3.5, FLUX.2 Klein, Diffusers, or MFLUX without an explicit product decision.
-- **No custom ComfyUI nodes**: Workflows must use nodes shipped by current ComfyUI. Startup validates required node classes and checkpoint choices before the image deployment becomes ready.
-- **Ideogram licensing is explicit**: `ideogram_4_enabled=true` requires `ideogram_4_license_accepted=true`; its checkpoint is non-commercial. Do not weaken or silently bypass this gate.
-- **Krea licensing and output safety are explicit**: `krea_2_enabled=true` requires both `krea_2_license_accepted=true` and `image_moderation_url`. The moderation service must explicitly return `safe: true`; failures block image release. Do not restore implicit Krea enablement through `--diffusion`.
-- **Image cancellation uses ComfyUI prompt UUIDs**: persist the backend UUID in `JobStore`, call ComfyUI's targeted `/api/jobs/{id}/cancel`, then call `DeploymentResponse.cancel()` when a local response exists. Never pass a Serve `DeploymentResponse` to `ray.cancel()`.
-- **Generated output is deleted**: workflows use native `PreviewImage`, not `SaveImage`. `comfyui_temp_directory` is required whenever image models are enabled; the client validates the returned path stays beneath it and unlinks each artifact after reading it.
-- **Current workflows are text-to-image only**: Reject `negative_prompt`, `reference_images`, and `response_format=url` explicitly instead of silently dropping unsupported controls.
-- **ComfyUI must stay private**: Bind it to loopback or a protected service network. Its HTTP API has no authentication in this integration; public clients authenticate only through Torch Sentiment's `/v1/images/*` middleware.
+  It must be **module level** — Ray reads it at `ray_constants.py` import time,
+  not at `ray.init()`. Setting it inside `main()` is too late. Currently set in
+  `serve/app.py`, `serve/bge_only_app.py`, and `workflows/lifecycle.py` (for
+  training). **Any new Serve entry point must add**
+  `os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "false")` at module
+  level.
+- **`auto_detect_device()` requires an argument.** It re-exports
+  `resolve_device(device)`. Always call `auto_detect_device("auto")` or
+  `resolve_device("auto")`, never bare.
+
+### Metrics and torchmetrics
+
+- **`compute_class_weights()`** replaces `compute_pos_weight()` (the old
+  function raises `ValueError` when `num_classes > 2`).
+- **`ClassificationMetrics`** is 3-class: per-class fields
+  (`negative_precision`, `neutral_recall`, …), `balanced_accuracy`, `macro_f1`,
+  `weighted_f1`, `mcc`, `confusion_matrix` (3×3), `neutral_to_positive_rate`,
+  `neutral_to_negative_rate`, `pred_neutral_frac`. The binary fields (`tp`,
+  `tn`, `fp`, `fn`, `precision`, `recall`, `f1`, `npv`, `positive_accuracy`,
+  `negative_accuracy`, plus scalar `auc_roc`/`avg_precision`) no longer exist.
+- **Prometheus gauges use per-class names** (`TRAINING_VAL_NEUTRAL_F1`,
+  `TRAINING_VAL_NEGATIVE_PRECISION`), not binary ones. Ray gauge dict keys must
+  match `_METRIC_GAUGE_KEYS` in `metrics_publisher.py`.
+- **`torchmetrics.MulticlassAUROC` silently returns wrong results on NaN
+  input** — always call `_replace_nan_probs()` first. It accepts
+  `(N, num_classes)`, replaces NaN with `1/num_classes`, and re-normalizes rows
+  with partial NaN to sum to 1.0.
+- **`torchmetrics.MulticlassCohenKappa` returns `nan` for single-class
+  targets** — wrap with `_safe_item()` to coerce `nan → 0.0` for Prometheus
+  compatibility. Single-class kappa is therefore `0.0`, a deliberate behavioral
+  change from the old custom implementation (which returned `1.0`).
+- **torchmetrics crashes on empty input** — keep the `if total == 0` early
+  return in `compute_classification_metrics()`.
+- **Never create `prometheus_client` gauges at module import time** for Ray
+  workers; use lazy init via `_get_ray_gauges()`.
+- **`_balance_dataframe()` / `_balance_ray_dataset()`** handle multi-class
+  targets (0, 1, 2), not just binary.
+- Tuning knobs: `weight_smoothing` (default `0.5`; `1.0` = full inverse
+  frequency, `0.0` = uniform), `label_smoothing` (default `0.1`),
+  `neutral_oversample_ratio` (default `0.0`; `0.20` oversamples neutral to 20%
+  of training data).
+
+### Data handling
+
+- **When iterating DataFrame or batch columns of token lists, use
+  `list(doc_tokens)` with a `TypeError` catch — never `str(doc_tokens)`.**
+  Numpy arrays from parquet are iterable but fail `isinstance(x, list)`, and
+  `str()` produces `"['if' 'you' ...]"`, whose regex tokenization captures the
+  wrapping quotes. This previously caused a 99.9% GloVe vocabulary mismatch and
+  majority-class collapse.
+
+### Scheduler
+
+- **All models step the scheduler per batch** (`STEP_SCHEDULER_PER_BATCH = True`
+  on `BaseSentimentModel`). The scheduler is rebuilt with real optimizer-step
+  counts in `Trainer.fit()` / `_train_func()` once the DataLoader length is
+  known.
+- **`warmup_ratio` (default `0.06`) is the live knob**; `T_max` and
+  `warmup_epochs` in `SchedulerParams` are legacy fields from per-epoch
+  stepping. `CosineAnnealingLR` is no longer used anywhere — every model uses
+  `_LinearWarmupCosineScheduler`.
+- **`_LinearWarmupCosineScheduler` must use `(step + 1) / warmup_steps`** (plain
+  `step / warmup_steps` gives zero LR for the whole first epoch) and must clamp
+  `progress` to `1.0` so stepping past `total_steps` cannot bounce the LR back
+  up. It returns a *relative* lambda multiplier (`eta_min / base_lr`) so the LR
+  bottoms out exactly at `eta_min`.
+
+### Training paths
+
+- **`_load_model()` runs only in the single-node path.** Distributed training
+  (`_run_fit_distributed`) does not load the model in the driver — Ray workers
+  build their own via `_train_func`.
+- **`_reset_stale_metrics(model_type)`** is called at training start; see
+  Metrics Pipeline for its all-types/current-type-only split.
+
+### ONNX export
+
+- **RNN `onnx_export` flag**: `RNN.forward(inputs, onnx_export=True)` bypasses
+  `pack_padded_sequence` (ONNX-incompatible) with a masked fallback that pulls
+  hidden states from `lstm_out`. The default path is unchanged for training and
+  inference.
+- **`_RNNOnnxWrapper`** exists because `torch.onnx.export()` calls
+  `model(*args)` and cannot pass keyword arguments.
+- **Tolerances**: `1e-2` for RNN (masked fallback has padding drift), `1e-4`
+  for Encoder/Decoder.
+- **Opset 17** — stable. Opset 18+ needs `dynamo_export`, still preview.
+- **Quantization**: `onnxruntime.quantization.quantize_dynamic` with
+  `QuantType.QInt8` (FP32 activations, INT8 weights — optimal for AVX-512).
+- Use **`optimum-onnx[onnxruntime]`**, not `optimum[onnxruntime]` — `optimum`
+  v2.0+ split ONNX into a separate package.
+- Artifacts go to `onnx_artifacts/` (gitignored) with a metadata JSON beside
+  each `.onnx` recording model_type, opset_version, input_shape, dictionary
+  path, `num_classes`, `label_names`, and validation results.
+- CLI: `sentimentizer export --model rnn --quantize`.
+- **`SUPPORTS_ONNX` gates export.** `BaseSentimentModel` sets it `True`;
+  `HFTransformerModel` sets it `False`, so ModernBERT and any other HF-backed
+  model are rejected cleanly.
+
+### Intent router
+
+- **The router does not use SetFit.** `setfit` is not a dependency and is
+  imported nowhere. `RouterModel` (`router/model.py`) is a
+  `SentenceTransformer` backbone fine-tuned with contrastive pairs, plus an
+  sklearn `LogisticRegression` head fitted on the resulting embeddings. Do not
+  reintroduce `setfit`, `SetFitModel`, or a `transformers.default_logdir`
+  compat shim — all were removed.
+- **`SetFitConfig` is a backward-compatible alias for `RouterConfig`**
+  (`router/config.py`). Prefer `RouterConfig` in new code.
+- The module is still named `router/` rather than `setfit/`, which also avoids
+  shadowing any similarly named package.
+- **`RouterConfig` defaults**: `base_model="BAAI/bge-base-en-v1.5"` (109M
+  params, 768-dim), `num_iterations=20` (contrastive pairs per example),
+  `num_epochs=1`, `batch_size=16`, `max_seq_length=512`, `seed=42`,
+  `output_dir=models/router`. Move to `mxbai-embed-large-v1` (335M) only if
+  evaluation thresholds are not met.
+- **Categories** in `RouteLabels`: dietary (0) — allergies, celiac, FODMAP,
+  ingredient safety; service (1) — wait times, staff, reservations; general (2)
+  — ambiance, price, general food quality.
+- **Seeds**: 10 utterances per category in `seeds.py`, expanded by `augment.py`
+  (`AugmentConfig`: GLM 5.1 via Ollama at `http://localhost:11434/api/generate`,
+  default model `glm-5.1:cloud`, 50 variations per seed).
+- **Targets**: inter-class similarity < 0.65, intra-class > 0.85.
+- Pipeline: `make router-augment` → `make router-train` → `make router-evaluate`;
+  `make upload-router` pushes to the Hub.
+- Router ONNX export is deferred to v2 — the router runs Python inference.
+
+### Headless image generation
+
+- **ComfyUI is a sidecar.** Sentimentizer never imports ComfyUI or reserves its
+  CUDA device; `ComfyUIDeployment` serializes HTTP submissions to the separately
+  managed process at `comfyui_base_url`.
+- **Krea 2 and Ideogram 4 only.** Native INT8 ConvRot workflows and checkpoint
+  filenames live in `diffusion/comfyui.py` and `diffusion_config.yaml`. Do not
+  reintroduce SDXL, SD3.5, FLUX.2 Klein, Diffusers, or MFLUX without an explicit
+  product decision.
+- **No custom ComfyUI nodes.** Workflows use only nodes shipped by current
+  ComfyUI; startup validates required node classes and checkpoint choices before
+  the deployment becomes ready.
+- **Licensing gates are explicit and must not be weakened.**
+  `ideogram_4_enabled=true` requires `ideogram_4_license_accepted=true` (the
+  checkpoint is non-commercial). `krea_2_enabled=true` requires both
+  `krea_2_license_accepted=true` and `image_moderation_url`, and the moderation
+  service must return `safe: true` — failures block release. Do not restore
+  implicit Krea enablement through `--diffusion`.
+- **Cancellation uses ComfyUI prompt UUIDs**: persist the backend UUID in
+  `JobStore`, call ComfyUI's `/api/jobs/{id}/cancel`, then
+  `DeploymentResponse.cancel()` when a local response exists. Never pass a Serve
+  `DeploymentResponse` to `ray.cancel()`.
+- **Output is deleted.** Workflows use native `PreviewImage`, not `SaveImage`.
+  `comfyui_temp_directory` is required whenever image models are enabled; the
+  client validates the returned path stays beneath it and unlinks each artifact
+  after reading.
+- **Text-to-image only.** Reject `negative_prompt`, `reference_images`, and
+  `response_format=url` explicitly rather than silently dropping them.
+- **ComfyUI must stay private** — loopback or a protected service network. Its
+  HTTP API has no authentication here; clients authenticate only through
+  Sentimentizer's `/v1/images/*` middleware.
 
 ## Ray 2.55 API Conventions
 
-This project uses **Ray 2.55.1**. The API has changed significantly from earlier versions. Always verify against the installed source in `.venv/lib/python3.12/site-packages/ray/` if unsure.
+This project uses **Ray 2.55.1**, whose API changed significantly from earlier
+versions. Verify against the installed source in
+`.venv/lib/python3.12/site-packages/ray/` if unsure.
 
 ### Ray Data (`ray.data.Dataset`)
 
-- **`Dataset` objects are NOT iterable.** Never use `for row in ds:` or unpack them. Use `ds.iter_rows()`, `ds.iter_batches()`, or `ds.iter_torch_batches()` instead.
-- **Split datasets** with `ds.train_test_split(test_size=0.2, shuffle=True, seed=42)`. Returns `(train_ds, val_ds)` tuple of `MaterializedDataset`. Do NOT use `ds.random_split()` — it does not exist on `Dataset`.
-- **Sample a fraction** with `ds.random_sample(fraction, seed=42)`. Returns a single `Dataset` (NOT a tuple). Use for undersampling majority classes.
-- **Filter rows** with `ds.filter(fn=)` or `ds.filter(expr=)` (prefer `expr` for performance).
-- **Shuffle** with `ds.random_shuffle(seed=42)`.
-- **Concatenate** with `ds.union(other_ds)`.
-- **Count rows** with `ds.count()` (materializes the dataset).
-- **Rich progress bars** are enabled by default via `DataContext` configuration in `sentimentizer/loader.py` and env vars in `sentimentizer/__init__.py`:
-  - `DataContext.get_current().enable_rich_progress_bars = True`
-  - `DataContext.get_current().use_ray_tqdm = False`
-  - Env vars: `RAY_DATA_ENABLE_RICH_PROGRESS_BARS=1`, `RAY_TQDM=0`
-  - Requires the `rich` package (listed in `pyproject.toml` dependencies).
+- **`Dataset` objects are NOT iterable.** Never `for row in ds:`. Use
+  `ds.iter_rows()`, `ds.iter_batches()`, or `ds.iter_torch_batches()`.
+- **Split** with `ds.train_test_split(test_size=0.2, shuffle=True, seed=42)` →
+  `(train_ds, val_ds)` tuple of `MaterializedDataset`. `ds.random_split()` does
+  not exist.
+- **Sample a fraction** with `ds.random_sample(fraction, seed=42)` → a single
+  `Dataset`, **not** a tuple.
+- **Filter** with `ds.filter(fn=)` or `ds.filter(expr=)` (prefer `expr`).
+- **Shuffle** `ds.random_shuffle(seed=42)`; **concatenate** `ds.union(other)`;
+  **count** `ds.count()` (materializes).
+- **Rich progress bars** are on by default via `DataContext` in `loader.py` and
+  env vars in `sentimentizer/__init__.py`
+  (`enable_rich_progress_bars = True`, `use_ray_tqdm = False`,
+  `RAY_DATA_ENABLE_RICH_PROGRESS_BARS=1`, `RAY_TQDM=0`). Requires `rich`.
 
 ### Ray Train (`ray.train`)
 
-- **Checkpoints are directory-based only.** `Checkpoint.from_dict()` and `Checkpoint.to_dict()` were **removed in Ray 2.55+**. Use the directory-based API:
+- **Checkpoints are directory-based only.** `Checkpoint.from_dict()` /
+  `to_dict()` were removed in Ray 2.55+.
 
 ```python
 # Writing a checkpoint (inside a training function)
@@ -438,92 +543,85 @@ with result.checkpoint.as_directory() as checkpoint_dir:
     model_state_dict = checkpoint_data["model_state_dict"]
 ```
 
-- **`train.get_context()`** only works inside a Ray Train worker function (launched by `trainer.fit()`). Never call it from the driver process.
-- **`prepare_model()`** wraps a model with DDP. Access the original model via `model.module` (e.g., `model.module.state_dict()`).
+- **`train.get_context()`** works only inside a Ray Train worker function
+  launched by `trainer.fit()`. Never call it from the driver.
+- **`prepare_model()`** wraps a model with DDP — reach the original via
+  `model.module`.
 
 ### Ray Tune (`ray.tune`)
 
-- Use `tune.report({...})` to report metrics from trainables.
-- Use `tune.Tuner` (not `tune.run`, which is deprecated).
-- Use `tune.with_parameters()` to pass large objects (datasets) to trainables.
-- Use `tune.with_resources()` to specify resource requirements.
+- `tune.report({...})` to report metrics; `tune.Tuner` (not deprecated
+  `tune.run`); `tune.with_parameters()` for large objects such as datasets;
+  `tune.with_resources()` for resource requirements.
 
-### Common Pitfalls
+### Common pitfalls
 
-- **Never iterate a `Dataset` directly.** `for x in ds` raises `TypeError`.
-- **Never use `ds.random_split()`.** It does not exist. Use `ds.train_test_split()` for splitting or `ds.random_sample()` for fractional sampling.
-- **Never use `Checkpoint.from_dict()` or `Checkpoint.to_dict()`.** They were removed. Use `Checkpoint.from_directory()` / `checkpoint.as_directory()` with pickle.
-- **Never call `train.get_context()` outside a worker.** It raises `RuntimeError`.
-- **`get_dataset_shard` is a standalone function, not a method on `get_context()`.** Use `train.get_dataset_shard("train")`, NOT `train.get_context().get_dataset_shard("train")`.
-- **`random_sample(fraction)` returns a single `Dataset`, not a tuple.** Do not unpack it like `keep, _ = ds.random_sample(0.5)`.
-- **Never create `ray.util.metrics.Gauge`/`Counter`/`Histogram` at module import time.** In Ray 2.55+, custom metric objects created in the driver process are never exported — they must be created inside a Ray worker context (task, actor, or train function) to be registered with that worker's metrics agent and pushed to Prometheus. Use lazy initialization instead (create on first use inside the worker). See `_get_ray_gauges()` in `sentimentizer/trainer.py` for the canonical pattern: a module-level cache dict + factory function that creates gauges on demand and stores them per tag key.
-- **Ray session temp files accumulate in `/tmp/ray/` (5+ GB each).** Each `ray.init()` creates a session directory that is only cleaned up by `ray.shutdown()`. If the process crashes or is killed, the directory persists. The driver (`workflows/driver.py`) cleans up stale sessions (>1 hour old) at startup via `_cleanup_stale_ray_sessions()` and shuts down Ray at exit via `_ray_cleanup()` (registered with `atexit`). Always call `ray.shutdown()` in tests and scripts when done.
+- **Never iterate a `Dataset` directly** — `for x in ds` raises `TypeError`.
+- **Never use `ds.random_split()`** — use `train_test_split()` or
+  `random_sample()`.
+- **Never use `Checkpoint.from_dict()` / `to_dict()`** — removed.
+- **Never call `train.get_context()` outside a worker** — raises `RuntimeError`.
+- **`get_dataset_shard` is a standalone function**: `train.get_dataset_shard("train")`,
+  NOT `train.get_context().get_dataset_shard("train")`.
+- **`random_sample(fraction)` returns one `Dataset`** — do not unpack it.
+- **Never create `ray.util.metrics.Gauge`/`Counter`/`Histogram` at module import
+  time.** In Ray 2.55+, custom metric objects created in the driver are never
+  exported; they must be created inside a worker context to register with that
+  worker's metrics agent. Use lazy init — see `_get_ray_gauges()` in
+  `trainer.py` for the canonical module-level-cache + factory pattern.
+- **Ray session temp files accumulate in `/tmp/ray/` (5+ GB each).** Each
+  `ray.init()` creates a session directory cleaned up only by `ray.shutdown()`;
+  a crash leaves it behind. `workflows/lifecycle.py` clears stale sessions at
+  startup via `_cleanup_stale_ray_sessions()`, can force-clear via
+  `_kill_stale_ray_processes()` on a failed init, and registers `_ray_cleanup()`
+  and `_cuda_cleanup()` with `atexit`. Always call `ray.shutdown()` in tests and
+  scripts.
+- **In tests**: `ray.init(ignore_reinit_error=True)`, `ray.shutdown()` in cleanup.
 
 ## Web Search Utility
 
-Web search is available via two interfaces:
+Two interfaces:
 
-1. **Python module** (`sentimentizer/agent/websearch.py`) — typed, secure, and integrated with the tuning agent as a `@agent.tool`. This is the preferred interface for code and agent use.
-2. **Shell script** (`scripts/web_search.sh`) — lightweight CLI convenience for quick manual queries.
+1. **Python module** (`sentimentizer/agent/websearch.py`) — typed, secure,
+   wired into the tuning agent as an `@agent.tool`. Preferred for code and
+   agent use.
+2. **Shell script** (`scripts/web_search.sh`) — quick manual queries.
 
-### Prerequisites
-
-- Set the `OLLAMA_API_KEY` environment variable (add it to `.env` from `.env.example`)
-
-### Python module usage
+Requires `OLLAMA_API_KEY` in the environment (copy `.env.example` → `.env`).
 
 ```python
 from sentimentizer.agent.websearch import web_search, WebSearchResult, reset_rate_limit
 
-# Basic search
 results: list[WebSearchResult] = web_search("best learning rate for RNN")
 for r in results:
     print(r.title, r.url, r.content[:100])
 
-# Reset rate limit at the start of each agent run
-reset_rate_limit()
+reset_rate_limit()  # call at the start of each agent run
 ```
 
-### Security safeguards (Python module)
+Safeguards in the Python module: the API key is read from the env var only and
+never passed as a parameter or surfaced in errors; queries are length-capped
+(200 chars) and screened for secret patterns; results are truncated (2000
+chars) and filtered for prompt-injection patterns (`ignore previous
+instructions`, `system:`, `<system>`); errors have Bearer tokens and key values
+replaced with `[REDACTED]`; calls are rate-limited to 3 per agent run; requests
+time out after 15 s.
 
-- **API key protection**: Key is read from `OLLAMA_API_KEY` env var only; never passed as a parameter or exposed in error messages
-- **Query validation**: Queries are checked for length (max 200 chars) and secret patterns (API keys, tokens, passwords) before being sent
-- **Content sanitization**: Search results are truncated (max 2000 chars) and filtered for prompt-injection patterns (`ignore previous instructions`, `system:`, `<system>` tags, etc.)
-- **Error sanitization**: Error messages have Bearer tokens and key values replaced with `[REDACTED]`
-- **Rate limiting**: Max 3 calls per agent run to prevent excessive API usage; use `reset_rate_limit()` at the start of each run
-- **Timeout**: 15-second default request timeout to prevent hanging
-
-### When to use
-
-- Looking up API documentation or library versions not in the codebase
-- Checking for known issues or breaking changes in dependencies
-- Finding current best practices or patterns
-- Verifying facts that require up-to-date information
+Use it for API documentation and library versions not in the codebase, known
+issues or breaking changes in dependencies, current best practices, and facts
+that need to be up to date.
 
 ## Code Quality Principles
 
-### Always use type hints
-
-- All function and method signatures **must** include type hints for parameters and return values
-- Use Python's `typing` module for complex types (e.g., `Optional`, `Union`, `Callable`, `TypeVar`)
-- Class attributes should also be annotated with types
-- Example:
-
-```python
-def tokenize(self, text: str, max_length: int = 512) -> list[int]:
-    ...
-```
-
-### Follow DRY (Don't Repeat Yourself)
-
-- Extract duplicated or near-duplicated logic into shared functions, classes, or mixins
-- Prefer composition over copy-paste — if two modules need the same behavior, factor it into a utility or base class
-- Configuration values that appear in multiple places should be defined once (e.g., in `config.py`) and referenced elsewhere
-
-### Follow SOLID principles
-
-- **Single Responsibility**: Each class/module should have one reason to change. Keep data loading, model definition, training, and serving logic in separate modules
-- **Open/Closed**: Design classes to be extended (via subclassing or configuration) without modifying existing code. Use abstract base classes or protocols where appropriate
-- **Liskov Substitution**: Subtypes must be substitutable for their base types. Don't override methods in ways that break the contract of the parent class
-- **Interface Segregation**: Prefer small, focused interfaces (protocols/ABCs) over large, general-purpose ones
-- **Dependency Inversion**: Depend on abstractions (protocols, ABCs) rather than concrete implementations. Inject dependencies via constructors or function arguments rather than creating them internally
+- **Type hints everywhere.** All function and method signatures must annotate
+  parameters and return values; annotate class attributes too. Use `typing` for
+  complex types.
+- **DRY.** Extract duplicated logic into shared functions, classes, or mixins;
+  prefer composition over copy-paste. Values used in several places belong in
+  `config.py` and are referenced, not repeated.
+- **SOLID.** Single Responsibility — keep data loading, model definition,
+  training, and serving in separate modules. Open/Closed — extend via
+  subclassing or configuration rather than editing existing code.
+  Liskov — subtypes stay substitutable. Interface Segregation — prefer small,
+  focused protocols/ABCs. Dependency Inversion — depend on abstractions and
+  inject them, rather than constructing dependencies internally.
