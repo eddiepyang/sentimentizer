@@ -96,22 +96,25 @@ Three runtime domains follow the same loading pattern: **dataclass defaults < YA
 | **Loader** | `load_serve_config(path=None) -> ServeConfig` |
 | **Env prefix** | `SENTIMENTIZER_*` |
 
-Owns operational concerns: which models to enable, auth, rate limits, CORS, model IDs, the SD 3.5 CPU offload mode, and the SDXL slot list.
+Owns operational concerns: which image models to enable, the headless ComfyUI
+connection, auth, rate limits, and CORS.
 
 | Env var | Field | Type | Notes |
 | :--- | :--- | :--- | :--- |
 | `SENTIMENTIZER_DEFAULT_MODEL` | `default_model` | str | Sentiment model: `rnn`, `encoder`, `decoder`, `modernbert` |
 | `SENTIMENTIZER_API_KEYS` | `api_keys` | comma-list | Required for `/v1/images/*` |
 | `SENTIMENTIZER_CORS_ORIGINS` | `cors_origins` | comma-list | |
-| `SENTIMENTIZER_SD35_ENABLED` | `sd35_enabled` | bool | |
-| `SENTIMENTIZER_SD35_MODEL_ID` | `sd35_model_id` | str | |
-| `SENTIMENTIZER_SD35_CPU_OFFLOAD` | `sd35_cpu_offload` | str | `""`, `"model"`, or `"sequential"` |
-| `SENTIMENTIZER_FLUX2_KLEIN_ENABLED` | `flux2_klein_enabled` | bool | |
-| `SENTIMENTIZER_FLUX2_KLEIN_MODEL_ID` | `flux2_klein_model_id` | str | |
-| `SENTIMENTIZER_FLUX2_KLEIN_CPU_OFFLOAD` | `flux2_klein_cpu_offload` | str | `""`, `"model"`, or `"sequential"` |
-| `SENTIMENTIZER_FLUX2_KLEIN_QUANTIZATION` | `flux2_klein_quantization` | str | `""`, `"nf4"`, or `"int8"` (quantization config for diffusers) |
-| `SENTIMENTIZER_DIFFUSION_FLUX2_KLEIN_BACKEND` | `flux2_klein_backend` | str | `"auto"`, `"diffusers"`, or `"mlx"` (inference backend) |
-| `SENTIMENTIZER_SDXL_MODELS` | `sdxl_models` | comma-list | Each entry `name:model_id`; spawns one deployment per slot |
+| `SENTIMENTIZER_KREA_2_ENABLED` | `krea_2_enabled` | bool | Native INT8 ConvRot workflow |
+| `SENTIMENTIZER_KREA_2_LICENSE_ACCEPTED` | `krea_2_license_accepted` | bool | Required when Krea 2 is enabled |
+| `SENTIMENTIZER_IDEOGRAM_4_ENABLED` | `ideogram_4_enabled` | bool | Native INT8 ConvRot workflow |
+| `SENTIMENTIZER_IDEOGRAM_4_LICENSE_ACCEPTED` | `ideogram_4_license_accepted` | bool | Required when Ideogram 4 is enabled |
+| `SENTIMENTIZER_COMFYUI_BASE_URL` | `comfyui_base_url` | str | Headless ComfyUI URL |
+| `SENTIMENTIZER_COMFYUI_TIMEOUT_S` | `comfyui_timeout_s` | float | Generation timeout |
+| `SENTIMENTIZER_COMFYUI_POLL_INTERVAL_S` | `comfyui_poll_interval_s` | float | History polling interval |
+| `SENTIMENTIZER_COMFYUI_TEMP_DIRECTORY` | `comfyui_temp_directory` | str | Required shared path for deleting fetched PreviewImage files |
+| `SENTIMENTIZER_IMAGE_MODERATION_URL` | `image_moderation_url` | str | Required for Krea 2; fail-closed output moderation endpoint |
+| `SENTIMENTIZER_IMAGE_MODERATION_API_KEY` | `image_moderation_api_key` | str | Optional moderation bearer credential |
+| `SENTIMENTIZER_IMAGE_MODERATION_TIMEOUT_S` | `image_moderation_timeout_s` | float | Moderation timeout |
 | `SENTIMENTIZER_DEFAULT_IMAGE_MODEL` | `default_image_model` | str | Used when request body omits `model` |
 | `SENTIMENTIZER_RATE_LIMIT_PER_MIN` | `rate_limit_per_min` | int | Per API key |
 | `SENTIMENTIZER_RATE_LIMIT_BURST` | `rate_limit_burst` | int | Token bucket burst |
@@ -119,25 +122,34 @@ Owns operational concerns: which models to enable, auth, rate limits, CORS, mode
 | `SENTIMENTIZER_JOB_TTL_S` | `job_ttl_s` | int | |
 | `SENTIMENTIZER_REQUEST_TIMEOUT_S` | `request_timeout_s` | int | HTTP timeout |
 
+The moderation endpoint receives `image_b64`, `mime_type`, `model`, and `user`
+as JSON. It must return a JSON object containing a boolean `safe`; any transport
+failure or invalid response blocks release of the generated image.
+
+`comfyui_temp_directory` must point to the `temp` child created under
+ComfyUI's `--temp-directory` value. When the processes run in separate
+containers, mount that directory at the configured path in both containers.
+
 ### Diffusion (model internals)
 
 | | |
 | :--- | :--- |
 | **Module** | [`sentimentizer/diffusion/config.py`](../sentimentizer/diffusion/config.py) |
-| **Dataclass** | `DiffusionModelConfig` (one instance per model) |
+| **Dataclass** | `ImageModelConfig` (one instance per model) |
 | **YAML** | [`sentimentizer/diffusion/diffusion_config.yaml`](../sentimentizer/diffusion/diffusion_config.yaml) |
-| **Loader** | `load_diffusion_config(path=None) -> dict[str, DiffusionModelConfig]` |
+| **Loader** | `load_diffusion_config(path=None) -> dict[str, ImageModelConfig]` |
 | **Env prefix** | `SENTIMENTIZER_DIFFUSION_<MODEL>_*` |
 
-Owns model-internal defaults: denoising steps, guidance scale, max pixels, dimension alignment, dtype. Model identity (`model_id`, `model_path`, `cpu_offload`) is owned by `ServeConfig` and layered on top via `dataclasses.replace()` in the dispatcher.
-
-The YAML has one section per model — `sd35`, `sdxl`, `flux2_klein` — each populating a `DiffusionModelConfig`. Module-level aliases (`SD35_DEFAULT_CONFIG`, `SDXL_DEFAULT_CONFIG`, `FLUX2_KLEIN_DEFAULT_CONFIG`) are eager-loaded from the YAML at import time.
+Owns native ComfyUI checkpoint filenames, denoising defaults, max pixels,
+dimension alignment, and the reported quantization format. The YAML has one
+section each for `krea_2` and `ideogram_4`.
 
 | Env var pattern | Field | Type |
 | :--- | :--- | :--- |
-| `SENTIMENTIZER_DIFFUSION_{SD35,SDXL,FLUX2_KLEIN}_DEFAULT_STEPS` | `default_steps` | int |
-| `SENTIMENTIZER_DIFFUSION_{SD35,SDXL,FLUX2_KLEIN}_DEFAULT_GUIDANCE` | `default_guidance` | float |
-| `SENTIMENTIZER_DIFFUSION_{SD35,SDXL,FLUX2_KLEIN}_MAX_PIXELS` | `max_pixels` | int |
+| `SENTIMENTIZER_DIFFUSION_{KREA_2,IDEOGRAM_4}_DEFAULT_STEPS` | `default_steps` | int |
+| `SENTIMENTIZER_DIFFUSION_{KREA_2,IDEOGRAM_4}_DEFAULT_GUIDANCE` | `default_guidance` | float |
+| `SENTIMENTIZER_DIFFUSION_{KREA_2,IDEOGRAM_4}_MAX_PIXELS` | `max_pixels` | int |
+| `SENTIMENTIZER_DIFFUSION_{KREA_2,IDEOGRAM_4}_{TRANSFORMER,TEXT_ENCODER,VAE}` | checkpoint fields | str |
 
 ### Router (training + augmentation)
 
@@ -174,16 +186,15 @@ from sentimentizer.serve.config import load_serve_config
 cfg = load_serve_config()
 ```
 
-For diffusion, the dispatcher composes serve-owned overrides on top of the YAML defaults:
+For image generation, model defaults are loaded once and the dispatcher selects
+the requested workflow:
 
 ```python
-# sentimentizer/serve/diffusion_app.py (SD35Deployment.__init__)
-overrides = {}
-if cfg.sd35_model_id:
-    overrides["model_id"] = cfg.sd35_model_id
-if cfg.sd35_cpu_offload:
-    overrides["cpu_offload"] = cfg.sd35_cpu_offload
-model_cfg = replace(SD35_DEFAULT_CONFIG, **overrides) if overrides else SD35_DEFAULT_CONFIG
+# sentimentizer/serve/diffusion_app.py
+from sentimentizer.diffusion.config import IMAGE_MODEL_CONFIGS
+
+model_cfg = IMAGE_MODEL_CONFIGS[model_name]
 ```
 
-This keeps the YAML as the source of truth for model internals while letting operators flip identity/behavior knobs from `.env` without editing checked-in files.
+This keeps checkpoint filenames and sampling defaults in YAML while operational
+enablement and the ComfyUI URL remain in the serve configuration.

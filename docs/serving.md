@@ -12,7 +12,7 @@ This document describes how to deploy and interact with the unified Sentimentize
 > uv add "sentimentizer[ray]"
 > ```
 
-The `serve` command starts a Ray Serve application with FastAPI routing (featuring interactive Swagger docs at `/docs`). It loads the sentiment model (defaulting to the configuration in `service.yaml`) and the SetFit router at startup. Image generation (SD 3.5 Medium, FLUX.2 Klein, SDXL slots) can be enabled via configuration. All services share the same port and handle incoming requests via route-based dispatch.
+The `serve` command starts a Ray Serve application with FastAPI routing (featuring interactive Swagger docs at `/docs`). It loads the sentiment model (defaulting to the configuration in `service.yaml`) and the SetFit router at startup. Headless Krea 2 and Ideogram 4 generation can be enabled through a separate ComfyUI process. All public APIs share the Ray Serve port.
 
 ### Starting the Server
 
@@ -227,27 +227,84 @@ Both the full and BGE-M3-only applications expose `/health/live`,
 ### Image Generation Endpoints
 
 > [!NOTE]
-> Image generation requires the `diffusion` extra and a GPU. On Apple Silicon Macs, you can also install the `mlx-diffusion` extra for hardware-accelerated generation using the MLX backend:
+> Torch Sentiment requires the `ray` and `diffusion` extras. ComfyUI runs in a
+> separate environment, owns the CUDA GPU, and must be started first.
 > ```bash
-> # For standard PyTorch diffusers (CUDA/MPS/CPU):
 > uv sync --extra ray --extra diffusion
-> 
-> # For MLX acceleration on Apple Silicon (FLUX.2 Klein only):
-> uv sync --extra ray --extra diffusion --extra mlx-diffusion
 > ```
-> Enable image generation by setting `SENTIMENTIZER_SD35_ENABLED=1` and/or
-> `SENTIMENTIZER_FLUX2_KLEIN_ENABLED=1`, and provide API keys via `SENTIMENTIZER_API_KEYS`.
-> Image routes require authentication; sentiment and router routes remain unauthenticated.
-> SDXL slots are enabled via `SENTIMENTIZER_SDXL_MODELS="name1:model_id1,name2:model_id2"`
-> — each entry spawns its own GPU deployment addressable by `name` in the request body.
-> For VRAM-constrained GPUs on the standard diffusers backend, set `SENTIMENTIZER_SD35_CPU_OFFLOAD=sequential` (or `model`)
-> or the same for `FLUX2_KLEIN` to enable diffusers' CPU offload.
-> For Apple Silicon Macs using the MLX backend (via `mflux`), the CPU offload and dtype options are ignored because MLX uses unified memory and manages precision internally.
-> See [configuration.md](configuration.md#runtime-configuration) for the full env-var reference.
 
-Image generation uses separate GPU-backed Ray Serve deployments (SD35Deployment, Flux2KleinDeployment,
-plus one SDXLDeployment per `sdxl_models` slot) behind a lightweight CPU dispatcher (ImagesDispatcher).
-The [diffusion serving plan](diffusion_serving_plan.md) has full architectural details.
+The Ray deployment reserves no GPU and serializes submissions to the ComfyUI
+queue. Startup validates the native node types and checkpoint filenames before
+exposing the image service. No ComfyUI custom nodes are required.
+
+#### Headless ComfyUI setup
+
+Use a dedicated checkout and virtual environment. The pinned revision below is
+known to contain native ConvRot, Krea 2, and Ideogram 4 support:
+
+```bash
+git clone https://github.com/Comfy-Org/ComfyUI.git ../ComfyUI
+cd ../ComfyUI
+git checkout feca51a
+uv venv
+uv pip install -r requirements.txt
+```
+
+Download the official checkpoints into their corresponding directories:
+
+```bash
+curl -L -o models/diffusion_models/krea2_turbo_int8_convrot.safetensors \
+  https://huggingface.co/Comfy-Org/Krea-2/resolve/main/diffusion_models/krea2_turbo_int8_convrot.safetensors
+curl -L -o models/text_encoders/qwen3vl_4b_fp8_scaled.safetensors \
+  https://huggingface.co/Comfy-Org/Krea-2/resolve/main/text_encoders/qwen3vl_4b_fp8_scaled.safetensors
+curl -L -o models/vae/qwen_image_vae.safetensors \
+  https://huggingface.co/Comfy-Org/Krea-2/resolve/main/vae/qwen_image_vae.safetensors
+
+curl -L -o models/diffusion_models/ideogram4_int8_convrot.safetensors \
+  https://huggingface.co/Comfy-Org/Ideogram-4/resolve/main/diffusion_models/ideogram4_int8_convrot.safetensors
+curl -L -o models/diffusion_models/ideogram4_unconditional_int8_convrot.safetensors \
+  https://huggingface.co/Comfy-Org/Ideogram-4/resolve/main/diffusion_models/ideogram4_unconditional_int8_convrot.safetensors
+curl -L -o models/text_encoders/qwen3vl_8b_fp8_scaled.safetensors \
+  https://huggingface.co/Comfy-Org/Qwen3-VL/resolve/main/text_encoders/qwen3vl_8b_fp8_scaled.safetensors
+curl -L -o models/vae/flux2-vae.safetensors \
+  https://huggingface.co/Comfy-Org/flux2-dev/resolve/main/split_files/vae/flux2-vae.safetensors
+```
+
+Review the checkpoint licenses before downloading. Ideogram 4 is
+non-commercial and requires an explicit operator acknowledgement. Krea 2 uses
+the [Krea 2 Community License](https://www.krea.ai/krea-2-licensing); enabling
+it requires explicit license acceptance and a fail-closed output moderation
+endpoint. Start ComfyUI on loopback so its unauthenticated API is not publicly
+exposed:
+
+```bash
+uv run python main.py --listen 127.0.0.1 --port 8188 --disable-auto-launch \
+  --temp-directory /tmp/sentimentizer-comfyui
+```
+
+Then configure and start Torch Sentiment:
+
+```bash
+export SENTIMENTIZER_KREA_2_ENABLED=true
+export SENTIMENTIZER_KREA_2_LICENSE_ACCEPTED=true
+export SENTIMENTIZER_IDEOGRAM_4_ENABLED=true
+export SENTIMENTIZER_IDEOGRAM_4_LICENSE_ACCEPTED=true
+export SENTIMENTIZER_IMAGE_MODERATION_URL=http://127.0.0.1:8090/v1/moderate-image
+export SENTIMENTIZER_IMAGE_MODERATION_API_KEY=replace-me
+export SENTIMENTIZER_COMFYUI_BASE_URL=http://127.0.0.1:8188
+export SENTIMENTIZER_COMFYUI_TEMP_DIRECTORY=/tmp/sentimentizer-comfyui/temp
+export SENTIMENTIZER_API_KEYS=test-key-123
+python -m sentimentizer.serve
+```
+
+The moderation endpoint receives JSON containing `image_b64`, `mime_type`,
+`model`, and `user`. It must explicitly return `{"safe": true}` before Torch
+Sentiment releases an image. It may reject output with `{"safe": false,
+"code": "...", "message": "..."}`. Timeouts, connection failures, and malformed
+responses fail closed. ComfyUI workflows use `PreviewImage`; Torch Sentiment
+reads and then deletes every result from `SENTIMENTIZER_COMFYUI_TEMP_DIRECTORY`.
+That path must be the `temp` child beneath ComfyUI's `--temp-directory` value
+and must be mounted into both processes if they run in separate containers.
 
 #### Synchronous Image Generation
 - **Route**: `POST /v1/images/generate`
@@ -256,7 +313,7 @@ The [diffusion serving plan](diffusion_serving_plan.md) has full architectural d
   ```json
   {
     "prompt": "a calico cat in a teacup, soft window light",
-    "model": "sd35",
+    "model": "krea_2",
     "width": 1024,
     "height": 1024,
     "output_format": "png"
@@ -267,43 +324,33 @@ The [diffusion serving plan](diffusion_serving_plan.md) has full architectural d
   curl -X POST http://localhost:8000/v1/images/generate \
     -H "Authorization: Bearer test-key-123" \
     -H "Content-Type: application/json" \
-    -d '{"prompt": "a calico cat in a teacup", "model": "sd35"}'
+    -d '{"prompt": "a calico cat in a teacup", "model": "krea_2"}'
   ```
 - **Response**:
   ```json
   {
     "id": "img_ABCDEFGHIJKL",
     "created": 1700000000,
-    "model": "sd35",
+    "model": "krea_2",
     "image_b64": "...",
     "format": "png",
     "width": 1024,
     "height": 1024,
     "seed": 42,
-    "steps": 40,
-    "guidance_scale": 4.5,
+    "steps": 8,
+    "guidance_scale": 1.0,
     "latency_s": 4.8
   }
   ```
 
-Supported parameters: `prompt` (required), `model` (`"sd35"`, `"flux2_klein"`, or any SDXL slot name configured via `SENTIMENTIZER_SDXL_MODELS`), `negative_prompt`,
-`steps`, `guidance_scale`, `width`, `height`, `seed`, `response_format` (`"b64_json"` or `"url"`),
-`output_format` (`"png"`, `"webp"`, `"jpeg"`), `user` (opaque abuse-tracking ID),
-`Idempotency-Key` header (deduplication).
+Supported parameters are `prompt`, `model` (`"krea_2"` or `"ideogram_4"`),
+`steps`, `guidance_scale`, `width`, `height`, `seed`, `output_format`, `user`,
+and the `Idempotency-Key` header. Output is returned as `b64_json`. The current
+native workflows reject `negative_prompt`, `reference_images`, and URL output
+rather than silently ignoring them.
 
 Rate-limit headers (`X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`) are
 returned on every response. Exceeding the limit returns `429` with a `Retry-After` header.
-
-#### Reference Images
-
-The `POST /v1/images/generate` and `POST /v1/images/jobs` endpoints support a `reference_images` field (a list of base64 strings) for true reference conditioning.
-
-- **Supported Models & Backends**: FLUX.2 Klein only, using `backend="diffusers"` (PyTorch). Requests targeting other models or using `backend="mlx"` will return a `400` error with code `reference_images_unsupported_backend`.
-- **Constraints**: Maximum 2 reference images per request. Each image must be ≤ 512×512 pixels after decoding (262,144 pixels). Exceeding these limits results in an auto-rejection.
-- **Resolution Behavior**: Reference images do not need to match the generation resolution. The pipeline encodes them at their native dimensions and concatenates the resulting tokens. Non-square references may be cropped by the pipeline's `resize_mode="crop"`.
-- **Payload Limits**: The body size limit is 4 MiB for `/v1/images/` routes (1 MiB for all other routes). It is highly recommended to use WebP or JPEG format for reference images to stay under the limit.
-- **VRAM Implications**: Reference images increase attention memory quadratically.
-- **Configuration**: `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` is set automatically to reduce VRAM fragmentation.
 
 #### List Image Models
 - **Route**: `GET /v1/images/models`
@@ -319,7 +366,7 @@ The `POST /v1/images/generate` and `POST /v1/images/jobs` endpoints support a `r
 - **Auth**: Required
 - **Command**:
   ```bash
-  curl http://localhost:8000/v1/images/models/sd \
+  curl http://localhost:8000/v1/images/models/krea_2 \
     -H "Authorization: Bearer test-key-123"
   ```
 
@@ -411,7 +458,7 @@ async def predict_sentiment(self, inputs: list[dict]) -> list[dict]:
 
 ### Model loading and readiness
 
-`SentimentizerDeployment.__init__()` loads models synchronously. If loading fails, `self._ready` stays `False` and `/health/ready` returns 503. The process stays alive — it doesn't crash. Check `/health/ready` to confirm the model loaded successfully.
+`SentimentizerDeployment.__init__()` loads models synchronously. If loading fails, `self._ready` stays `False` and `/health/ready` returns 503. When image generation is enabled, readiness also performs a live ComfyUI sidecar check and returns 503 if it is unavailable. The process stays alive — it doesn't crash. Check `/health/ready` to confirm the configured backends are available.
 
 ### `asyncio.to_thread()` for sync inference
 

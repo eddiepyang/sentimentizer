@@ -1,39 +1,35 @@
-from sentimentizer.diffusion.config import DiffusionModelConfig
-from sentimentizer.diffusion.image_utils import (
-    _REF_MAX_PIXELS,
-    b64_encode,
-    decode_b64_image,
-    encode_pil,
-    generate_id,
+"""Headless ComfyUI image generation support."""
+
+from sentimentizer.diffusion.comfyui import (
+    ComfyUIClient,
+    ComfyUIError,
+    GeneratedImage,
+    build_ideogram_4_workflow,
+    build_krea_2_workflow,
 )
+from sentimentizer.diffusion.config import (
+    IDEOGRAM_4_CONFIG,
+    IMAGE_MODEL_CONFIGS,
+    KREA_2_CONFIG,
+    ImageModelConfig,
+    load_diffusion_config,
+)
+from sentimentizer.diffusion.image_utils import b64_encode, encode_pil, generate_id
 from sentimentizer.diffusion.job_store import JobStore
-from sentimentizer.diffusion.mlx_compat import MFLUX_AVAILABLE
-from sentimentizer.diffusion.predictor import (
-    DiffusionPredictor,
-    DiffusionPredictorProtocol,
-    Flux2KleinPredictor,
-    SD35Predictor,
-    SDXLPredictor,
-    create_predictor,
-)
 
 __all__ = [
-    "DiffusionModelConfig",
-    "DiffusionPredictor",
-    "DiffusionPredictorProtocol",
-    "Flux2KleinPredictor",
+    "ComfyUIClient",
+    "ComfyUIError",
+    "GeneratedImage",
+    "IDEOGRAM_4_CONFIG",
+    "IMAGE_MODEL_CONFIGS",
+    "ImageModelConfig",
     "JobStore",
-    "SD35Predictor",
-    "SDXLPredictor",
-    "create_predictor",
-    "_REF_MAX_PIXELS",
+    "KREA_2_CONFIG",
     "b64_encode",
-    "decode_b64_image",
+    "build_ideogram_4_workflow",
+    "build_krea_2_workflow",
     "encode_pil",
     "generate_id",
+    "load_diffusion_config",
 ]
-
-if MFLUX_AVAILABLE:
-    from sentimentizer.diffusion.mlx_predictor import MLXFlux2KleinPredictor  # noqa: F401
-
-    __all__.append("MLXFlux2KleinPredictor")

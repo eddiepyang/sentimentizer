@@ -16,7 +16,7 @@ class GenerateRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=2000)
     model: str | None = Field(
         None,
-        description="flux2_klein, sd35, or sdxl_<slot>; default: cfg.default_image_model",
+        description="krea_2 or ideogram_4; default: cfg.default_image_model",
     )
     negative_prompt: str | None = Field(None, max_length=2000)
     steps: int | None = Field(None, ge=1, le=100, description="default depends on model")
@@ -33,7 +33,7 @@ class GenerateRequest(BaseModel):
         le=2048,
         multiple_of=8,
     )
-    seed: int | None = None
+    seed: int | None = Field(None, ge=0, le=2**64 - 1)
     response_format: Literal["b64_json", "url"] = "b64_json"
     output_format: Literal["png", "webp", "jpeg"] = "png"
     user: str | None = Field(
@@ -44,8 +44,8 @@ class GenerateRequest(BaseModel):
     reference_images: list[str] | None = Field(
         None,
         description=(
-            "Base64-encoded reference images (raw base64 or data:image/<fmt>;base64,…). "
-            "FLUX.2 Klein only. Up to 2 images, each ≤ 512×512 after decoding (262,144 pixels)."
+            "Reserved for future image-to-image workflows. Krea 2 and Ideogram 4 "
+            "currently support text-to-image requests only."
         ),
     )
 
@@ -66,17 +66,16 @@ class GenerateRequest(BaseModel):
             "examples": [
                 {
                     "prompt": "a red apple on a wooden table",
-                    "model": "sd35",
+                    "model": "krea_2",
                     "width": 1024,
                     "height": 1024,
                     "output_format": "png",
                 },
                 {
                     "prompt": "a cinematic portrait of an astronaut",
-                    "negative_prompt": "blurry, low quality",
-                    "model": "flux2_klein",
-                    "steps": 28,
-                    "guidance_scale": 3.5,
+                    "model": "ideogram_4",
+                    "steps": 20,
+                    "guidance_scale": 7.0,
                     "width": 1024,
                     "height": 1024,
                     "seed": 42,
@@ -109,7 +108,7 @@ class GenerateResponse(BaseModel):
                 {
                     "id": "img_ABCDEFGHIJKL",
                     "created": 1700000000,
-                    "model": "sd35",
+                    "model": "krea_2",
                     "image_b64": "...",
                     "image_url": None,
                     "format": "png",
@@ -136,21 +135,21 @@ class ImageModelInfo(BaseModel):
     default_steps: int
     default_guidance: float
     quantization: str | None = None
-    backend: str = "diffusers"
+    backend: str = "comfyui"
 
     model_config = {
         "json_schema_extra": {
             "examples": [
                 {
-                    "name": "flux2_klein",
+                    "name": "krea_2",
                     "status": "loaded",
                     "max_width": 1024,
                     "max_height": 1024,
                     "max_pixels": 1048576,
-                    "default_steps": 4,
-                    "default_guidance": 0.0,
-                    "quantization": None,
-                    "backend": "diffusers",
+                    "default_steps": 8,
+                    "default_guidance": 1.0,
+                    "quantization": "int8_convrot",
+                    "backend": "comfyui",
                 }
             ]
         }
@@ -166,18 +165,18 @@ class ImageModelsResponse(BaseModel):
             "examples": [
                 {
                     "models": {
-                        "flux2_klein": {
-                            "name": "flux2_klein",
+                        "krea_2": {
+                            "name": "krea_2",
                             "status": "loaded",
                             "max_width": 1024,
                             "max_height": 1024,
                             "max_pixels": 1048576,
-                            "default_steps": 4,
-                            "default_guidance": 0.0,
-                            "backend": "diffusers",
+                            "default_steps": 8,
+                            "default_guidance": 1.0,
+                            "backend": "comfyui",
                         }
                     },
-                    "default": "flux2_klein",
+                    "default": "krea_2",
                 }
             ]
         }
@@ -192,16 +191,16 @@ class ImageModelDetailResponse(BaseModel):
         "json_schema_extra": {
             "examples": [
                 {
-                    "model": "flux2_klein",
+                    "model": "krea_2",
                     "info": {
-                        "name": "flux2_klein",
+                        "name": "krea_2",
                         "status": "loaded",
                         "max_width": 1024,
                         "max_height": 1024,
                         "max_pixels": 1048576,
-                        "default_steps": 4,
-                        "default_guidance": 0.0,
-                        "backend": "diffusers",
+                        "default_steps": 8,
+                        "default_guidance": 1.0,
+                        "backend": "comfyui",
                     },
                 }
             ]
@@ -227,7 +226,7 @@ class JobResponse(BaseModel):
                     "status": "queued",
                     "created": 1700000000,
                     "updated": 1700000000,
-                    "model": "flux2_klein",
+                    "model": "krea_2",
                     "user": None,
                 }
             ]
@@ -249,7 +248,7 @@ class JobListResponse(BaseModel):
                             "status": "processing",
                             "created": 1700000000,
                             "updated": 1700000000,
-                            "model": "flux2_klein",
+                            "model": "krea_2",
                         }
                     ],
                     "next_page_token": None,

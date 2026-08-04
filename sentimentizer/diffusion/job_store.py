@@ -35,6 +35,7 @@ class JobRecord:
     api_key_prefix: str
     created: int
     model: str
+    backend_id: str | None = None
     user: str | None = None
     status: str = "processing"
     result: dict[str, Any] | None = None
@@ -54,7 +55,13 @@ class JobStoreLogic:
         self._by_key: dict[str, list[str]] = {}
         self._ttl_s = ttl_s
 
-    def submit(self, model: str, user: str | None, api_key: str) -> str:
+    def submit(
+        self,
+        model: str,
+        user: str | None,
+        api_key: str,
+        backend_id: str | None = None,
+    ) -> str:
         job_id = f"job_{secrets.token_urlsafe(12)}"
         now = int(time.time())
         rec = JobRecord(
@@ -62,6 +69,7 @@ class JobStoreLogic:
             api_key_prefix=api_key[:8],
             created=now,
             model=model,
+            backend_id=backend_id,
             user=user,
             status="processing",
         )
@@ -78,6 +86,13 @@ class JobStoreLogic:
     def get_status(self, job_id: str) -> str | None:
         rec = self._jobs.get(job_id)
         return rec.status if rec is not None else None
+
+    def get_backend_id(self, job_id: str, api_key: str) -> str | None:
+        """Return the private backend prompt id for an authorized job."""
+        rec = self._jobs.get(job_id)
+        if rec is None or rec.api_key_prefix != api_key[:8]:
+            return None
+        return rec.backend_id
 
     def set_succeeded(self, job_id: str, result: dict[str, Any]) -> bool:
         rec = self._jobs.get(job_id)
@@ -189,11 +204,20 @@ class JobStore:
     def __init__(self, ttl_s: int = 3600) -> None:
         self._logic = JobStoreLogic(ttl_s=ttl_s)
 
-    def submit(self, model: str, user: str | None, api_key: str) -> str:
-        return self._logic.submit(model, user, api_key)
+    def submit(
+        self,
+        model: str,
+        user: str | None,
+        api_key: str,
+        backend_id: str | None = None,
+    ) -> str:
+        return self._logic.submit(model, user, api_key, backend_id)
 
     def get_status(self, job_id: str) -> str | None:
         return self._logic.get_status(job_id)
+
+    def get_backend_id(self, job_id: str, api_key: str) -> str | None:
+        return self._logic.get_backend_id(job_id, api_key)
 
     def get(self, job_id: str, api_key: str) -> dict[str, Any] | None:
         return self._logic.get(job_id, api_key)

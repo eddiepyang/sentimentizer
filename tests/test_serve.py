@@ -92,6 +92,8 @@ def _mock_deployment(predictor=None, ready=True, load_error=None):
     dep._sentiment_metrics = ServiceMetrics(prefix="sentimentizer")
     dep._router_metrics = ServiceMetrics(prefix="router")
     dep._embedding_metrics = ServiceMetrics(prefix="embedding")
+    dep._image_model_names = []
+    dep._comfyui_health_client = None
     dep.predictor = predictor or _mock_predictor()
     dep._require_ready = lambda: _SentimentizerDeployment._require_ready(dep)
 
@@ -352,6 +354,18 @@ class TestReadinessEndpoint:
         result = _run(_SentimentizerDeployment.health_ready(dep))
         assert isinstance(result, JSONResponse)
         assert result.status_code == 503
+
+    def test_health_ready_returns_503_when_comfyui_is_unavailable(self):
+        dep = _mock_deployment()
+        dep._image_model_names = ["krea_2"]
+        dep._comfyui_health_client = MagicMock()
+        dep._comfyui_health_client.system_stats.side_effect = RuntimeError("connection refused")
+
+        result = _run(_SentimentizerDeployment.health_ready(dep))
+
+        assert isinstance(result, JSONResponse)
+        assert result.status_code == 503
+        assert b'"krea_2":"unavailable"' in result.body
 
 
 class TestHealthBackwardCompat:

@@ -377,16 +377,17 @@ Grafana only reads provisioned dashboard files on **startup**, so a restart is r
 - **setfit/config_setfit.json 404**: Sentence-transformer models like `BAAI/bge-base-en-v1.5` don't have `config_setfit.json` on HuggingFace Hub. `huggingface_hub>=1.0` raises a hard 404 error. The `_load_setfit_model()` function in `train_router.py` catches this and falls back to loading via `SentenceTransformer(model_id)` then wrapping with `SetFitModel(model_body=...)`.
 - **setfit model_head is None**: When loading a sentence-transformer model as a SetFit backbone (no `config_setfit.json`), `SetFitModel(model_body=...)` does NOT auto-create a classification head. `_load_setfit_model()` creates a `LogisticRegression(max_iter=1000, solver="lbfgs")` head explicitly and sets `model.labels` to the route category names (`["dietary", "service", "general"]`).
 
-### MLX Diffusion Backend
+### Headless Image Generation
 
-- **MLX is optional**: `pip install sentimentizer[mlx-diffusion]` adds `mflux` for Apple Silicon acceleration. Without it, all diffusion models use `diffusers` (PyTorch).
-- **`backend` config**: `DiffusionModelConfig.backend` controls which inference backend to use: `"auto"` (MLX on Apple Silicon, diffusers otherwise), `"diffusers"` (always PyTorch), or `"mlx"` (always MLX, raises ImportError if mflux not installed).
-- **Only FLUX.2 Klein has an MLX backend**: SDXL and SD3.5 have no MLX implementation. `BACKEND_REGISTRY` defines available backends per model. Setting `backend="mlx"` for sd35 or sdxl raises `ValueError`.
-- **`MLXFlux2KleinPredictor` does NOT extend `DiffusionPredictor`**: The base class calls `torch.backends.mps.is_available()` in `__init__` and uses `torch.Generator` for seed resolution. The MLX predictor replicates the interface as a standalone class to avoid any `torch` dependency in the MLX path. Both predictor families satisfy the `DiffusionPredictorProtocol` (structural typing), so `create_predictor()` is typed against the protocol — callers get accurate autocomplete and `mypy` catches interface drift regardless of backend.
-- **`model_info()` always includes `"backend"` field**: Both the base `DiffusionPredictor.model_info()` (`"diffusers"`) and `MLXFlux2KleinPredictor.model_info()` (`"mlx"`) emit this key so dashboards can filter on backend without dropping requests.
-- **`cpu_offload` and `dtype` are diffusers-only**: MLX predictor ignores these config fields and logs warnings if they're set.
-- **Quantization mapping**: Config `"nf4"`/`"int4"`/`"4bit"` → mflux `quantize=4`; `"int8"`/`"8bit"` → `quantize=8`; `None` → no quantization. No bitsandbytes needed.
-- **`reference_images` not yet supported for MLX backend**: Raises `NotImplementedError`. Use `backend="diffusers"` for reference image support.
+- **ComfyUI is a sidecar**: Torch Sentiment never imports ComfyUI or reserves its CUDA device. `ComfyUIDeployment` serializes HTTP submissions to the separately managed process configured by `comfyui_base_url`.
+- **Supported models are Krea 2 and Ideogram 4 only**: The native INT8 ConvRot workflows and checkpoint filenames live in `sentimentizer/diffusion/comfyui.py` and `diffusion_config.yaml`. Do not reintroduce SDXL, SD3.5, FLUX.2 Klein, Diffusers, or MFLUX without an explicit product decision.
+- **No custom ComfyUI nodes**: Workflows must use nodes shipped by current ComfyUI. Startup validates required node classes and checkpoint choices before the image deployment becomes ready.
+- **Ideogram licensing is explicit**: `ideogram_4_enabled=true` requires `ideogram_4_license_accepted=true`; its checkpoint is non-commercial. Do not weaken or silently bypass this gate.
+- **Krea licensing and output safety are explicit**: `krea_2_enabled=true` requires both `krea_2_license_accepted=true` and `image_moderation_url`. The moderation service must explicitly return `safe: true`; failures block image release. Do not restore implicit Krea enablement through `--diffusion`.
+- **Image cancellation uses ComfyUI prompt UUIDs**: persist the backend UUID in `JobStore`, call ComfyUI's targeted `/api/jobs/{id}/cancel`, then call `DeploymentResponse.cancel()` when a local response exists. Never pass a Serve `DeploymentResponse` to `ray.cancel()`.
+- **Generated output is deleted**: workflows use native `PreviewImage`, not `SaveImage`. `comfyui_temp_directory` is required whenever image models are enabled; the client validates the returned path stays beneath it and unlinks each artifact after reading it.
+- **Current workflows are text-to-image only**: Reject `negative_prompt`, `reference_images`, and `response_format=url` explicitly instead of silently dropping unsupported controls.
+- **ComfyUI must stay private**: Bind it to loopback or a protected service network. Its HTTP API has no authentication in this integration; public clients authenticate only through Torch Sentiment's `/v1/images/*` middleware.
 
 ## Ray 2.55 API Conventions
 
@@ -526,4 +527,3 @@ def tokenize(self, text: str, max_length: int = 512) -> list[int]:
 - **Liskov Substitution**: Subtypes must be substitutable for their base types. Don't override methods in ways that break the contract of the parent class
 - **Interface Segregation**: Prefer small, focused interfaces (protocols/ABCs) over large, general-purpose ones
 - **Dependency Inversion**: Depend on abstractions (protocols, ABCs) rather than concrete implementations. Inject dependencies via constructors or function arguments rather than creating them internally
-

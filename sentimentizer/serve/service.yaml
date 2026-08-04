@@ -30,23 +30,25 @@ classify_batch_wait_s: 0.05   # Seconds to wait before processing a partial rout
 cors_origins:
   - "*"
 
-# Diffusion serving (image generation) — disabled by default
-flux2_klein_enabled: false
-flux2_klein_model_id: "black-forest-labs/FLUX.2-klein-4B"
-flux2_klein_cpu_offload: ""        # "", "model", or "sequential"
-# bitsandbytes quantization for FLUX.2 transformer + Qwen3 text encoder.
-# "" off, "nf4" 4-bit (~5 GB peak — fits 11 GB cards like 2080 Ti),
-# "int8" 8-bit (~9 GB peak). Requires `bitsandbytes`. Pair with
-# flux2_klein_cpu_offload: "model" on 11 GB cards.
-flux2_klein_quantization: ""
-flux2_klein_backend: "auto"    # "auto", "diffusers", or "mlx"
-sd35_enabled: false
-sd35_model_id: "stabilityai/stable-diffusion-3.5-medium"
-sd35_cpu_offload: ""               # "", "model", or "sequential"
-# Named SDXL slots: each entry is "name:model_id". Supports anime fine-tunes
-# (e.g. "anime:John6666/noob-sdxl-v10") addressable by slot name in requests.
-sdxl_models: []
-default_image_model: "sd35"
+# Headless ComfyUI image generation — disabled by default. ComfyUI owns the
+# CUDA device; Ray only submits workflows over HTTP and reserves no GPU.
+krea_2_enabled: false
+# Required when enabling Krea 2. Confirm license eligibility before setting true.
+krea_2_license_accepted: false
+ideogram_4_enabled: false
+# Required when enabling Ideogram 4. Its checkpoint is non-commercial.
+ideogram_4_license_accepted: false
+comfyui_base_url: "http://127.0.0.1:8188"
+comfyui_timeout_s: 600
+comfyui_poll_interval_s: 0.25
+# Must match ComfyUI's --temp-directory path and be visible to this process.
+comfyui_temp_directory: ""
+# Krea 2 requires a fail-closed output moderation endpoint. It receives JSON
+# containing image_b64, mime_type, model, and user and must return {"safe": bool}.
+image_moderation_url: ""
+image_moderation_api_key: ""
+image_moderation_timeout_s: 10
+default_image_model: "krea_2"
 request_timeout_s: 600
 
 # Middleware for image routes

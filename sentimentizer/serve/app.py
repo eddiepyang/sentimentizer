@@ -34,18 +34,13 @@ Endpoints:
     GET  /v1/router/models    -- Router model metadata
 
   Image Generation (if enabled):
-    POST /v1/images/generate    -- Generate an image synchronously (SD3.5/FLUX.2/SDXL)
+    POST /v1/images/generate    -- Generate with Krea 2 or Ideogram 4
     POST /v1/images/jobs        -- Create an async image generation job
     GET  /v1/images/jobs        -- List image generation jobs
     GET  /v1/images/jobs/{id}   -- Get job status/result
     DELETE /v1/images/jobs/{id} -- Cancel a queued job
     GET  /v1/images/models      -- Image model metadata
     GET  /v1/images/models/{name} -- Single image model metadata
-
-  Reference images:
-    The POST /v1/images/generate and POST /v1/images/jobs endpoints support
-    a `reference_images` field (list of base64 strings, up to 2 images, each <= 512x512 pixels).
-    Supported by FLUX.2 Klein only.
 
   Infrastructure (unversioned):
     GET  /health               -- Backward-compatible alias for /health/ready
@@ -93,7 +88,7 @@ from sentimentizer.serve.base import (
     render_service_metrics,
     serve,
 )
-from sentimentizer.serve.config import cfg, parse_sdxl_models
+from sentimentizer.serve.config import cfg
 from sentimentizer.serve.embeddings_models import (
     DenseEmbeddingsRequest,
     DenseEmbeddingsResult,
@@ -368,7 +363,11 @@ class SentimentizerDeployment:
     ``asyncio.to_thread()`` to avoid blocking the event loop.
     """
 
-    def __init__(self, embeddings_handle: Any | None = None) -> None:
+    def __init__(
+        self,
+        embeddings_handle: Any | None = None,
+        image_model_names: list[str] | None = None,
+    ) -> None:
         self._started_at = time.time()
         self._ready = False
         self._load_error: str | None = None
@@ -377,6 +376,16 @@ class SentimentizerDeployment:
         self._embedding_metrics = ServiceMetrics(prefix="embedding")
         self.predictor: SentimentPredictor | None = None
         self._embeddings_handle = embeddings_handle
+        self._image_model_names = image_model_names or []
+        self._comfyui_health_client: Any | None = None
+        if self._image_model_names:
+            from sentimentizer.diffusion.comfyui import ComfyUIClient
+
+            self._comfyui_health_client = ComfyUIClient(
+                cfg.comfyui_base_url,
+                timeout_s=min(cfg.comfyui_timeout_s, 10.0),
+                poll_interval_s=cfg.comfyui_poll_interval_s,
+            )
 
         try:
             self.predictor = SentimentPredictor(
@@ -798,19 +807,19 @@ class SentimentizerDeployment:
             "router_loaded": self.predictor.router_loaded,
             "router_error": self.predictor.router_error,
         }
-        if cfg.flux2_klein_enabled or cfg.sd35_enabled or bool(cfg.sdxl_models):
-            body["image_models"] = {
-                "flux2_klein": "enabled" if cfg.flux2_klein_enabled else "disabled",
-                "sd35": "enabled" if cfg.sd35_enabled else "disabled",
-                "sdxl": (
-                    list(parse_sdxl_models(cfg.sdxl_models).keys()) if cfg.sdxl_models else []
-                ),
-            }
+        image_backend_ready = True
+        if self._image_model_names:
+            try:
+                await asyncio.to_thread(self._comfyui_health_client.system_stats)
+                body["image_models"] = {name: "ready" for name in self._image_model_names}
+            except Exception:
+                image_backend_ready = False
+                body["status"] = "not_ready"
+                body["image_models"] = {name: "unavailable" for name in self._image_model_names}
+                body["image_backend_error"] = "ComfyUI sidecar unavailable"
         body["embeddings_enabled"] = cfg.embeddings_enabled
         body["bge_m3_enabled"] = cfg.bge_m3_enabled
-        body["embeddings_enabled"] = cfg.embeddings_enabled
-        body["bge_m3_enabled"] = cfg.bge_m3_enabled
-        if not self.predictor.model_loaded:
+        if not self.predictor.model_loaded or not image_backend_ready:
             return JSONResponse(status_code=503, content=body)
         return body
 
@@ -829,9 +838,8 @@ def main(host: str | None = None, port: int | None = None, diffusion: bool = Fal
         diffusion: If True, start the image generation (diffusion) deployment
             alongside sentiment. This requires GPU hardware and model weights.
             When False (default), only sentiment + router endpoints are served.
-            Diffusion can also be enabled via config: set
-            ``flux2_klein_enabled``, ``sd35_enabled``, or ``sdxl_models`` in
-            ``service.yaml`` or their corresponding env vars.
+            ComfyUI runs as a separate headless process and owns the GPU.
+            Enable Krea 2 or Ideogram 4 in ``service.yaml`` or with env vars.
 
     Workers use the current Python executable directly (no isolated venv),
     which avoids the ``ModuleNotFoundError: No module named 'ray'`` issue
@@ -865,11 +873,18 @@ def main(host: str | None = None, port: int | None = None, diffusion: bool = Fal
         )
     )
 
-    embeddings_handle = None
-    if cfg.embeddings_enabled:
-        from sentimentizer.serve.embeddings_app import EmbeddingsDeployment
-
-        embeddings_handle = EmbeddingsDeployment.bind()
+    start_diffusion = diffusion or cfg.krea_2_enabled or cfg.ideogram_4_enabled
+    model_names: list[str] = []
+    if cfg.krea_2_enabled:
+        model_names.append("krea_2")
+    if cfg.ideogram_4_enabled:
+        model_names.append("ideogram_4")
+    if start_diffusion and not model_names:
+        raise ValueError(
+            "--diffusion requires an explicitly enabled image model. Set "
+            "SENTIMENTIZER_KREA_2_ENABLED=true or SENTIMENTIZER_IDEOGRAM_4_ENABLED=true "
+            "and satisfy that model's license requirements."
+        )
 
     embeddings_handle = None
     if cfg.embeddings_enabled:
@@ -878,23 +893,14 @@ def main(host: str | None = None, port: int | None = None, diffusion: bool = Fal
         embeddings_handle = EmbeddingsDeployment.bind()
 
     serve.run(
-        SentimentizerDeployment.bind(embeddings_handle),
-        SentimentizerDeployment.bind(embeddings_handle),
+        SentimentizerDeployment.bind(embeddings_handle, model_names),
         name="sentimentizer",
         route_prefix="/",
     )
 
-    start_diffusion = (
-        diffusion or cfg.flux2_klein_enabled or cfg.sd35_enabled or bool(cfg.sdxl_models)
-    )
     if start_diffusion:
         from sentimentizer.diffusion.job_store import JobStore
-        from sentimentizer.serve.diffusion_app import (
-            Flux2KleinDeployment,
-            ImagesDispatcher,
-            SD35Deployment,
-            SDXLDeployment,
-        )
+        from sentimentizer.serve.diffusion_app import ComfyUIDeployment, ImagesDispatcher
 
         JobStore.options(
             name="diffusion_job_store",
@@ -902,19 +908,10 @@ def main(host: str | None = None, port: int | None = None, diffusion: bool = Fal
             get_if_exists=True,
         ).remote(ttl_s=cfg.job_ttl_s)
 
-        flux2_klein_handle = Flux2KleinDeployment.bind() if cfg.flux2_klein_enabled else None
-        sd35_handle = SD35Deployment.bind() if cfg.sd35_enabled else None
-
-        sdxl_handles: dict[str, Any] | None = None
-        sdxl_slots = parse_sdxl_models(cfg.sdxl_models)
-        if sdxl_slots:
-            sdxl_handles = {
-                name: SDXLDeployment.options(name=f"sdxl_{name}").bind(model_id)
-                for name, model_id in sdxl_slots.items()
-            }
+        comfyui_handle = ComfyUIDeployment.bind(model_names)
 
         serve.run(
-            ImagesDispatcher.bind(flux2_klein_handle, sd35_handle, sdxl_handles),
+            ImagesDispatcher.bind(comfyui_handle, model_names),
             name="images",
             route_prefix="/v1/images",
         )
