@@ -6,8 +6,41 @@ supports single-node and distributed training via Ray Train, Ray Serve
 inference, an intent router, BGE-M3 embeddings, headless image generation
 through a ComfyUI sidecar, Prometheus metrics, and Grafana dashboards.
 
-This file holds durable rules and routing. Implementation narratives belong in
-`docs/`; change history belongs in `git log`.
+## Working rules
+
+- Inspect the current branch and worktree before editing. Preserve unrelated
+  user changes and work around a dirty worktree.
+- Use repository code, tests, configuration, and current local documentation as
+  the source of truth. Plans and dated observations can become stale; verify
+  them before relying on them.
+
+Code-style and design rules live in `.rules/`. Read the matching files before
+implementing:
+
+| Change area | Required rules |
+|---|---|
+| Any Python implementation | `.rules/python-style.md`, `.rules/dry.md`, `.rules/solid.md` |
+| Tuning knobs or model-call constants | `.rules/prompts-and-constants.md` |
+| Logging, timeouts, or long-running work | `.rules/observability.md` |
+| A feature plan or multi-milestone implementation | `.rules/plan-review.md`, `.rules/testing-workflow.md` |
+
+## Task routing
+
+| Task | Where to look first |
+|---|---|
+| Plan a feature, refactor, or architectural change | `.skills/plan-feature/SKILL.md` |
+| Change threads, locks, shared state, Ray processes, lazy construction, shutdown | `.skills/change-concurrent-code-safely/SKILL.md` |
+| Runtime failures, zero negative accuracy, GloVe mismatch, scheduler issues | `docs/troubleshooting.md` |
+| Metric definitions, gauges, stale-metric behavior | `docs/metrics.md` |
+| Config dataclasses and env vars | `docs/configuration.md` |
+| Serving endpoints and API shape | `docs/serving.md` |
+| Training behavior and loops | `docs/training.md`, `docs/tuning.md` |
+| ONNX export | `docs/onnx.md` |
+| Intent router | `docs/router.md` |
+| Hugging Face upload/download | `docs/huggingface.md` |
+
+`docs/*_plan.md` files are historical design context, not current behavior.
+Treat the code as the source of truth when they disagree.
 
 ## Verification
 
@@ -35,23 +68,6 @@ Rules:
 - Run verification **only when code changed**. Documentation- and
   markdown-only changes do not need the suite.
 - pyright reports warnings that do not fail the build; only `error` counts.
-
-## Task Routing
-
-| Task | Where to look first |
-|---|---|
-| Plan a feature, refactor, or architectural change | `.skills/plan-feature/SKILL.md` |
-| Runtime failures, zero negative accuracy, GloVe mismatch, scheduler issues | `docs/troubleshooting.md` |
-| Metric definitions, gauges, stale-metric behavior | `docs/metrics.md` |
-| Config dataclasses and env vars | `docs/configuration.md` |
-| Serving endpoints and API shape | `docs/serving.md` |
-| Training behavior and loops | `docs/training.md`, `docs/tuning.md` |
-| ONNX export | `docs/onnx.md` |
-| Intent router | `docs/router.md` |
-| Hugging Face upload/download | `docs/huggingface.md` |
-
-`docs/*_plan.md` files are historical design context, not current behavior.
-Treat the code as the source of truth when they disagree.
 
 ## Architecture
 
@@ -218,7 +234,8 @@ required after any dashboard change.
 3. Add to `_METRIC_GAUGE_KEYS` in `metrics_publisher.py`
 4. Set in `Trainer.evaluate()`, `_train_func()`, and via `publish_epoch_metrics()`
 5. Add to `_reset_stale_metrics()` in `workflows/stages/train.py` (reset to 0)
-6. Add to `_persist_metrics_to_file()` and `_update_training_metrics()` in exporter
+6. Add to `write_epoch_metrics_to_file()` in `metrics_publisher.py` and
+   `_update_training_metrics()` in `exporter.py`
 7. Add to dashboard in `scripts/generate_ray_dashboards.py`
 
 ## Conventions
@@ -610,18 +627,3 @@ time out after 15 s.
 Use it for API documentation and library versions not in the codebase, known
 issues or breaking changes in dependencies, current best practices, and facts
 that need to be up to date.
-
-## Code Quality Principles
-
-- **Type hints everywhere.** All function and method signatures must annotate
-  parameters and return values; annotate class attributes too. Use `typing` for
-  complex types.
-- **DRY.** Extract duplicated logic into shared functions, classes, or mixins;
-  prefer composition over copy-paste. Values used in several places belong in
-  `config.py` and are referenced, not repeated.
-- **SOLID.** Single Responsibility — keep data loading, model definition,
-  training, and serving in separate modules. Open/Closed — extend via
-  subclassing or configuration rather than editing existing code.
-  Liskov — subtypes stay substitutable. Interface Segregation — prefer small,
-  focused protocols/ABCs. Dependency Inversion — depend on abstractions and
-  inject them, rather than constructing dependencies internally.
