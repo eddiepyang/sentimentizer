@@ -42,7 +42,7 @@ setup-ci:
 setup-mps:
 	uv sync --extra router --extra onnx
 
-## Install dependencies with dev tools (pytest, ruff, black, etc.)
+## Install dependencies with dev tools (pytest, ruff, pyright, etc.)
 setup-dev:
 	uv sync --extra dev --extra ray --extra router --extra onnx
 
